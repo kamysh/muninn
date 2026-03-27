@@ -12,10 +12,54 @@
 
 ## Prerequisites
 
-- PostgreSQL 16+ running locally with `pgvector` and `apache-age` extensions installed
-- Rust toolchain (stable, 1.75+)
-- `sqlx-cli` installed: `cargo install sqlx-cli --features postgres`
+- Nix with flakes enabled (`nix develop` provides everything below)
+- PostgreSQL 16+ with pgvector and apache-age (provided by dev shell)
+- Rust stable toolchain (provided by dev shell via rust-overlay)
+- sqlx-cli (provided by dev shell)
+- Agda + standard library (provided by dev shell)
 - Voyage AI API key (for default embedding backend)
+
+---
+
+### Task 0: Nix Flake
+
+**Files:**
+- Create: `flake.nix`
+
+Provides a reproducible dev shell via `nix develop` with: Rust stable + rust-analyzer + clippy + rustfmt, PostgreSQL 16 with pgvector, Apache AGE (built from source), Agda with standard library, sqlx-cli, cargo-nextest, and pkg-config/openssl for reqwest.
+
+**Step 1: Create flake.nix**
+
+See `flake.nix` in repo root. Key structure:
+- inputs: nixpkgs (unstable), rust-overlay, flake-utils
+- `apacheAge` derivation: builds AGE from `apache/age` GitHub at `PG16/v1.5.0-rc0`
+- `postgresWithExtensions`: postgresql_16 + pgvector
+- `agdaWithStdlib`: agda + standard-library
+- devShell exports: `DATABASE_URL`, `TEST_DATABASE_URL`, `AGE_EXTENSION_DIR`
+
+**Step 2: Enter dev shell to verify**
+
+```bash
+nix develop
+rustc --version   # stable
+postgres --version
+agda --version
+sqlx --version
+```
+
+**Step 3: Fix AGE hash if needed**
+
+On first run nix will error with the correct hash. Replace the placeholder in `flake.nix`:
+```
+hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+```
+
+**Step 4: Commit**
+
+```bash
+git add flake.nix
+git commit -m "chore: add Nix flake with Rust, PostgreSQL+pgvector+AGE, Agda dev shell"
+```
 
 ---
 
@@ -2443,6 +2487,7 @@ git commit -m "chore: install script and systemd unit for ai-mem-index daemon"
 
 After all tasks complete you will have:
 
+- `flake.nix` — reproducible dev environment (`nix develop`)
 - `spec/AiMem.agda` — formal Agda specification
 - `crates/core` — shared types, config, DB, parser, embeddings, search, graph
 - `crates/indexer` — full reindex + incremental file watcher daemon
@@ -2451,4 +2496,4 @@ After all tasks complete you will have:
 - `migrations/` — database schema
 - `install.sh` — one-command setup
 
-Run `./install.sh` then `ai-mem register /path/to/repo` to start using it.
+Run `nix develop`, then `./install.sh`, then `ai-mem register /path/to/repo` to start using it.
