@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         let path = std::path::PathBuf::from(&repo_entry.path);
         let repo = match ai_mem_core::store::get_repo_by_path(&pool, &repo_entry.path).await? {
             Some(r) => r,
-            None => ai_mem_core::store::register_repo(&pool, &repo_entry.path, &repo_entry.name).await?,
+            None => ai_mem_core::store::register_repo(&pool, &repo_entry.path, &repo_entry.name, expected_dim).await?,
         };
 
         // Model initial state: Unindexed if never indexed, Indexed otherwise

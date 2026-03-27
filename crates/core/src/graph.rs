@@ -2,9 +2,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
 use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
-use crate::store::graph_name;
+use crate::store::{graph_name, chunk_exists};
 
 /// Insert or update a symbol node in the per-repo AGE graph.
+/// Enforces the IsolatedGraph invariant: the chunk_id must exist in the
+/// repo's chunk store before a symbol node may reference it.
 pub async fn upsert_symbol_node(
     pool: &PgPool,
     repo_id: Uuid,
@@ -15,6 +17,11 @@ pub async fn upsert_symbol_node(
     start_line: u32,
     end_line: u32,
 ) -> Result<()> {
+    anyhow::ensure!(
+        chunk_exists(pool, repo_id, chunk_id).await?,
+        "IsolatedGraph violation: chunk {} not found in repo {} store",
+        chunk_id, repo_id
+    );
     let gname = graph_name(repo_id);
     let name_escaped = name.replace('\'', "\\'");
     let file_path_escaped = file_path.replace('\'', "\\'");

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use ai_mem_core::{config::AppConfig, db, store};
+use ai_mem_core::{config::AppConfig, db, store, embeddings::expected_dimension};
 
 #[derive(Parser)]
 #[command(name = "ai-mem", about = "ai-mem repository index manager")]
@@ -45,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
                     .to_string_lossy()
                     .to_string()
             });
-            let repo = store::register_repo(&pool, &path, &name).await?;
+            let embedding_dim = expected_dimension(&cfg.embeddings);
+            let repo = store::register_repo(&pool, &path, &name, embedding_dim).await?;
             cfg.repos.push(ai_mem_core::config::RepoEntry {
                 id: repo.id,
                 path: path.clone(),

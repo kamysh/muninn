@@ -15,7 +15,12 @@ pub fn graph_name(repo_id: Uuid) -> String {
     format!("code_graph_{}", repo_id.as_simple())
 }
 
-pub async fn register_repo(pool: &PgPool, path: &str, name: &str) -> Result<Repo> {
+pub async fn register_repo(
+    pool: &PgPool,
+    path: &str,
+    name: &str,
+    embedding_dim: usize,
+) -> Result<Repo> {
     let row = sqlx::query(
         r#"
         INSERT INTO repos (id, path, name, indexed_at, config)
@@ -44,7 +49,7 @@ pub async fn register_repo(pool: &PgPool, path: &str, name: &str) -> Result<Repo
             end_line    INT NOT NULL CHECK (end_line >= start_line),
             content     TEXT NOT NULL CHECK (content <> ''),
             ts_vector   TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
-            embedding   VECTOR(1024)
+            embedding   VECTOR({embedding_dim})
         )
         "#
     ))
@@ -227,6 +232,20 @@ pub async fn delete_file_chunks(pool: &PgPool, repo_id: Uuid, file_path: &str) -
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Check whether a chunk with the given id exists in the repo's store.
+/// Used to enforce the IsolatedGraph invariant before inserting symbol nodes.
+pub async fn chunk_exists(pool: &PgPool, repo_id: Uuid, chunk_id: Uuid) -> Result<bool> {
+    let table = chunks_table(repo_id);
+    let exists: bool = sqlx::query(&format!(
+        r#"SELECT EXISTS(SELECT 1 FROM "{table}" WHERE id = $1)"#
+    ))
+    .bind(chunk_id)
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    Ok(exists)
 }
 
 // ---- helpers ----------------------------------------------------------------
