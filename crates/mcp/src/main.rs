@@ -1,6 +1,6 @@
 mod tools;
 
-use muninn_core::{config::AppConfig, db, embeddings::make_backend};
+use muninn_core::{config::GlobalConfig, db, embeddings::make_backend};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tools::SearchContext;
@@ -9,8 +9,8 @@ use tools::SearchContext;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
 
-    let cfg = AppConfig::load()?;
-    let pool = db::connect(&cfg.database.dsn).await?;
+    let cfg = GlobalConfig::load()?;
+    let pool = db::connect(&cfg.database.dsn()).await?;
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let ctx = Arc::new(SearchContext { pool, embedder });

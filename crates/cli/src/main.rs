@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use muninn_core::{config::AppConfig, db, store, embeddings::expected_dimension};
+use muninn_core::{config::GlobalConfig, db, store, embeddings::expected_dimension};
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager")]
@@ -33,8 +33,8 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mut cfg = AppConfig::load()?;
-    let pool = db::connect(&cfg.database.dsn).await?;
+    let cfg = GlobalConfig::load()?;
+    let pool = db::connect(&cfg.database.dsn()).await?;
 
     match cli.command {
         Commands::Register { path, name } => {
@@ -46,21 +46,13 @@ async fn main() -> anyhow::Result<()> {
                     .to_string()
             });
             let embedding_dim = expected_dimension(&cfg.embeddings);
-            let repo = store::register_repo(&pool, &path, &name, embedding_dim).await?;
-            cfg.repos.push(muninn_core::config::RepoEntry {
-                id: repo.id,
-                path: path.clone(),
-                name: name.clone(),
-            });
-            cfg.save()?;
-            println!("Registered: {} ({})", name, path);
+            store::register_repo(&pool, &path, &name, embedding_dim).await?;
+            println!("Registered: {} ({})\nNote: restart muninn-index to begin indexing.", name, path);
         }
 
         Commands::Unregister { path } => {
             if let Some(repo) = store::get_repo_by_path(&pool, &path).await? {
                 store::delete_repo(&pool, repo.id).await?;
-                cfg.repos.retain(|r| r.path != path);
-                cfg.save()?;
                 println!("Unregistered: {}", path);
             } else {
                 println!("Not found: {}", path);
