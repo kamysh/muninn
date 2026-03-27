@@ -1,0 +1,15 @@
+[package]
+name = "ai-mem-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ai-mem-mcp"
+path = "src/main.rs"
+
+[dependencies]
+ai-mem-core = { path = "../core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
