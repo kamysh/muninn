@@ -93,3 +93,58 @@ impl Similarity {
         self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_range_valid_when_start_equals_end() {
+        assert!(LineRange { start: 42, end: 42 }.is_valid());
+    }
+
+    #[test]
+    fn line_range_invalid_when_start_greater() {
+        assert!(!LineRange { start: 100, end: 0 }.is_valid());
+    }
+
+    #[test]
+    fn similarity_clamps_above_one() {
+        assert_eq!(Similarity::new(1.5).value(), 1.0);
+    }
+
+    #[test]
+    fn similarity_clamps_below_zero() {
+        assert_eq!(Similarity::new(-0.3).value(), 0.0);
+    }
+
+    #[test]
+    fn similarity_preserves_valid_range() {
+        let s = Similarity::new(0.75);
+        assert!((s.value() - 0.75).abs() < f32::EPSILON);
+    }
+
+    use quickcheck::quickcheck;
+
+    quickcheck! {
+        fn prop_line_range_valid_iff_start_le_end(start: u32, end: u32) -> bool {
+            let r = LineRange { start, end };
+            r.is_valid() == (start <= end)
+        }
+
+        fn prop_similarity_always_in_unit_interval(v: f32) -> quickcheck::TestResult {
+            if v.is_nan() {
+                return quickcheck::TestResult::discard();
+            }
+            let s = Similarity::new(v);
+            quickcheck::TestResult::from_bool(s.value() >= 0.0 && s.value() <= 1.0)
+        }
+
+        fn prop_similarity_identity_on_valid_input(v: f32) -> quickcheck::TestResult {
+            if v < 0.0 || v > 1.0 || v.is_nan() {
+                return quickcheck::TestResult::discard();
+            }
+            quickcheck::TestResult::from_bool((Similarity::new(v).value() - v).abs() < f32::EPSILON)
+        }
+    }
+}

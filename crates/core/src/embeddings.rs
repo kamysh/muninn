@@ -196,4 +196,45 @@ mod tests {
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|e| e.len() == 512));
     }
+
+    #[test]
+    fn make_backend_voyage_returns_voyage() {
+        let cfg = crate::config::EmbeddingConfig::default();
+        assert_eq!(super::expected_dimension(&cfg), 1024);
+    }
+
+    #[test]
+    fn make_backend_local_returns_768() {
+        let mut cfg = crate::config::EmbeddingConfig::default();
+        cfg.backend = crate::config::EmbeddingBackend::Local;
+        assert_eq!(super::expected_dimension(&cfg), 768);
+    }
+
+    #[test]
+    fn make_backend_openai_returns_1536() {
+        let mut cfg = crate::config::EmbeddingConfig::default();
+        cfg.backend = crate::config::EmbeddingBackend::OpenAI;
+        assert_eq!(super::expected_dimension(&cfg), 1536);
+    }
+
+    use quickcheck::quickcheck;
+
+    quickcheck! {
+        fn prop_mock_embedding_correct_length(n: u8) -> bool {
+            // n texts → n embeddings, each of the declared dimension
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let dim = 256usize;
+            let texts: Vec<String> = (0..n).map(|i| format!("text {}", i)).collect();
+            let backend = super::MockEmbeddingBackend { dimension: dim };
+            let result = rt.block_on(backend.embed(&texts)).unwrap();
+            result.len() == texts.len() && result.iter().all(|e| e.len() == dim)
+        }
+
+        fn prop_mock_embedding_zero_texts() -> bool {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let backend = super::MockEmbeddingBackend { dimension: 128 };
+            let result = rt.block_on(backend.embed(&[])).unwrap();
+            result.is_empty()
+        }
+    }
 }

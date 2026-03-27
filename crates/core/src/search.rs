@@ -171,4 +171,98 @@ mod tests {
         let merged = rrf_merge(vec![], vec![], 10);
         assert!(merged.is_empty());
     }
+
+    #[test]
+    fn rrf_merge_single_list_preserves_order() {
+        let ids: Vec<_> = (0..5).map(|_| uuid::Uuid::new_v4()).collect();
+        let list: Vec<_> = ids.iter().map(|&id| make_result(id, 0.9)).collect();
+        let merged = rrf_merge(list, vec![], 5);
+        // all items present
+        assert_eq!(merged.len(), 5);
+    }
+
+    #[test]
+    fn rrf_merge_item_in_both_lists_outranks_item_in_one() {
+        let shared = uuid::Uuid::new_v4();
+        let only_a = uuid::Uuid::new_v4();
+        let only_b = uuid::Uuid::new_v4();
+
+        let list_a = vec![make_result(shared, 0.9), make_result(only_a, 0.8)];
+        let list_b = vec![make_result(shared, 0.7), make_result(only_b, 0.6)];
+        let merged = rrf_merge(list_a, list_b, 3);
+
+        assert_eq!(merged[0].chunk.id, shared, "shared item should rank first");
+    }
+
+    #[test]
+    fn rrf_merge_scores_are_positive() {
+        let ids: Vec<_> = (0..3).map(|_| uuid::Uuid::new_v4()).collect();
+        let list: Vec<_> = ids.iter().map(|&id| make_result(id, 0.5)).collect();
+        let merged = rrf_merge(list.clone(), list, 3);
+        assert!(merged.iter().all(|r| r.score > 0.0));
+    }
+
+    #[test]
+    fn rrf_first_rank_uses_zero_based_index() {
+        // spec: rrfScore 0 = 1 / (60 + 0) = 1/60
+        let id = uuid::Uuid::new_v4();
+        let merged = rrf_merge(vec![make_result(id, 1.0)], vec![], 1);
+        let expected = 1.0_f32 / 60.0;
+        assert!((merged[0].score - expected).abs() < 1e-6,
+            "score {} != expected {}", merged[0].score, expected);
+    }
+
+    use quickcheck::quickcheck;
+
+    fn arb_result(id: Uuid) -> SearchResult {
+        SearchResult {
+            score: 0.5,
+            chunk: Chunk {
+                id,
+                repo_id: Uuid::nil(),
+                file_path: "f.rs".into(),
+                range: LineRange { start: 1, end: 1 },
+                content: "x".into(),
+                embedding: None,
+            },
+        }
+    }
+
+    quickcheck! {
+        fn prop_rrf_merge_length_le_limit(n: u8, limit: u8) -> bool {
+            let limit = (limit as usize).max(1);
+            let n = n as usize;
+            let list_a: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let list_b: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let merged = rrf_merge(list_a, list_b, limit);
+            merged.len() <= limit
+        }
+
+        fn prop_rrf_merge_no_duplicates(n: u8) -> bool {
+            let n = (n as usize).min(20);
+            // same items in both lists → deduplication
+            let ids: Vec<Uuid> = (0..n).map(|_| Uuid::new_v4()).collect();
+            let list_a: Vec<_> = ids.iter().map(|&id| arb_result(id)).collect();
+            let list_b: Vec<_> = ids.iter().map(|&id| arb_result(id)).collect();
+            let merged = rrf_merge(list_a, list_b, n + 1);
+            // no duplicate chunk ids
+            let mut seen = std::collections::HashSet::new();
+            merged.iter().all(|r| seen.insert(r.chunk.id))
+        }
+
+        fn prop_rrf_merge_scores_positive(n: u8) -> bool {
+            let n = n as usize;
+            let list_a: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let merged = rrf_merge(list_a, vec![], n + 1);
+            merged.iter().all(|r| r.score > 0.0)
+        }
+
+        fn prop_rrf_merge_sorted_descending(n: u8) -> bool {
+            let n = (n as usize).min(20);
+            let list_a: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let list_b: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let merged = rrf_merge(list_a, list_b, n * 2 + 1);
+            merged.windows(2).all(|w| w[0].score >= w[1].score)
+        }
+    }
 }

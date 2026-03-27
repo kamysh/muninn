@@ -176,4 +176,82 @@ mod tests {
             assert!(!c.content.is_empty());
         }
     }
+
+    #[test]
+    fn detect_jsx_is_javascript() {
+        assert_eq!(detect_language("comp.jsx"), Some(Language::JavaScript));
+    }
+
+    #[test]
+    fn detect_tsx_is_typescript() {
+        assert_eq!(detect_language("comp.tsx"), Some(Language::TypeScript));
+    }
+
+    #[test]
+    fn parse_python_extracts_function() {
+        let src = "def greet(name):\n    return 'hello ' + name\n";
+        let symbols = parse_file(src, Language::Python).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "greet"));
+    }
+
+    #[test]
+    fn parse_python_extracts_class() {
+        let src = "class Foo:\n    pass\n";
+        let symbols = parse_file(src, Language::Python).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "Foo"));
+    }
+
+    #[test]
+    fn chunk_empty_source_produces_no_chunks() {
+        let chunks = chunk_file("", &[], 512);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn chunk_respects_max_chars() {
+        // source with no symbols falls back to max_chars splitting
+        let long_line = "x".repeat(100);
+        let src = format!("{}\n{}\n{}\n", long_line, long_line, long_line);
+        let chunks = chunk_file(&src, &[], 150);
+        for c in &chunks {
+            assert!(!c.content.is_empty());
+            assert!(c.range.is_valid());
+        }
+    }
+
+    use quickcheck::quickcheck;
+
+    quickcheck! {
+        fn prop_chunk_all_ranges_valid(content: String) -> bool {
+            let chunks = chunk_file(&content, &[], 256);
+            chunks.iter().all(|c| c.range.is_valid())
+        }
+
+        fn prop_chunk_all_content_nonempty(content: String) -> bool {
+            let chunks = chunk_file(&content, &[], 256);
+            chunks.iter().all(|c| !c.content.is_empty())
+        }
+
+        fn prop_detect_language_rs_always_rust(stem: String) -> quickcheck::TestResult {
+            let sanitized: String = stem.chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+                .collect();
+            if sanitized.is_empty() || sanitized.starts_with('.') {
+                return quickcheck::TestResult::discard();
+            }
+            let path = format!("{}.rs", sanitized);
+            quickcheck::TestResult::from_bool(detect_language(&path) == Some(Language::Rust))
+        }
+
+        fn prop_detect_language_py_always_python(stem: String) -> quickcheck::TestResult {
+            let sanitized: String = stem.chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+                .collect();
+            if sanitized.is_empty() || sanitized.starts_with('.') {
+                return quickcheck::TestResult::discard();
+            }
+            let path = format!("{}.py", sanitized);
+            quickcheck::TestResult::from_bool(detect_language(&path) == Some(Language::Python))
+        }
+    }
 }
