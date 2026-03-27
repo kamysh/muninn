@@ -39,7 +39,6 @@ record Repo : Set where
         path         : FilePath
         name         : String
         indexedAt    : Maybe String   -- ISO-8601 timestamp; nothing = never indexed
-        config       : Maybe String   -- JSON configuration blob
         embeddingDim : ℕ             -- VECTOR(n) dimension recorded at registration time
 
 -- A single result returned by a search query.
