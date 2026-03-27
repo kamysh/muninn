@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
-use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation};
+use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
 
 /// Insert or update a symbol node in the AGE code_graph.
 /// Uses Cypher via ag_catalog.cypher().
@@ -43,6 +43,20 @@ pub async fn upsert_symbol_node(
 
 /// Insert a directed edge between two symbol nodes.
 pub async fn upsert_edge(
+    pool: &PgPool,
+    edge: &StructuralEdge,
+) -> Result<()> {
+    let rel = match edge.relation {
+        StructuralRelation::Calls => "CALLS",
+        StructuralRelation::Imports => "IMPORTS",
+        StructuralRelation::Defines => "DEFINES",
+        StructuralRelation::InheritsFrom => "INHERITS_FROM",
+    };
+    upsert_edge_raw(pool, edge.from, edge.to, rel).await
+}
+
+/// Private helper: insert an edge by raw UUIDs and relation string.
+async fn upsert_edge_raw(
     pool: &PgPool,
     from_chunk_id: Uuid,
     to_chunk_id: Uuid,

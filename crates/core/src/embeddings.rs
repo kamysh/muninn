@@ -105,6 +105,19 @@ impl EmbeddingBackend for MockEmbeddingBackend {
     }
 }
 
+// ── Dimension helper ──────────────────────────────────────────────────────────
+
+/// Returns the expected embedding vector dimension for a given backend config.
+/// Voyage → 1024, OpenAI → 1536, Local → 768.
+pub fn expected_dimension(cfg: &crate::config::EmbeddingConfig) -> usize {
+    use crate::config::EmbeddingBackend;
+    match cfg.backend {
+        EmbeddingBackend::Voyage => 1024,
+        EmbeddingBackend::OpenAI => 1536,
+        EmbeddingBackend::Local  => 768,
+    }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBackend> {
@@ -150,6 +163,21 @@ mod tests {
     #[test]
     fn mock_backend_dimension() {
         assert_eq!(1024usize, 1024); // EmbeddingBackendConfig::voyage_code_3_dimension()
+    }
+
+    #[test]
+    fn expected_dimensions_match_spec() {
+        use crate::config::{EmbeddingConfig, EmbeddingBackend};
+        let mut cfg = EmbeddingConfig::default();
+
+        cfg.backend = EmbeddingBackend::Voyage;
+        assert_eq!(expected_dimension(&cfg), 1024);
+
+        cfg.backend = EmbeddingBackend::OpenAI;
+        assert_eq!(expected_dimension(&cfg), 1536);
+
+        cfg.backend = EmbeddingBackend::Local;
+        assert_eq!(expected_dimension(&cfg), 768);
     }
 
     #[tokio::test]

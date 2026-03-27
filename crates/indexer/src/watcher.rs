@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
 use ai_mem_core::embeddings::EmbeddingBackend;
+use ai_mem_core::types::IndexState;
 use crate::pipeline::index_file;
 
 pub async fn watch_repo(
@@ -15,6 +17,7 @@ pub async fn watch_repo(
     repo_path: PathBuf,
     embedder: Arc<dyn EmbeddingBackend>,
     debounce_ms: u64,
+    state: Arc<Mutex<IndexState>>,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
 
@@ -40,6 +43,9 @@ pub async fn watch_repo(
         let Some(first) = rx.recv().await else { break };
         let mut batch = vec![first];
 
+        // Transition to Stale (changes detected, not yet reindexed)
+        *state.lock().await = IndexState::Stale;
+
         // collect more events within the debounce window
         let _ = tokio::time::timeout(debounce, async {
             loop {
@@ -52,6 +58,9 @@ pub async fn watch_repo(
 
         batch.sort();
         batch.dedup();
+
+        // Transition Stale → Indexing
+        *state.lock().await = IndexState::Indexing;
 
         for path in batch {
             if path.exists() {
@@ -67,6 +76,9 @@ pub async fn watch_repo(
                 }
             }
         }
+
+        // Transition back to Watching
+        *state.lock().await = IndexState::Watching;
     }
 
     Ok(())

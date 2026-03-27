@@ -63,3 +63,19 @@ pub enum StructuralRelation {
     Defines,
     InheritsFrom,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuralEdge {
+    pub from: Uuid,
+    pub to: Uuid,
+    pub relation: StructuralRelation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IndexState {
+    Unindexed,
+    Indexing,
+    Indexed,
+    Watching,
+    Stale,
+}

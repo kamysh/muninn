@@ -30,8 +30,11 @@ version = "0.1.0"
 dependencies = [
  "ai-mem-core",
  "anyhow",
+ "chrono",
  "clap",
+ "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -76,9 +79,13 @@ version = "0.1.0"
 dependencies = [
  "ai-mem-core",
  "anyhow",
+ "serde",
+ "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

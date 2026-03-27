@@ -105,12 +105,12 @@ pub fn rrf_merge(
     let mut scores: HashMap<Uuid, (f32, SearchResult)> = HashMap::new();
 
     for (rank, result) in list_a.into_iter().enumerate() {
-        let rrf = 1.0 / (K + rank as f32 + 1.0);
+        let rrf = 1.0 / (K + rank as f32);
         let id = result.chunk.id;
         scores.entry(id).and_modify(|e| e.0 += rrf).or_insert((rrf, result));
     }
     for (rank, result) in list_b.into_iter().enumerate() {
-        let rrf = 1.0 / (K + rank as f32 + 1.0);
+        let rrf = 1.0 / (K + rank as f32);
         let id = result.chunk.id;
         scores.entry(id).and_modify(|e| e.0 += rrf).or_insert((rrf, result));
     }

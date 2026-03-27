@@ -38,6 +38,15 @@ pub async fn index_file(
     // Generate embeddings in one batch
     let texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
     let embeddings = embedder.embed(&texts).await?;
+    for emb in &embeddings {
+        if !emb.is_empty() && emb.len() != 1024 {
+            tracing::warn!(
+                "embedding dimension {} != expected 1024 (DB schema); \
+                 switching embedding backends requires a schema migration",
+                emb.len()
+            );
+        }
+    }
     for (c, emb) in chunks.iter_mut().zip(embeddings) {
         c.embedding = Some(emb);
     }

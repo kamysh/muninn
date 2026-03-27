@@ -2,7 +2,9 @@ mod pipeline;
 mod watcher;
 
 use ai_mem_core::{config::AppConfig, db, embeddings::make_backend};
+use ai_mem_core::types::IndexState;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,19 +24,32 @@ async fn main() -> anyhow::Result<()> {
             None => ai_mem_core::store::register_repo(&pool, &repo_entry.path, &repo_entry.name).await?,
         };
 
+        // Model initial state: Unindexed if never indexed, Indexed otherwise
+        let state = Arc::new(Mutex::new(if repo.indexed_at.is_none() {
+            IndexState::Unindexed
+        } else {
+            IndexState::Indexed
+        }));
+
         if repo.indexed_at.is_none() {
             tracing::info!("full reindex: {}", repo_entry.path);
+            *state.lock().await = IndexState::Indexing;
             pipeline::index_repo(&pool, repo.id, &path, embedder.clone(), cfg.embeddings.batch_size).await?;
+            *state.lock().await = IndexState::Indexed;
         }
+
+        // Transition to Watching before spawning the watcher
+        *state.lock().await = IndexState::Watching;
 
         let pool2 = pool.clone();
         let embedder2 = embedder.clone();
         let path2 = path.clone();
         let id = repo.id;
         let debounce = cfg.watcher.debounce_ms;
+        let state2 = state.clone();
 
         handles.push(tokio::spawn(async move {
-            if let Err(e) = watcher::watch_repo(pool2, id, path2, embedder2, debounce).await {
+            if let Err(e) = watcher::watch_repo(pool2, id, path2, embedder2, debounce, state2).await {
                 tracing::error!("watcher error: {}", e);
             }
         }));
