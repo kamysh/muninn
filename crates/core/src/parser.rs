@@ -45,6 +45,34 @@ pub fn parse_file(source: &str, language: Language) -> Result<Vec<ParsedSymbol>>
     Ok(symbols)
 }
 
+/// Extract a display name for a symbol node.
+/// For named declarations (functions, classes, modules) uses the "name" field.
+/// For imports uses the first named child (the path/module being imported).
+fn extract_symbol_name(
+    kind: &SymbolKind,
+    node: tree_sitter::Node,
+    source: &str,
+) -> String {
+    match kind {
+        SymbolKind::Import => {
+            // Try "name" field first (Python), then first named child (Rust use_declaration path,
+            // JS/TS import source).
+            node.child_by_field_name("name")
+                .or_else(|| node.child_by_field_name("source"))
+                .or_else(|| (0..node.named_child_count()).find_map(|i| node.named_child(i)))
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
+                .unwrap_or_else(|| "<import>".to_string())
+        }
+        _ => {
+            node.child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                .unwrap_or("<anonymous>")
+                .to_string()
+        }
+    }
+}
+
 fn extract_symbols(
     node: tree_sitter::Node,
     source: &str,
@@ -54,18 +82,19 @@ fn extract_symbols(
     let kind = match (language, node.kind()) {
         (Language::Rust, "function_item") => Some(SymbolKind::Function),
         (Language::Rust, "struct_item") | (Language::Rust, "impl_item") => Some(SymbolKind::Class),
+        (Language::Rust, "mod_item") => Some(SymbolKind::Module),
+        (Language::Rust, "use_declaration") => Some(SymbolKind::Import),
         (Language::Python, "function_definition") => Some(SymbolKind::Function),
         (Language::Python, "class_definition") => Some(SymbolKind::Class),
+        (Language::Python, "import_statement") | (Language::Python, "import_from_statement") => Some(SymbolKind::Import),
         (Language::JavaScript | Language::TypeScript, "function_declaration") => Some(SymbolKind::Function),
         (Language::JavaScript | Language::TypeScript, "class_declaration") => Some(SymbolKind::Class),
+        (Language::JavaScript | Language::TypeScript, "import_statement") => Some(SymbolKind::Import),
         _ => None,
     };
 
     if let Some(k) = kind {
-        let name = node.child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-            .unwrap_or("<anonymous>")
-            .to_string();
+        let name = extract_symbol_name(&k, node, source);
         let start_line = node.start_position().row as u32 + 1;
         let end_line = node.end_position().row as u32 + 1;
         out.push(ParsedSymbol {
