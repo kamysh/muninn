@@ -217,9 +217,6 @@ impl EffectiveConfig {
     }
 }
 
-// ── Backward compat alias (temporary — removed in Task 6) ─────────────────
-pub type AppConfig = GlobalConfig;
-
 #[cfg(test)]
 mod tests {
     use super::*;
