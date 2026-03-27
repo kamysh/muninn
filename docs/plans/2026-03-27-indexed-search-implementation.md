@@ -13,7 +13,7 @@
 ## Prerequisites
 
 - Nix with flakes enabled (`nix develop` provides everything below)
-- PostgreSQL 16+ with pgvector and apache-age (provided by dev shell)
+- PostgreSQL 16+ with pgvector and apache-age running externally
 - Rust stable toolchain (provided by dev shell via rust-overlay)
 - sqlx-cli (provided by dev shell)
 - Agda + standard library (provided by dev shell)
@@ -26,16 +26,15 @@
 **Files:**
 - Create: `flake.nix`
 
-Provides a reproducible dev shell via `nix develop` with: Rust stable + rust-analyzer + clippy + rustfmt, PostgreSQL 16 with pgvector, Apache AGE (built from source), Agda with standard library, sqlx-cli, cargo-nextest, and pkg-config/openssl for reqwest.
+Provides a reproducible dev shell via `nix develop` with: Rust stable + rust-analyzer + clippy + rustfmt, sqlx-cli, psql client, Agda with standard library, cargo-nextest, and pkg-config/openssl for reqwest. PostgreSQL with pgvector and AGE is assumed to be running externally.
 
 **Step 1: Create flake.nix**
 
 See `flake.nix` in repo root. Key structure:
 - inputs: nixpkgs (unstable), rust-overlay, flake-utils
-- `apacheAge` derivation: builds AGE from `apache/age` GitHub at `PG16/v1.5.0-rc0`
-- `postgresWithExtensions`: postgresql_16 + pgvector
 - `agdaWithStdlib`: agda + standard-library
-- devShell exports: `DATABASE_URL`, `TEST_DATABASE_URL`, `AGE_EXTENSION_DIR`
+- devShell exports: `DATABASE_URL`, `TEST_DATABASE_URL`
+- PostgreSQL assumed external — only psql client included
 
 **Step 2: Enter dev shell to verify**
 
@@ -47,14 +46,7 @@ agda --version
 sqlx --version
 ```
 
-**Step 3: Fix AGE hash if needed**
-
-On first run nix will error with the correct hash. Replace the placeholder in `flake.nix`:
-```
-hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-```
-
-**Step 4: Commit**
+**Step 3: Commit**
 
 ```bash
 git add flake.nix
