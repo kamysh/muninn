@@ -1,7 +1,9 @@
 use ai_mem_core::{
     embeddings::EmbeddingBackend,
+    graph,
     parser::{detect_language, parse_file, chunk_file},
     store::{upsert_chunk, delete_file_chunks},
+    types::SymbolKind,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -55,6 +57,28 @@ pub async fn index_file(
     delete_file_chunks(pool, repo_id, &file_path).await?;
     for chunk in &chunks {
         upsert_chunk(pool, chunk).await?;
+    }
+
+    // Persist parsed symbols into the per-repo AGE graph (IsolatedGraph invariant:
+    // chunks are persisted above before symbols reference them).
+    // chunk_file with symbols creates one chunk per symbol in the same order,
+    // skipping symbols whose content is empty; match by line range.
+    for chunk in &chunks {
+        if let Some(sym) = symbols.iter().find(|s| s.range == chunk.range) {
+            let kind_str = match sym.kind {
+                SymbolKind::Function => "Function",
+                SymbolKind::Class    => "Class",
+                SymbolKind::Module   => "Module",
+                SymbolKind::Import   => "Import",
+            };
+            if let Err(e) = graph::upsert_symbol_node(
+                pool, repo_id, chunk.id,
+                &sym.name, kind_str, &file_path,
+                chunk.range.start, chunk.range.end,
+            ).await {
+                tracing::warn!("failed to store symbol '{}' in graph: {}", sym.name, e);
+            }
+        }
     }
 
     Ok(())
