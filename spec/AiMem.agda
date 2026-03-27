@@ -8,8 +8,10 @@ open import Data.String  using (String)
 open import Data.List    using (List; length)
 open import Data.Maybe   using (Maybe; nothing; just; map)
 open import Data.Nat     using (ℕ; _≤_)
-open import Data.Product using (_×_; _,_)
+open import Data.Product using (_×_; _,_; Σ)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; _≢_)
+open import Relation.Nullary using (¬_)
+open import Data.List.Membership.Propositional using (_∈_)
 
 -- ─── Postulated Float support ──────────────────────────────────────────────────
 -- Agda's built-in Float does not expose ordered arithmetic in a convenient way,
@@ -93,6 +95,21 @@ record StructuralEdge : Set where
         to       : ChunkId
         relation : Relation
 
+-- A per-repo structural graph: symbols (nodes) and their relationships (edges).
+record SymbolGraph : Set where
+  field symbols : List Symbol
+        edges   : List StructuralEdge
+
+-- ─── Per-Repo Storage ──────────────────────────────────────────────────────────
+-- Each registered repository owns its chunk store and symbol graph.
+-- In the implementation these map to a dedicated chunks table and AGE graph,
+-- both named after the repo's UUID and dropped when the repo is unregistered.
+
+record RepoStorage : Set where
+  field repo   : Repo
+        chunks : List Chunk
+        graph  : SymbolGraph
+
 -- ─── Repo Registration Invariant ───────────────────────────────────────────────
 -- No two repos in a well-formed registry may share the same file-system path.
 -- Expressed as: equal paths imply equal identities.
@@ -102,6 +119,27 @@ UniqueRepoPaths repos =
   ∀ (r1 r2 : Repo) →
     Repo.path r1 ≡ Repo.path r2 →
     Repo.id  r1 ≡ Repo.id  r2
+
+-- ─── Storage Isolation Invariants ──────────────────────────────────────────────
+-- All chunks in a repo's store must belong to that repo.
+
+IsolatedChunks : RepoStorage → Set
+IsolatedChunks s =
+  ∀ (c : Chunk) →
+    c ∈ RepoStorage.chunks s →
+    Chunk.repoId c ≡ Repo.id (RepoStorage.repo s)
+
+-- Every chunkId referenced by a symbol in the graph must resolve to a chunk
+-- in the same repo's store.
+
+ChunkExists : ChunkId → List Chunk → Set
+ChunkExists cid cs = Σ Chunk (λ c → (c ∈ cs) × (Chunk.id c ≡ cid))
+
+IsolatedGraph : RepoStorage → Set
+IsolatedGraph s =
+  ∀ (sym : Symbol) →
+    sym ∈ SymbolGraph.symbols (RepoStorage.graph s) →
+    ChunkExists (Symbol.chunkId sym) (RepoStorage.chunks s)
 
 -- ─── Indexing State Machine ────────────────────────────────────────────────────
 
@@ -131,8 +169,6 @@ ValidRange r = LineRange.start r ≤ LineRange.end r
 -- A chunk's content must be non-empty (cannot equal the empty string).
 ValidChunk : Chunk → Set
 ValidChunk c = ¬ (Chunk.content c ≡ "")
-  where
-    open import Relation.Nullary using (¬_)
 
 -- ─── Query Semantics ───────────────────────────────────────────────────────────
 
@@ -140,7 +176,7 @@ ValidChunk c = ¬ (Chunk.content c ≡ "")
 record Similarity : Set where
   field value : Float
 
--- Reciprocal Rank Fusion score for a result at position `rank` (1-based).
+-- Reciprocal Rank Fusion score for a result at position `rank` (0-based).
 -- The standard constant k = 60 dampens the influence of high ranks.
 --   rrfScore(rank) = 1 / (60 + rank)
 private

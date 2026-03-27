@@ -1,4 +1,5 @@
 use crate::types::{Chunk, SearchResult, LineRange};
+use crate::store::chunks_table;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
@@ -7,23 +8,22 @@ use std::collections::HashMap;
 pub async fn fulltext_search(
     pool: &PgPool,
     query: &str,
-    repo_id: Option<Uuid>,
+    repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     use sqlx::Row;
-    let rows = sqlx::query(
+    let table = chunks_table(repo_id);
+    let rows = sqlx::query(&format!(
         r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
                ts_rank(ts_vector, plainto_tsquery('english', $1)) AS score
-        FROM chunks
+        FROM "{table}"
         WHERE ts_vector @@ plainto_tsquery('english', $1)
-          AND ($2::uuid IS NULL OR repo_id = $2)
         ORDER BY score DESC
-        LIMIT $3
-        "#,
-    )
+        LIMIT $2
+        "#
+    ))
     .bind(query)
-    .bind(repo_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -49,29 +49,28 @@ pub async fn fulltext_search(
 pub async fn semantic_search(
     pool: &PgPool,
     query_embedding: &[f32],
-    repo_id: Option<Uuid>,
+    repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     use sqlx::Row;
+    let table = chunks_table(repo_id);
     // Format embedding as pgvector literal: '[f1,f2,...]'
     let vec_literal = format!(
         "[{}]",
         query_embedding.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",")
     );
 
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
                (1 - (embedding <=> $1::vector))::float4 AS score
-        FROM chunks
+        FROM "{table}"
         WHERE embedding IS NOT NULL
-          AND ($2::uuid IS NULL OR repo_id = $2)
         ORDER BY embedding <=> $1::vector
-        LIMIT $3
-        "#,
-    )
+        LIMIT $2
+        "#
+    ))
     .bind(vec_literal)
-    .bind(repo_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
