@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Unregister { path } => {
-            let toml_path = std::path::Path::new(&path).join("muninn.toml");
+            let toml_path = std::path::Path::new(&path).join(muninn_core::config::RepoConfig::FILE_NAME);
             if !toml_path.exists() {
                 println!("No muninn.toml found at: {}", path);
             } else {
