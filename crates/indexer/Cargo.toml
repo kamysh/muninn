@@ -9,6 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 ai-mem-core = { path = "../core" }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+ignore = "0.4"
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
