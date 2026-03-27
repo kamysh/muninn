@@ -118,7 +118,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 },
                                 "repo": {"type": "string"}
                             },
-                            "required": ["symbol", "relation"]
+                            "required": ["symbol", "relation", "repo"]
                         }
                     }
                 ]
