@@ -58,13 +58,12 @@ record Repo : Set where
         path      : FilePath
         name      : String
         indexedAt : Maybe String          -- ISO-8601 timestamp; nothing = never indexed
+        config    : Maybe String          -- JSON configuration blob
 
 -- A single result returned by a search query.
 record SearchResult : Set where
-  field chunkId   : ChunkId
-        score     : Float
-        filePath  : FilePath
-        range     : LineRange
+  field chunk  : Chunk
+        score  : Float
 
 -- ─── Symbol Types ──────────────────────────────────────────────────────────────
 

@@ -81,7 +81,17 @@ pub struct StructuralParams {
 }
 
 pub async fn search_structural(ctx: &SearchContext, params: StructuralParams) -> Result<serde_json::Value> {
-    let symbols = graph::query_related(&ctx.pool, &params.symbol, &params.relation).await?;
+    let (relation, incoming) = match params.relation.as_str() {
+        "callers"    => (ai_mem_core::types::StructuralRelation::Calls, true),
+        "callees"    => (ai_mem_core::types::StructuralRelation::Calls, false),
+        "imports"    => (ai_mem_core::types::StructuralRelation::Imports, false),
+        "defines"    => (ai_mem_core::types::StructuralRelation::Defines, false),
+        "inheritors" => (ai_mem_core::types::StructuralRelation::InheritsFrom, true),
+        "inherits"   => (ai_mem_core::types::StructuralRelation::InheritsFrom, false),
+        other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
+    };
+
+    let symbols = graph::query_related(&ctx.pool, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 

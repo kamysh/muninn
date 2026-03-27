@@ -58,8 +58,8 @@ pub enum SymbolKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StructuralRelation {
-    Callers,
-    Callees,
+    Calls,
     Imports,
-    Inheritors,
+    Defines,
+    InheritsFrom,
 }

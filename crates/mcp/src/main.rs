@@ -111,7 +111,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 "symbol": {"type": "string"},
                                 "relation": {
                                     "type": "string",
-                                    "enum": ["callers", "callees", "imports", "inheritors"]
+                                    "enum": ["callers","callees","imports","defines","inheritors","inherits"]
                                 },
                                 "repo": {"type": "string"}
                             },
