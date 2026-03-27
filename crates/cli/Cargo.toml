@@ -12,3 +12,6 @@ ai-mem-core = { path = "../core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
