@@ -5,7 +5,7 @@ mod watcher;
 use muninn_core::{
     config::{GlobalConfig, RepoConfig, EffectiveConfig},
     db,
-    embeddings::{make_backend, expected_dimension_for},
+    embeddings::{make_backend, expected_dimension},
     types::IndexState,
 };
 use std::sync::Arc;
@@ -17,8 +17,6 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = GlobalConfig::load()?;
     let pool = db::connect(&cfg.database.dsn()).await?;
-    let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
-        Arc::from(make_backend(&cfg.embeddings));
 
     // Discover all repos under configured scan roots
     let mut repo_roots: Vec<std::path::PathBuf> = vec![];
@@ -42,7 +40,9 @@ async fn main() -> anyhow::Result<()> {
 
         let repo_cfg = RepoConfig::load(&repo_path)?;
         let eff = EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
-        let repo_dim = expected_dimension_for(&eff.embeddings);
+        let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
+            Arc::from(make_backend(&eff.embeddings));
+        let repo_dim = expected_dimension(&eff.embeddings);
 
         let (repo, is_new) = match muninn_core::store::get_repo_by_path(
             &pool,
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
                 repo.id,
                 &repo_path,
                 embedder.clone(),
-                cfg.embeddings.batch_size,
+                eff.embeddings.batch_size,
                 repo_dim,
             )
             .await?;
