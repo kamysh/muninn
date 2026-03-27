@@ -11,6 +11,7 @@
 --   Muninn.Index      — IndexState machine, ValidRange, ValidChunk
 --   Muninn.Search     — Similarity, RRF scoring, HybridResultBound
 --   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
+--   Muninn.Config     — GlobalConfig, RepoConfig, EffectiveConfig, merge, DimFrozen, discovery
 module Muninn where
 
 open import Muninn.Float      public
@@ -20,3 +21,4 @@ open import Muninn.Storage    public
 open import Muninn.Index      public
 open import Muninn.Search     public
 open import Muninn.Embeddings public
+open import Muninn.Config     public
