@@ -118,6 +118,16 @@ pub fn expected_dimension(cfg: &crate::config::EmbeddingConfig) -> usize {
     }
 }
 
+/// Return the expected embedding dimension for a given EmbeddingConfig.
+/// Used by the indexer when computing effective config per repo.
+pub fn expected_dimension_for(cfg: &crate::config::EmbeddingConfig) -> usize {
+    match cfg.backend {
+        crate::config::EmbeddingBackend::Voyage => 1024,
+        crate::config::EmbeddingBackend::OpenAI => 1536,
+        crate::config::EmbeddingBackend::Local  => 768,
+    }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBackend> {
