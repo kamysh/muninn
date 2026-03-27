@@ -79,3 +79,17 @@ pub enum IndexState {
     Watching,
     Stale,
 }
+
+/// Cosine similarity score in [0, 1]. Spec: Similarity record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Similarity(pub f32);
+
+impl Similarity {
+    pub fn new(value: f32) -> Self {
+        Self(value.clamp(0.0, 1.0))
+    }
+
+    pub fn value(self) -> f32 {
+        self.0
+    }
+}

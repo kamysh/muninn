@@ -18,6 +18,7 @@ pub async fn watch_repo(
     embedder: Arc<dyn EmbeddingBackend>,
     debounce_ms: u64,
     state: Arc<Mutex<IndexState>>,
+    expected_dim: usize,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
 
@@ -64,7 +65,7 @@ pub async fn watch_repo(
 
         for path in batch {
             if path.exists() {
-                if let Err(e) = index_file(&pool, repo_id, &path, embedder.as_ref(), 4096).await {
+                if let Err(e) = index_file(&pool, repo_id, &path, embedder.as_ref(), 4096, expected_dim).await {
                     tracing::warn!("incremental index error for {}: {}", path.display(), e);
                 }
             } else {
@@ -77,7 +78,9 @@ pub async fn watch_repo(
             }
         }
 
-        // Transition back to Watching
+        // finishIndex: Indexing → Indexed
+        *state.lock().await = IndexState::Indexed;
+        // attachWatcher: Indexed → Watching
         *state.lock().await = IndexState::Watching;
     }
 

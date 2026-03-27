@@ -1,7 +1,7 @@
 mod pipeline;
 mod watcher;
 
-use ai_mem_core::{config::AppConfig, db, embeddings::make_backend};
+use ai_mem_core::{config::AppConfig, db, embeddings::{make_backend, expected_dimension}};
 use ai_mem_core::types::IndexState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -14,6 +14,7 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&cfg.database.dsn).await?;
     let embedder: Arc<dyn ai_mem_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
+    let expected_dim = expected_dimension(&cfg.embeddings);
 
     let mut handles = vec![];
 
@@ -34,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
         if repo.indexed_at.is_none() {
             tracing::info!("full reindex: {}", repo_entry.path);
             *state.lock().await = IndexState::Indexing;
-            pipeline::index_repo(&pool, repo.id, &path, embedder.clone(), cfg.embeddings.batch_size).await?;
+            pipeline::index_repo(&pool, repo.id, &path, embedder.clone(), cfg.embeddings.batch_size, expected_dim).await?;
             *state.lock().await = IndexState::Indexed;
         }
 
@@ -49,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         let state2 = state.clone();
 
         handles.push(tokio::spawn(async move {
-            if let Err(e) = watcher::watch_repo(pool2, id, path2, embedder2, debounce, state2).await {
+            if let Err(e) = watcher::watch_repo(pool2, id, path2, embedder2, debounce, state2, expected_dim).await {
                 tracing::error!("watcher error: {}", e);
             }
         }));

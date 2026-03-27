@@ -63,6 +63,15 @@ pub async fn mark_indexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
 /// TODO: embedding (VECTOR(1024)) is not stored here yet — add update_chunk_embedding()
 /// when pgvector integration is ready.
 pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
+    anyhow::ensure!(
+        chunk.range.is_valid(),
+        "invalid LineRange: start {} > end {}",
+        chunk.range.start, chunk.range.end
+    );
+    anyhow::ensure!(
+        !chunk.content.is_empty(),
+        "chunk content must not be empty (ValidChunk invariant)"
+    );
     let row = sqlx::query(
         r#"
         INSERT INTO chunks (id, repo_id, file_path, start_line, end_line, content, embedding)

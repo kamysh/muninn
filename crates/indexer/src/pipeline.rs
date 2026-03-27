@@ -15,6 +15,7 @@ pub async fn index_file(
     path: &Path,
     embedder: &dyn EmbeddingBackend,
     max_chars: usize,
+    expected_dim: usize,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
     let source = std::fs::read_to_string(path)?;
@@ -39,11 +40,11 @@ pub async fn index_file(
     let texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
     let embeddings = embedder.embed(&texts).await?;
     for emb in &embeddings {
-        if !emb.is_empty() && emb.len() != 1024 {
+        if !emb.is_empty() && emb.len() != expected_dim {
             tracing::warn!(
-                "embedding dimension {} != expected 1024 (DB schema); \
+                "embedding dimension {} != expected {} for backend; \
                  switching embedding backends requires a schema migration",
-                emb.len()
+                emb.len(), expected_dim
             );
         }
     }
@@ -65,6 +66,7 @@ pub async fn index_repo(
     repo_path: &Path,
     embedder: Arc<dyn EmbeddingBackend>,
     batch_size: usize,
+    expected_dim: usize,
 ) -> Result<()> {
     use ignore::WalkBuilder;
 
@@ -82,7 +84,7 @@ pub async fn index_repo(
 
     for batch in files.chunks(batch_size) {
         for file in batch {
-            if let Err(e) = index_file(pool, repo_id, file, embedder.as_ref(), 4096).await {
+            if let Err(e) = index_file(pool, repo_id, file, embedder.as_ref(), 4096, expected_dim).await {
                 tracing::warn!("skipping {}: {}", file.display(), e);
             }
         }
