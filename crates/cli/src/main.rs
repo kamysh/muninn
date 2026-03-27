@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use muninn_core::{config::GlobalConfig, db, store, embeddings::expected_dimension};
+use muninn_core::{config::GlobalConfig, db, store};
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager")]
@@ -38,24 +38,48 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Register { path, name } => {
-            let name = name.unwrap_or_else(|| {
-                std::path::Path::new(&path)
+            let repo_path = std::path::Path::new(&path);
+            if !repo_path.exists() {
+                anyhow::bail!("path does not exist: {}", path);
+            }
+            let dir_name = name.unwrap_or_else(|| {
+                repo_path
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string()
             });
-            let embedding_dim = expected_dimension(&cfg.embeddings);
-            store::register_repo(&pool, &path, &name, embedding_dim).await?;
-            println!("Registered: {} ({})\nNote: restart muninn-index to begin indexing.", name, path);
+            let toml_path = muninn_core::config::RepoConfig::create_template(repo_path, &dir_name)?;
+            println!("Created: {}", toml_path.display());
+            println!("Opening in $EDITOR… (save and close to finish)");
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            std::process::Command::new(&editor)
+                .arg(&toml_path)
+                .status()?;
+            println!("Done. Restart muninn-index to pick up the new repo.");
         }
 
         Commands::Unregister { path } => {
-            if let Some(repo) = store::get_repo_by_path(&pool, &path).await? {
-                store::delete_repo(&pool, repo.id).await?;
-                println!("Unregistered: {}", path);
+            let toml_path = std::path::Path::new(&path).join("muninn.toml");
+            if !toml_path.exists() {
+                println!("No muninn.toml found at: {}", path);
             } else {
-                println!("Not found: {}", path);
+                print!("Delete {} and remove index data? [y/N] ", toml_path.display());
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if line.trim().eq_ignore_ascii_case("y") {
+                    std::fs::remove_file(&toml_path)?;
+                    if let Some(repo) = muninn_core::store::get_repo_by_path(&pool, &path).await? {
+                        muninn_core::store::delete_repo(&pool, repo.id).await?;
+                        println!("Removed index data for: {}", path);
+                    }
+                    println!("Unregistered: {}", path);
+                    println!("Restart muninn-index to stop watching this repo.");
+                } else {
+                    println!("Aborted.");
+                }
             }
         }
 
