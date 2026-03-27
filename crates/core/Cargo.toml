@@ -22,3 +22,4 @@ tokio = { workspace = true }
 [dev-dependencies]
 quickcheck = { workspace = true }
 quickcheck_macros = { workspace = true }
+tempfile = "3"

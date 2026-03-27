@@ -170,9 +170,7 @@ impl RepoConfig {
                  # All sections are optional. Empty file marks this directory as a muninn repo root.\n\
                  # Uncomment and edit any section to override global defaults.\n\
                  \n\
-                 [repo]\n\
-                 name = \"{dir_name}\"\n\
-                 # description = \"\"\n\
+                 # repo_name = \"{dir_name}\"   # override repo name (default: directory name)\n\
                  \n\
                  # [database]\n\
                  # host   = \"localhost\"\n\
@@ -319,5 +317,17 @@ mod tests {
             dsn_override: Some("postgresql://pooler/muninn".to_string()),
         };
         assert_eq!(db.dsn(), "postgresql://pooler/muninn");
+    }
+
+    #[test]
+    fn repo_config_template_parses_without_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        RepoConfig::create_template(tmp.path(), "test-repo").unwrap();
+        let loaded = RepoConfig::load(tmp.path()).unwrap();
+        // template has everything commented out — should load as all-None
+        assert!(loaded.repo_name.is_none());
+        assert!(loaded.database.is_none());
+        assert!(loaded.embeddings.is_none());
+        assert!(loaded.watcher.is_none());
     }
 }
