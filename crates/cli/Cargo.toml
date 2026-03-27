@@ -1,14 +1,14 @@
 [package]
-name = "ai-mem"
+name = "muninn"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ai-mem"
+name = "muninn"
 path = "src/main.rs"
 
 [dependencies]
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

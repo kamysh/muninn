@@ -1,8 +1,8 @@
--- AiMem/Index.agda
+-- Muninn/Index.agda
 -- Indexing state machine and chunk validity predicates.
-module AiMem.Index where
+module Muninn.Index where
 
-open import AiMem.Types
+open import Muninn.Types
 open import Data.Nat    using (_≤_)
 open import Data.String using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_)

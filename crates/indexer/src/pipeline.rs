@@ -1,4 +1,4 @@
-use ai_mem_core::{
+use muninn_core::{
     embeddings::EmbeddingBackend,
     graph,
     parser::{detect_language, parse_file, chunk_file},
@@ -114,6 +114,6 @@ pub async fn index_repo(
         }
     }
 
-    ai_mem_core::store::mark_indexed(pool, repo_id).await?;
+    muninn_core::store::mark_indexed(pool, repo_id).await?;
     Ok(())
 }

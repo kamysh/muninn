@@ -1,9 +1,9 @@
--- AiMem/Float.agda
+-- Muninn/Float.agda
 -- Postulated Float support used throughout the specification.
 -- Agda's built-in Float does not expose ordered arithmetic conveniently,
 -- so we postulate the operations we need.  These are realised by IEEE 754
 -- doubles in every concrete backend.
-module AiMem.Float where
+module Muninn.Float where
 
 open import Data.Nat using (ℕ)
 

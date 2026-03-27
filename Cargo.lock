@@ -25,72 +25,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-mem"
-version = "0.1.0"
-dependencies = [
- "ai-mem-core",
- "anyhow",
- "chrono",
- "clap",
- "sqlx",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "ai-mem-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "quickcheck",
- "quickcheck_macros",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "toml",
- "tree-sitter",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "uuid",
-]
-
-[[package]]
-name = "ai-mem-index"
-version = "0.1.0"
-dependencies = [
- "ai-mem-core",
- "anyhow",
- "futures",
- "ignore",
- "notify",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "ai-mem-mcp"
-version = "0.1.0"
-dependencies = [
- "ai-mem-core",
- "anyhow",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1291,6 +1225,72 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "muninn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "muninn-core",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "muninn-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "quickcheck",
+ "quickcheck_macros",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "uuid",
+]
+
+[[package]]
+name = "muninn-index"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "ignore",
+ "muninn-core",
+ "notify",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "muninn-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "muninn-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

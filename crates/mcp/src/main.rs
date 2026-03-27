@@ -1,6 +1,6 @@
 mod tools;
 
-use ai_mem_core::{config::AppConfig, db, embeddings::make_backend};
+use muninn_core::{config::AppConfig, db, embeddings::make_backend};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tools::SearchContext;
@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = AppConfig::load()?;
     let pool = db::connect(&cfg.database.dsn).await?;
-    let embedder: Arc<dyn ai_mem_core::embeddings::EmbeddingBackend> =
+    let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let ctx = Arc::new(SearchContext { pool, embedder });
 
@@ -55,7 +55,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "ai-mem", "version": env!("CARGO_PKG_VERSION") }
+                "serverInfo": { "name": "muninn", "version": env!("CARGO_PKG_VERSION") }
             }
         }),
         "tools/list" => serde_json::json!({

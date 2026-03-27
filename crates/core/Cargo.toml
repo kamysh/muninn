@@ -1,5 +1,5 @@
 [package]
-name = "ai-mem-core"
+name = "muninn-core"
 version = "0.1.0"
 edition = "2021"
 

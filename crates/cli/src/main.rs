@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
-use ai_mem_core::{config::AppConfig, db, store, embeddings::expected_dimension};
+use muninn_core::{config::AppConfig, db, store, embeddings::expected_dimension};
 
 #[derive(Parser)]
-#[command(name = "ai-mem", about = "ai-mem repository index manager")]
+#[command(name = "muninn", about = "muninn repository index manager")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
             });
             let embedding_dim = expected_dimension(&cfg.embeddings);
             let repo = store::register_repo(&pool, &path, &name, embedding_dim).await?;
-            cfg.repos.push(ai_mem_core::config::RepoEntry {
+            cfg.repos.push(muninn_core::config::RepoEntry {
                 id: repo.id,
                 path: path.clone(),
                 name: name.clone(),
@@ -85,12 +85,12 @@ async fn main() -> anyhow::Result<()> {
             if all {
                 sqlx::query("UPDATE repos SET indexed_at = NULL")
                     .execute(&pool).await?;
-                println!("Marked all repos for reindex. Restart ai-mem-index to apply.");
+                println!("Marked all repos for reindex. Restart muninn-index to apply.");
             } else if let Some(p) = path {
                 sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
                     .bind(&p)
                     .execute(&pool).await?;
-                println!("Marked {} for reindex. Restart ai-mem-index to apply.", p);
+                println!("Marked {} for reindex. Restart muninn-index to apply.", p);
             } else {
                 eprintln!("Specify a path or --all");
                 std::process::exit(1);

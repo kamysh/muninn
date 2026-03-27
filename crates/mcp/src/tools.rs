@@ -1,5 +1,5 @@
-use ai_mem_core::{search, graph, store, embeddings::EmbeddingBackend};
-use ai_mem_core::types::Repo;
+use muninn_core::{search, graph, store, embeddings::EmbeddingBackend};
+use muninn_core::types::Repo;
 use sqlx::PgPool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -32,8 +32,8 @@ pub struct SearchResultItem {
     pub content: String,
 }
 
-impl From<ai_mem_core::types::SearchResult> for SearchResultItem {
-    fn from(r: ai_mem_core::types::SearchResult) -> Self {
+impl From<muninn_core::types::SearchResult> for SearchResultItem {
+    fn from(r: muninn_core::types::SearchResult) -> Self {
         Self {
             file_path: r.chunk.file_path,
             start_line: r.chunk.range.start,
@@ -97,12 +97,12 @@ pub async fn search_structural(
     params: StructuralParams,
 ) -> Result<serde_json::Value> {
     let (relation, incoming) = match params.relation.as_str() {
-        "callers" => (ai_mem_core::types::StructuralRelation::Calls, true),
-        "callees" => (ai_mem_core::types::StructuralRelation::Calls, false),
-        "imports" => (ai_mem_core::types::StructuralRelation::Imports, false),
-        "defines" => (ai_mem_core::types::StructuralRelation::Defines, false),
-        "inheritors" => (ai_mem_core::types::StructuralRelation::InheritsFrom, true),
-        "inherits" => (ai_mem_core::types::StructuralRelation::InheritsFrom, false),
+        "callers" => (muninn_core::types::StructuralRelation::Calls, true),
+        "callees" => (muninn_core::types::StructuralRelation::Calls, false),
+        "imports" => (muninn_core::types::StructuralRelation::Imports, false),
+        "defines" => (muninn_core::types::StructuralRelation::Defines, false),
+        "inheritors" => (muninn_core::types::StructuralRelation::InheritsFrom, true),
+        "inherits" => (muninn_core::types::StructuralRelation::InheritsFrom, false),
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 

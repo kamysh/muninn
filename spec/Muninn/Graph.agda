@@ -1,8 +1,8 @@
--- AiMem/Graph.agda
+-- Muninn/Graph.agda
 -- Symbol types and structural relationship graph used for code navigation.
-module AiMem.Graph where
+module Muninn.Graph where
 
-open import AiMem.Types
+open import Muninn.Types
 open import Data.String using (String)
 open import Data.List   using (List)
 

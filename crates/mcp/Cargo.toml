@@ -1,14 +1,14 @@
 [package]
-name = "ai-mem-mcp"
+name = "muninn-mcp"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ai-mem-mcp"
+name = "muninn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

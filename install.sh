@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — build and register ai-mem with Claude Code
+# install.sh — build and register muninn with Claude Code
 set -euo pipefail
 
 INSTALL_DIR="${HOME}/.local/bin"
@@ -11,15 +11,15 @@ nix develop --command cargo build --release
 
 echo "Installing to ${INSTALL_DIR}..."
 mkdir -p "$INSTALL_DIR"
-cp target/release/ai-mem-index "$INSTALL_DIR/"
-cp target/release/ai-mem-mcp   "$INSTALL_DIR/"
-cp target/release/ai-mem       "$INSTALL_DIR/"
+cp target/release/muninn-index "$INSTALL_DIR/"
+cp target/release/muninn-mcp   "$INSTALL_DIR/"
+cp target/release/muninn       "$INSTALL_DIR/"
 
-echo "Registering ai-mem-mcp with Claude Code..."
-claude mcp add ai-mem "${INSTALL_DIR}/ai-mem-mcp"
+echo "Registering muninn-mcp with Claude Code..."
+claude mcp add muninn "${INSTALL_DIR}/muninn-mcp"
 
 echo ""
 echo "Done. Next steps:"
-echo "  1. Start the indexer:  systemctl --user enable --now ai-mem-index"
-echo "  2. Register a repo:    ai-mem register /path/to/repo"
-echo "  3. Start Claude Code — ai-mem search tools are now available"
+echo "  1. Start the indexer:  systemctl --user enable --now muninn-index"
+echo "  2. Register a repo:    muninn register /path/to/repo"
+echo "  3. Start Claude Code — muninn search tools are now available"

@@ -1,5 +1,5 @@
 {
-  description = "ai-mem: indexed code search MCP server for Claude Code";
+  description = "muninn: indexed code search MCP server for Claude Code";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -26,7 +26,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          name = "ai-mem-dev";
+          name = "muninn-dev";
 
           packages = [
             # Rust
@@ -51,10 +51,10 @@
           ];
 
           shellHook = ''
-            export DATABASE_URL="''${DATABASE_URL:-postgresql://localhost/ai_mem_dev}"
-            export TEST_DATABASE_URL="''${TEST_DATABASE_URL:-postgresql://localhost/ai_mem_test}"
+            export DATABASE_URL="''${DATABASE_URL:-postgresql://localhost/muninn_dev}"
+            export TEST_DATABASE_URL="''${TEST_DATABASE_URL:-postgresql://localhost/muninn_test}"
 
-            echo "ai-mem dev shell"
+            echo "muninn dev shell"
             echo "  Rust:  $(rustc --version)"
             echo "  Agda:  $(agda --version)"
             echo "  DATABASE_URL=$DATABASE_URL"

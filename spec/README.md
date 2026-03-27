@@ -1,10 +1,10 @@
 # Formal Specification
 
-This directory contains the Agda formal specification for ai-mem.
+This directory contains the Agda formal specification for muninn.
 
 ## What is specified
 
-`AiMem.agda` covers six areas:
+`Muninn.agda` covers six areas:
 
 1. **Core data types** — `UUID`, `FilePath`, `RepoId`, `ChunkId`, `LineRange`,
    `Chunk` (with optional embedding), `Repo` (with optional `indexedAt`),
@@ -33,7 +33,7 @@ This directory contains the Agda formal specification for ai-mem.
 
 With the nix dev shell (which provides Agda 2.8.0 and the standard library):
 
-    nix develop --command agda spec/AiMem.agda
+    nix develop --command agda spec/Muninn.agda
 
 No errors are expected.
 

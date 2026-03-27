@@ -1,8 +1,8 @@
--- AiMem/Types.agda
+-- Muninn/Types.agda
 -- Core domain types: identifiers, chunks, repos, and search results.
-module AiMem.Types where
+module Muninn.Types where
 
-open import AiMem.Float
+open import Muninn.Float
 open import Data.String using (String)
 open import Data.List   using (List)
 open import Data.Maybe  using (Maybe)

@@ -1,0 +1,22 @@
+-- spec/Muninn.agda
+-- Formal specification for the Muninn indexed code search MCP server.
+-- This top-level module re-exports all sub-specifications so that importers
+-- get the full specification in one open.
+--
+-- Sub-modules:
+--   Muninn.Float      — postulated IEEE 754 Float operations
+--   Muninn.Types      — core domain types (Chunk, Repo, SearchResult, …)
+--   Muninn.Graph      — symbol kinds, structural edges, and per-repo graph
+--   Muninn.Storage    — RepoStorage, UniqueRepoPaths, isolation invariants
+--   Muninn.Index      — IndexState machine, ValidRange, ValidChunk
+--   Muninn.Search     — Similarity, RRF scoring, HybridResultBound
+--   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
+module Muninn where
+
+open import Muninn.Float      public
+open import Muninn.Types      public
+open import Muninn.Graph      public
+open import Muninn.Storage    public
+open import Muninn.Index      public
+open import Muninn.Search     public
+open import Muninn.Embeddings public

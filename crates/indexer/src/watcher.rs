@@ -7,8 +7,8 @@ use tokio::sync::Mutex;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
-use ai_mem_core::embeddings::EmbeddingBackend;
-use ai_mem_core::types::IndexState;
+use muninn_core::embeddings::EmbeddingBackend;
+use muninn_core::types::IndexState;
 use crate::pipeline::index_file;
 
 pub async fn watch_repo(
@@ -69,7 +69,7 @@ pub async fn watch_repo(
                     tracing::warn!("incremental index error for {}: {}", path.display(), e);
                 }
             } else {
-                if let Err(e) = ai_mem_core::store::delete_file_chunks(
+                if let Err(e) = muninn_core::store::delete_file_chunks(
                     &pool, repo_id,
                     path.to_string_lossy().as_ref(),
                 ).await {

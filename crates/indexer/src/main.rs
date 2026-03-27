@@ -1,8 +1,8 @@
 mod pipeline;
 mod watcher;
 
-use ai_mem_core::{config::AppConfig, db, embeddings::{make_backend, expected_dimension}};
-use ai_mem_core::types::IndexState;
+use muninn_core::{config::AppConfig, db, embeddings::{make_backend, expected_dimension}};
+use muninn_core::types::IndexState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = AppConfig::load()?;
     let pool = db::connect(&cfg.database.dsn).await?;
-    let embedder: Arc<dyn ai_mem_core::embeddings::EmbeddingBackend> =
+    let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     // Used only when registering a repo for the first time.
     let config_dim = expected_dimension(&cfg.embeddings);
@@ -21,9 +21,9 @@ async fn main() -> anyhow::Result<()> {
 
     for repo_entry in &cfg.repos {
         let path = std::path::PathBuf::from(&repo_entry.path);
-        let (repo, is_new) = match ai_mem_core::store::get_repo_by_path(&pool, &repo_entry.path).await? {
+        let (repo, is_new) = match muninn_core::store::get_repo_by_path(&pool, &repo_entry.path).await? {
             Some(r) => (r, false),
-            None => (ai_mem_core::store::register_repo(
+            None => (muninn_core::store::register_repo(
                 &pool, &repo_entry.path, &repo_entry.name, config_dim,
             ).await?, true),
         };

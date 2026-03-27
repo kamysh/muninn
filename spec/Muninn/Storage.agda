@@ -1,11 +1,11 @@
--- AiMem/Storage.agda
+-- Muninn/Storage.agda
 -- Per-repo storage model and isolation invariants.
 -- Each repo owns a dedicated chunk store and symbol graph; both are created
 -- at registration and dropped at unregistration.
-module AiMem.Storage where
+module Muninn.Storage where
 
-open import AiMem.Types
-open import AiMem.Graph
+open import Muninn.Types
+open import Muninn.Graph
 open import Data.List   using (List)
 open import Data.Product using (Σ; _×_)
 open import Relation.Binary.PropositionalEquality using (_≡_)

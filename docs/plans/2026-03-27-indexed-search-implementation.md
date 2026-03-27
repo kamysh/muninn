@@ -1,10 +1,10 @@
-# ai-mem Indexed Search Implementation Plan
+# muninn Indexed Search Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a two-process Rust MCP server (`ai-mem`) that provides full-text, semantic, and structural code search over registered repositories for Claude Code.
+**Goal:** Build a two-process Rust MCP server (`muninn`) that provides full-text, semantic, and structural code search over registered repositories for Claude Code.
 
-**Architecture:** `ai-mem-index` daemon watches repos, parses files with tree-sitter, generates embeddings, and writes to PostgreSQL (pgvector + AGE). `ai-mem-mcp` is a lightweight MCP server that queries the same Postgres database to answer Claude's search requests. Shared config at `~/.config/ai-mem/config.toml`.
+**Architecture:** `muninn-index` daemon watches repos, parses files with tree-sitter, generates embeddings, and writes to PostgreSQL (pgvector + AGE). `muninn-mcp` is a lightweight MCP server that queries the same Postgres database to answer Claude's search requests. Shared config at `~/.config/muninn/config.toml`.
 
 **Tech Stack:** Rust (tokio, sqlx, clap, serde), PostgreSQL 16+ (pgvector, apache-age), tree-sitter, rmcp (Rust MCP SDK), notify (file watching), Voyage AI / OpenAI / local embeddings.
 
@@ -58,7 +58,7 @@ git commit -m "chore: add Nix flake with Rust, PostgreSQL+pgvector+AGE, Agda dev
 ### Task 1: Formal Agda Specification
 
 **Files:**
-- Create: `spec/AiMem.agda`
+- Create: `spec/Muninn.agda`
 - Create: `spec/README.md`
 
 This step has no Rust code. Write the formal specification in Agda before touching implementation.
@@ -66,8 +66,8 @@ This step has no Rust code. Write the formal specification in Agda before touchi
 **Step 1: Create the Agda spec file**
 
 ```agda
--- spec/AiMem.agda
-module AiMem where
+-- spec/Muninn.agda
+module Muninn where
 
 open import Data.String using (String)
 open import Data.List using (List; []; _∷_)
@@ -216,7 +216,7 @@ ConsistentEmbeddings backend chunks =
 <!-- spec/README.md -->
 # Formal Specification
 
-This directory contains the Agda formal specification for ai-mem.
+This directory contains the Agda formal specification for muninn.
 
 ## Checking the spec
 
@@ -226,7 +226,7 @@ Install Agda (2.6.4+):
 
 Check the spec:
 
-    agda spec/AiMem.agda
+    agda spec/Muninn.agda
 
 ## What is specified
 
@@ -241,7 +241,7 @@ Check the spec:
 **Step 3: Verify spec type-checks**
 
 ```bash
-agda spec/AiMem.agda
+agda spec/Muninn.agda
 ```
 Expected: no errors (some holes may remain for Float arithmetic — acceptable for spec phase)
 
@@ -249,7 +249,7 @@ Expected: no errors (some holes may remain for Float arithmetic — acceptable f
 
 ```bash
 git add spec/
-git commit -m "spec: formal Agda specification for ai-mem data types and invariants"
+git commit -m "spec: formal Agda specification for muninn data types and invariants"
 ```
 
 ---
@@ -299,7 +299,7 @@ clap = { version = "4", features = ["derive"] }
 ```toml
 # crates/core/Cargo.toml
 [package]
-name = "ai-mem-core"
+name = "muninn-core"
 version = "0.1.0"
 edition = "2021"
 
@@ -321,16 +321,16 @@ pub mod types;
 ```toml
 # crates/indexer/Cargo.toml
 [package]
-name = "ai-mem-index"
+name = "muninn-index"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ai-mem-index"
+name = "muninn-index"
 path = "src/main.rs"
 
 [dependencies]
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -342,7 +342,7 @@ tracing-subscriber = { workspace = true }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    tracing::info!("ai-mem-index starting");
+    tracing::info!("muninn-index starting");
     Ok(())
 }
 ```
@@ -350,16 +350,16 @@ async fn main() -> anyhow::Result<()> {
 ```toml
 # crates/mcp/Cargo.toml
 [package]
-name = "ai-mem-mcp"
+name = "muninn-mcp"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ai-mem-mcp"
+name = "muninn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -371,7 +371,7 @@ tracing-subscriber = { workspace = true }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    tracing::info!("ai-mem-mcp starting");
+    tracing::info!("muninn-mcp starting");
     Ok(())
 }
 ```
@@ -379,16 +379,16 @@ async fn main() -> anyhow::Result<()> {
 ```toml
 # crates/cli/Cargo.toml
 [package]
-name = "ai-mem"
+name = "muninn"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ai-mem"
+name = "muninn"
 path = "src/main.rs"
 
 [dependencies]
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -399,7 +399,7 @@ tokio = { workspace = true }
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "ai-mem", about = "ai-mem repository index manager")]
+#[command(name = "muninn", about = "muninn repository index manager")]
 struct Cli {}
 
 #[tokio::main]
@@ -478,7 +478,7 @@ mod tests {
 **Step 2: Run to verify failure**
 
 ```bash
-cargo test -p ai-mem-core 2>&1 | head -20
+cargo test -p muninn-core 2>&1 | head -20
 ```
 Expected: compile error — `types` and `config` modules are empty.
 
@@ -575,7 +575,7 @@ pub struct DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { dsn: "postgresql://localhost/ai_mem".to_string() }
+        Self { dsn: "postgresql://localhost/muninn".to_string() }
     }
 }
 
@@ -628,7 +628,7 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn config_path() -> std::path::PathBuf {
         let home = std::env::var("HOME").unwrap_or_default();
-        std::path::PathBuf::from(home).join(".config/ai-mem/config.toml")
+        std::path::PathBuf::from(home).join(".config/muninn/config.toml")
     }
 
     pub fn load() -> anyhow::Result<Self> {
@@ -662,7 +662,7 @@ serde_json = { workspace = true }
 **Step 5: Run tests**
 
 ```bash
-cargo test -p ai-mem-core
+cargo test -p muninn-core
 ```
 Expected: 5 tests pass.
 
@@ -722,8 +722,8 @@ SELECT create_graph('code_graph');
 **Step 2: Run migration**
 
 ```bash
-export DATABASE_URL="postgresql://localhost/ai_mem"
-psql $DATABASE_URL -c "CREATE DATABASE ai_mem;" 2>/dev/null || true
+export DATABASE_URL="postgresql://localhost/muninn"
+psql $DATABASE_URL -c "CREATE DATABASE muninn;" 2>/dev/null || true
 sqlx migrate run --source migrations
 ```
 Expected: `Applied 001_initial.sql`
@@ -760,7 +760,7 @@ pub mod types;
 **Step 4: Verify compilation**
 
 ```bash
-cargo build -p ai-mem-core
+cargo build -p muninn-core
 ```
 Expected: compiles cleanly.
 
@@ -855,7 +855,7 @@ fn hello_world() {
 **Step 2: Run to verify failure**
 
 ```bash
-cargo test -p ai-mem-core parser 2>&1 | head -10
+cargo test -p muninn-core parser 2>&1 | head -10
 ```
 Expected: compile error — `parser` module not found.
 
@@ -1005,7 +1005,7 @@ Add `tree-sitter` crates to `crates/core/Cargo.toml` and `pub mod parser;` to `l
 **Step 4: Run tests**
 
 ```bash
-cargo test -p ai-mem-core parser
+cargo test -p muninn-core parser
 ```
 Expected: 6 tests pass.
 
@@ -1055,7 +1055,7 @@ mod tests {
 **Step 2: Run to verify failure**
 
 ```bash
-cargo test -p ai-mem-core embeddings 2>&1 | head -10
+cargo test -p muninn-core embeddings 2>&1 | head -10
 ```
 Expected: compile error.
 
@@ -1221,7 +1221,7 @@ pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBa
 **Step 4: Run tests**
 
 ```bash
-cargo test -p ai-mem-core embeddings
+cargo test -p muninn-core embeddings
 ```
 Expected: 2 tests pass.
 
@@ -1272,7 +1272,7 @@ async fn duplicate_path_errors() {
 **Step 2: Run to verify failure**
 
 ```bash
-TEST_DATABASE_URL="postgresql://localhost/ai_mem" cargo test -p ai-mem-core store 2>&1 | head -10
+TEST_DATABASE_URL="postgresql://localhost/muninn" cargo test -p muninn-core store 2>&1 | head -10
 ```
 Expected: compile error.
 
@@ -1377,7 +1377,7 @@ mod tests {
 
     async fn test_pool() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://localhost/ai_mem".to_string());
+            .unwrap_or_else(|_| "postgresql://localhost/muninn".to_string());
         crate::db::connect(&url).await.unwrap()
     }
 
@@ -1388,7 +1388,7 @@ mod tests {
 **Step 4: Run tests**
 
 ```bash
-TEST_DATABASE_URL="postgresql://localhost/ai_mem" cargo test -p ai-mem-core store
+TEST_DATABASE_URL="postgresql://localhost/muninn" cargo test -p muninn-core store
 ```
 Expected: 2 tests pass.
 
@@ -1410,7 +1410,7 @@ git commit -m "feat(store): repo and chunk database operations"
 Add to `crates/indexer/Cargo.toml`:
 
 ```toml
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 sqlx = { workspace = true }
 ignore = "0.4"
 tokio = { workspace = true }
@@ -1426,7 +1426,7 @@ async fn index_single_rust_file() {
     let file = dir.path().join("foo.rs");
     std::fs::write(&file, "fn hello() { println!(\"hi\"); }\n").unwrap();
 
-    let backend = Arc::new(ai_mem_core::embeddings::MockEmbeddingBackend { dimension: 1024 });
+    let backend = Arc::new(muninn_core::embeddings::MockEmbeddingBackend { dimension: 1024 });
     let pool = test_pool().await;
     let repo_id = uuid::Uuid::new_v4();
 
@@ -1447,7 +1447,7 @@ async fn index_single_rust_file() {
 **Step 2: Run to verify failure**
 
 ```bash
-cargo test -p ai-mem-index pipeline 2>&1 | head -10
+cargo test -p muninn-index pipeline 2>&1 | head -10
 ```
 Expected: compile error.
 
@@ -1455,7 +1455,7 @@ Expected: compile error.
 
 ```rust
 // crates/indexer/src/pipeline.rs
-use ai_mem_core::{
+use muninn_core::{
     embeddings::EmbeddingBackend,
     parser::{detect_language, parse_file, chunk_file},
     store::{upsert_chunk, delete_file_chunks},
@@ -1535,7 +1535,7 @@ pub async fn index_repo(
         }
     }
 
-    ai_mem_core::store::mark_indexed(pool, repo_id).await?;
+    muninn_core::store::mark_indexed(pool, repo_id).await?;
     Ok(())
 }
 ```
@@ -1543,7 +1543,7 @@ pub async fn index_repo(
 **Step 4: Run tests**
 
 ```bash
-TEST_DATABASE_URL="postgresql://localhost/ai_mem" cargo test -p ai-mem-index pipeline
+TEST_DATABASE_URL="postgresql://localhost/muninn" cargo test -p muninn-index pipeline
 ```
 Expected: test passes.
 
@@ -1583,7 +1583,7 @@ use tokio::sync::mpsc;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
-use ai_mem_core::embeddings::EmbeddingBackend;
+use muninn_core::embeddings::EmbeddingBackend;
 use crate::pipeline::index_file;
 
 pub async fn watch_repo(
@@ -1634,7 +1634,7 @@ pub async fn watch_repo(
                 }
             } else {
                 // File deleted — chunks already removed by index_file's delete step
-                if let Err(e) = ai_mem_core::store::delete_file_chunks(
+                if let Err(e) = muninn_core::store::delete_file_chunks(
                     &pool, repo_id,
                     path.to_string_lossy().as_ref()
                 ).await {
@@ -1655,7 +1655,7 @@ pub async fn watch_repo(
 mod pipeline;
 mod watcher;
 
-use ai_mem_core::{config::AppConfig, db, embeddings::make_backend};
+use muninn_core::{config::AppConfig, db, embeddings::make_backend};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -1670,10 +1670,10 @@ async fn main() -> anyhow::Result<()> {
 
     for repo_entry in &cfg.repos {
         let path = std::path::PathBuf::from(&repo_entry.path);
-        let repo_row = ai_mem_core::store::get_repo_by_path(&pool, &repo_entry.path).await?;
+        let repo_row = muninn_core::store::get_repo_by_path(&pool, &repo_entry.path).await?;
         let repo = match repo_row {
             Some(r) => r,
-            None => ai_mem_core::store::register_repo(&pool, &repo_entry.path, &repo_entry.name).await?,
+            None => muninn_core::store::register_repo(&pool, &repo_entry.path, &repo_entry.name).await?,
         };
 
         if repo.indexed_at.is_none() {
@@ -1704,7 +1704,7 @@ Add `futures = "0.3"` to workspace and indexer dependencies.
 **Step 3: Verify compilation**
 
 ```bash
-cargo build -p ai-mem-index
+cargo build -p muninn-index
 ```
 Expected: clean build.
 
@@ -1867,7 +1867,7 @@ pub async fn query_related(
 **Step 3: Run tests**
 
 ```bash
-TEST_DATABASE_URL="postgresql://localhost/ai_mem" cargo test -p ai-mem-core graph
+TEST_DATABASE_URL="postgresql://localhost/muninn" cargo test -p muninn-core graph
 ```
 Expected: test passes.
 
@@ -2020,7 +2020,7 @@ pub fn rrf_merge(
 **Step 3: Run tests**
 
 ```bash
-cargo test -p ai-mem-core search
+cargo test -p muninn-core search
 ```
 Expected: test passes.
 
@@ -2043,7 +2043,7 @@ Add to `crates/mcp/Cargo.toml`:
 
 ```toml
 rmcp = { version = "0.1", features = ["server", "transport-io"] }
-ai-mem-core = { path = "../core" }
+muninn-core = { path = "../core" }
 sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -2053,7 +2053,7 @@ serde_json = { workspace = true }
 
 ```rust
 // crates/mcp/src/tools.rs
-use ai_mem_core::{search, graph, store, embeddings::EmbeddingBackend, types::StructuralRelation};
+use muninn_core::{search, graph, store, embeddings::EmbeddingBackend, types::StructuralRelation};
 use sqlx::PgPool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -2085,8 +2085,8 @@ pub struct SearchResultItem {
     pub content: String,
 }
 
-impl From<ai_mem_core::types::SearchResult> for SearchResultItem {
-    fn from(r: ai_mem_core::types::SearchResult) -> Self {
+impl From<muninn_core::types::SearchResult> for SearchResultItem {
+    fn from(r: muninn_core::types::SearchResult) -> Self {
         Self {
             file_path: r.chunk.file_path,
             start_line: r.chunk.range.start,
@@ -2164,18 +2164,18 @@ async fn resolve_repo_id(pool: &PgPool, name_or_path: Option<&str>) -> anyhow::R
 // crates/mcp/src/main.rs
 mod tools;
 
-use ai_mem_core::{config::AppConfig, db, embeddings::make_backend};
+use muninn_core::{config::AppConfig, db, embeddings::make_backend};
 use rmcp::{ServerHandler, Tool, ToolResult, Error as McpError};
 use std::sync::Arc;
 use tools::SearchContext;
 
-struct AiMemServer {
+struct MuninnServer {
     ctx: Arc<SearchContext>,
 }
 
 #[rmcp::tool(name = "search_hybrid")]
 async fn search_hybrid(
-    server: &AiMemServer,
+    server: &MuninnServer,
     #[tool(param)] query: String,
     #[tool(param)] repo: Option<String>,
     #[tool(param)] limit: Option<i64>,
@@ -2189,7 +2189,7 @@ async fn search_hybrid(
 
 #[rmcp::tool(name = "search_fulltext")]
 async fn search_fulltext(
-    server: &AiMemServer,
+    server: &MuninnServer,
     #[tool(param)] query: String,
     #[tool(param)] repo: Option<String>,
     #[tool(param)] limit: Option<i64>,
@@ -2203,7 +2203,7 @@ async fn search_fulltext(
 
 #[rmcp::tool(name = "search_semantic")]
 async fn search_semantic(
-    server: &AiMemServer,
+    server: &MuninnServer,
     #[tool(param)] query: String,
     #[tool(param)] repo: Option<String>,
     #[tool(param)] limit: Option<i64>,
@@ -2217,7 +2217,7 @@ async fn search_semantic(
 
 #[rmcp::tool(name = "search_structural")]
 async fn search_structural(
-    server: &AiMemServer,
+    server: &MuninnServer,
     #[tool(param)] symbol: String,
     #[tool(param)] relation: String,
     #[tool(param)] repo: Option<String>,
@@ -2229,10 +2229,10 @@ async fn search_structural(
     Ok(result)
 }
 
-impl ServerHandler for AiMemServer {
+impl ServerHandler for MuninnServer {
     fn get_info(&self) -> rmcp::ServerInfo {
         rmcp::ServerInfo {
-            name: "ai-mem".to_string(),
+            name: "muninn".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
         }
@@ -2248,7 +2248,7 @@ async fn main() -> anyhow::Result<()> {
     let embedder = Arc::from(make_backend(&cfg.embeddings));
 
     let ctx = Arc::new(SearchContext { pool, embedder });
-    let server = AiMemServer { ctx };
+    let server = MuninnServer { ctx };
 
     rmcp::serve_stdio(server).await?;
     Ok(())
@@ -2258,7 +2258,7 @@ async fn main() -> anyhow::Result<()> {
 **Step 3: Verify compilation**
 
 ```bash
-cargo build -p ai-mem-mcp
+cargo build -p muninn-mcp
 ```
 Expected: clean build.
 
@@ -2281,11 +2281,11 @@ git commit -m "feat(mcp): MCP server with hybrid, fulltext, semantic, and struct
 ```rust
 // crates/cli/src/main.rs
 use clap::{Parser, Subcommand};
-use ai_mem_core::{config::AppConfig, db, store};
+use muninn_core::{config::AppConfig, db, store};
 use uuid::Uuid;
 
 #[derive(Parser)]
-#[command(name = "ai-mem", about = "ai-mem repository index manager")]
+#[command(name = "muninn", about = "muninn repository index manager")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -2330,7 +2330,7 @@ async fn main() -> anyhow::Result<()> {
                     .to_string()
             });
             let repo = store::register_repo(&pool, &path, &name).await?;
-            cfg.repos.push(ai_mem_core::config::RepoEntry {
+            cfg.repos.push(muninn_core::config::RepoEntry {
                 id: repo.id,
                 path: path.clone(),
                 name: name.clone(),
@@ -2368,11 +2368,11 @@ async fn main() -> anyhow::Result<()> {
             if all {
                 sqlx::query!("UPDATE repos SET indexed_at = NULL")
                     .execute(&pool).await?;
-                println!("Marked all repos for reindex. Restart ai-mem-index to reindex.");
+                println!("Marked all repos for reindex. Restart muninn-index to reindex.");
             } else if let Some(p) = path {
                 sqlx::query!("UPDATE repos SET indexed_at = NULL WHERE path = $1", p)
                     .execute(&pool).await?;
-                println!("Marked {} for reindex. Restart ai-mem-index to reindex.", p);
+                println!("Marked {} for reindex. Restart muninn-index to reindex.", p);
             }
         }
 
@@ -2394,15 +2394,15 @@ Add `chrono = { workspace = true }` to `crates/cli/Cargo.toml`.
 **Step 2: Verify build**
 
 ```bash
-cargo build -p ai-mem
+cargo build -p muninn
 ```
 Expected: clean build.
 
 **Step 3: Smoke test**
 
 ```bash
-./target/debug/ai-mem --help
-./target/debug/ai-mem list
+./target/debug/muninn --help
+./target/debug/muninn list
 ```
 Expected: help text and empty repo list.
 
@@ -2424,7 +2424,7 @@ git commit -m "feat(cli): register, unregister, list, reindex, and status comman
 
 ```bash
 #!/usr/bin/env bash
-# install.sh — register ai-mem-mcp with Claude Code
+# install.sh — register muninn-mcp with Claude Code
 
 set -euo pipefail
 
@@ -2435,14 +2435,14 @@ cargo build --release
 
 echo "Installing to ~/.local/bin..."
 mkdir -p ~/.local/bin
-cp "$BINARY_DIR/ai-mem-index" ~/.local/bin/
-cp "$BINARY_DIR/ai-mem-mcp" ~/.local/bin/
-cp "$BINARY_DIR/ai-mem" ~/.local/bin/
+cp "$BINARY_DIR/muninn-index" ~/.local/bin/
+cp "$BINARY_DIR/muninn-mcp" ~/.local/bin/
+cp "$BINARY_DIR/muninn" ~/.local/bin/
 
-echo "Registering ai-mem-mcp with Claude Code..."
-claude mcp add ai-mem ~/.local/bin/ai-mem-mcp
+echo "Registering muninn-mcp with Claude Code..."
+claude mcp add muninn ~/.local/bin/muninn-mcp
 
-echo "Done. Run 'ai-mem register <path>' to index your first repo."
+echo "Done. Run 'muninn register <path>' to index your first repo."
 ```
 
 ```bash
@@ -2452,13 +2452,13 @@ chmod +x install.sh
 **Step 2: Create systemd user unit**
 
 ```ini
-# ai-mem-index.service
+# muninn-index.service
 [Unit]
-Description=ai-mem indexer daemon
+Description=muninn indexer daemon
 After=network.target postgresql.service
 
 [Service]
-ExecStart=%h/.local/bin/ai-mem-index
+ExecStart=%h/.local/bin/muninn-index
 Restart=on-failure
 Environment=RUST_LOG=info
 
@@ -2469,8 +2469,8 @@ WantedBy=default.target
 **Step 3: Commit**
 
 ```bash
-git add install.sh ai-mem-index.service
-git commit -m "chore: install script and systemd unit for ai-mem-index daemon"
+git add install.sh muninn-index.service
+git commit -m "chore: install script and systemd unit for muninn-index daemon"
 ```
 
 ---
@@ -2480,7 +2480,7 @@ git commit -m "chore: install script and systemd unit for ai-mem-index daemon"
 After all tasks complete you will have:
 
 - `flake.nix` — reproducible dev environment (`nix develop`)
-- `spec/AiMem.agda` — formal Agda specification
+- `spec/Muninn.agda` — formal Agda specification
 - `crates/core` — shared types, config, DB, parser, embeddings, search, graph
 - `crates/indexer` — full reindex + incremental file watcher daemon
 - `crates/mcp` — MCP server with 4 search tools
@@ -2488,4 +2488,4 @@ After all tasks complete you will have:
 - `migrations/` — database schema
 - `install.sh` — one-command setup
 
-Run `nix develop`, then `./install.sh`, then `ai-mem register /path/to/repo` to start using it.
+Run `nix develop`, then `./install.sh`, then `muninn register /path/to/repo` to start using it.

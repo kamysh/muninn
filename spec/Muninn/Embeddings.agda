@@ -1,9 +1,9 @@
--- AiMem/Embeddings.agda
+-- Muninn/Embeddings.agda
 -- Embedding backend types, canonical dimensions, and the RepoDimMatchesBackend
 -- invariant that ties each repo's stored dimension to its registration backend.
-module AiMem.Embeddings where
+module Muninn.Embeddings where
 
-open import AiMem.Types
+open import Muninn.Types
 open import Data.Nat using (ℕ)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 

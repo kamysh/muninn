@@ -16,7 +16,7 @@ pub struct DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { dsn: "postgresql://localhost/ai_mem".to_string() }
+        Self { dsn: "postgresql://localhost/muninn".to_string() }
     }
 }
 
@@ -69,7 +69,7 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn config_path() -> std::path::PathBuf {
         let home = std::env::var("HOME").unwrap_or_default();
-        std::path::PathBuf::from(home).join(".config/ai-mem/config.toml")
+        std::path::PathBuf::from(home).join(".config/muninn/config.toml")
     }
 
     pub fn load() -> anyhow::Result<Self> {

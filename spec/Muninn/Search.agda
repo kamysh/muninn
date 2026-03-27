@@ -1,9 +1,9 @@
--- AiMem/Search.agda
+-- Muninn/Search.agda
 -- Query semantics: similarity, RRF scoring, and result bounds.
-module AiMem.Search where
+module Muninn.Search where
 
-open import AiMem.Float
-open import AiMem.Types
+open import Muninn.Float
+open import Muninn.Types
 open import Data.Nat  using (ℕ; _≤_)
 open import Data.List using (List; length)
 

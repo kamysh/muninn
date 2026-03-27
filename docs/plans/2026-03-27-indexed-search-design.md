@@ -1,4 +1,4 @@
-# ai-mem: Indexed Search MCP Server — Design
+# muninn: Indexed Search MCP Server — Design
 
 **Date:** 2026-03-27
 **Status:** Approved
@@ -7,7 +7,7 @@
 
 ## Overview
 
-`ai-mem` is a Rust workspace providing indexed search over code repositories for Claude Code via the Model Context Protocol (MCP). It gives Claude fast, rich search across three dimensions: full-text (keyword), semantic (vector), and structural (graph/AST).
+`muninn` is a Rust workspace providing indexed search over code repositories for Claude Code via the Model Context Protocol (MCP). It gives Claude fast, rich search across three dimensions: full-text (keyword), semantic (vector), and structural (graph/AST).
 
 ---
 
@@ -19,7 +19,7 @@ Two-process split sharing a PostgreSQL database:
 ┌─────────────────────────────────────────────────────────────┐
 │  Claude Code session                                        │
 │                                                             │
-│  MCP client  ──────────────────►  ai-mem-mcp               │
+│  MCP client  ──────────────────►  muninn-mcp               │
 │                                   (query server)           │
 └─────────────────────────────────────────┬───────────────────┘
                                           │ SQL queries
@@ -31,7 +31,7 @@ Two-process split sharing a PostgreSQL database:
                                     └──────┬───────┘
                                            │ SQL writes
                                     ┌──────┴───────┐
-                                    │ ai-mem-index │
+                                    │ muninn-index │
                                     │  (daemon)    │
                                     └──────┬───────┘
                                            │
@@ -47,9 +47,9 @@ Two-process split sharing a PostgreSQL database:
 
 | Binary | Role |
 |--------|------|
-| `ai-mem-index` | Long-running daemon: file watching, parsing, embedding, index writes |
-| `ai-mem-mcp` | MCP server: handles search queries from Claude Code |
-| `ai-mem` | CLI: repo registration, reindex commands, status |
+| `muninn-index` | Long-running daemon: file watching, parsing, embedding, index writes |
+| `muninn-mcp` | MCP server: handles search queries from Claude Code |
+| `muninn` | CLI: repo registration, reindex commands, status |
 
 ---
 
@@ -99,7 +99,7 @@ RETURN f.name, f.file_path
 
 ---
 
-## Indexing Pipeline (`ai-mem-index`)
+## Indexing Pipeline (`muninn-index`)
 
 ### Startup
 
@@ -128,7 +128,7 @@ File watcher events are fed into a debounced Tokio channel (300ms debounce) to a
 
 ---
 
-## MCP Server (`ai-mem-mcp`)
+## MCP Server (`muninn-mcp`)
 
 ### Transport
 
@@ -167,11 +167,11 @@ search_structural(
 
 ## Configuration
 
-**File:** `~/.config/ai-mem/config.toml`
+**File:** `~/.config/muninn/config.toml`
 
 ```toml
 [database]
-dsn = "postgresql://localhost/ai_mem"
+dsn = "postgresql://localhost/muninn"
 
 [embeddings]
 backend = "voyage"   # "voyage" | "openai" | "local"
@@ -201,12 +201,12 @@ name = "my-repo"
 ## CLI
 
 ```
-ai-mem register <path> [--name <name>]   # add repo to config + trigger index
-ai-mem unregister <path>                 # remove repo + delete its index data
-ai-mem list                              # show repos and index status
-ai-mem reindex <path|--all>             # force full reindex
-ai-mem status                           # show indexer daemon status
-ai-mem install                          # install systemd units
+muninn register <path> [--name <name>]   # add repo to config + trigger index
+muninn unregister <path>                 # remove repo + delete its index data
+muninn list                              # show repos and index status
+muninn reindex <path|--all>             # force full reindex
+muninn status                           # show indexer daemon status
+muninn install                          # install systemd units
 ```
 
 ---
