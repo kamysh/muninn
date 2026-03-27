@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LineRange {
@@ -20,7 +20,6 @@ pub struct Repo {
     pub path: String,
     pub name: String,
     pub indexed_at: Option<DateTime<Utc>>,
-    pub config: Option<serde_json::Value>,
     /// Embedding vector dimension used when this repo was registered.
     /// Authoritative: the per-repo chunks table was created with VECTOR(embedding_dim).
     pub embedding_dim: u32,
