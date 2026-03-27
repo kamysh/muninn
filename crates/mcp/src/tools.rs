@@ -13,8 +13,10 @@ pub struct SearchContext {
 #[derive(Deserialize)]
 pub struct SearchParams {
     pub query: String,
-    /// Path of the repo to search (required — searches are always repo-scoped).
-    pub repo: String,
+    /// Path of the repo to search. Optional — resolved by walking up from `cwd` when absent.
+    pub repo: Option<String>,
+    /// Current working directory (supplied by Claude Code). Used to resolve `repo` when absent.
+    pub cwd: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -46,7 +48,7 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params).await?;
 
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
@@ -63,7 +65,7 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params).await?;
     let results = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
@@ -72,7 +74,7 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params).await?;
 
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
@@ -106,13 +108,30 @@ pub async fn search_structural(
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 
-    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo_by_path(&ctx.pool, &params.repo).await?;
     let symbols =
         graph::query_related(&ctx.pool, repo.id, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 
-async fn resolve_repo(pool: &PgPool, path: &str) -> Result<Repo> {
+async fn resolve_repo(pool: &PgPool, params: &SearchParams) -> Result<Repo> {
+    let path = if let Some(ref explicit) = params.repo {
+        explicit.clone()
+    } else if let Some(ref cwd) = params.cwd {
+        let cwd_path = std::path::Path::new(cwd);
+        let root = muninn_core::repo_resolver::find_repo_root(cwd_path)
+            .ok_or_else(|| anyhow::anyhow!("no muninn.toml found above '{}'", cwd))?;
+        root.to_string_lossy().to_string()
+    } else {
+        anyhow::bail!("provide either 'repo' path or 'cwd' to resolve the repository");
+    };
+
+    store::get_repo_by_path(pool, &path)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("repo not found or not indexed: '{}'", path))
+}
+
+async fn resolve_repo_by_path(pool: &PgPool, path: &str) -> Result<Repo> {
     store::get_repo_by_path(pool, path)
         .await?
         .ok_or_else(|| anyhow::anyhow!("repo not found: {}", path))

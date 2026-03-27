@@ -3,6 +3,7 @@ pub mod db;
 pub mod embeddings;
 pub mod graph;
 pub mod parser;
+pub mod repo_resolver;
 pub mod search;
 pub mod store;
 pub mod types;
