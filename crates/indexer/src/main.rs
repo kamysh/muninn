@@ -21,26 +21,35 @@ async fn main() -> anyhow::Result<()> {
 
     for repo_entry in &cfg.repos {
         let path = std::path::PathBuf::from(&repo_entry.path);
-        let repo = match ai_mem_core::store::get_repo_by_path(&pool, &repo_entry.path).await? {
-            Some(r) => r,
-            None => ai_mem_core::store::register_repo(
+        let (repo, is_new) = match ai_mem_core::store::get_repo_by_path(&pool, &repo_entry.path).await? {
+            Some(r) => (r, false),
+            None => (ai_mem_core::store::register_repo(
                 &pool, &repo_entry.path, &repo_entry.name, config_dim,
-            ).await?,
+            ).await?, true),
         };
 
         // Use the dimension recorded at registration time, not the current config.
         // This is the authoritative value matching the VECTOR(n) column in the chunks table.
         let repo_dim = repo.embedding_dim as usize;
 
-        // Model initial state: Unindexed if never indexed, Indexed otherwise
-        let state = Arc::new(Mutex::new(if repo.indexed_at.is_none() {
-            IndexState::Unindexed
-        } else {
-            IndexState::Indexed
-        }));
+        // Determine initial IndexState:
+        //   Indexed   — already up to date, nothing to do
+        //   Unindexed — freshly registered, use startIndex transition
+        //   Indexed   — existing repo with indexed_at cleared by CLI reindex command;
+        //               will use startReindex (Indexed→Indexing) below
+        let initial_state = match (repo.indexed_at.is_some(), is_new) {
+            (true, _)      => IndexState::Indexed,    // up to date
+            (false, true)  => IndexState::Unindexed,  // first time: startIndex
+            (false, false) => IndexState::Indexed,    // reindex requested: startReindex
+        };
+        let state = Arc::new(Mutex::new(initial_state));
 
         if repo.indexed_at.is_none() {
-            tracing::info!("full reindex: {}", repo_entry.path);
+            if is_new {
+                tracing::info!("first index: {}", repo_entry.path);
+            } else {
+                tracing::info!("reindex requested: {}", repo_entry.path);
+            }
             *state.lock().await = IndexState::Indexing;
             pipeline::index_repo(&pool, repo.id, &path, embedder.clone(), cfg.embeddings.batch_size, repo_dim).await?;
             *state.lock().await = IndexState::Indexed;
