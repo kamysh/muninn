@@ -23,15 +23,16 @@ pub async fn register_repo(
 ) -> Result<Repo> {
     let row = sqlx::query(
         r#"
-        INSERT INTO repos (id, path, name, indexed_at, config)
-        VALUES ($1, $2, $3, NULL, NULL)
+        INSERT INTO repos (id, path, name, indexed_at, config, embedding_dim)
+        VALUES ($1, $2, $3, NULL, NULL, $4)
         ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name
-        RETURNING id, path, name, indexed_at, config
+        RETURNING id, path, name, indexed_at, config, embedding_dim
         "#,
     )
     .bind(Uuid::new_v4())
     .bind(path)
     .bind(name)
+    .bind(embedding_dim as i32)
     .fetch_one(pool)
     .await?;
 
@@ -129,7 +130,7 @@ pub async fn delete_repo(pool: &PgPool, repo_id: Uuid) -> Result<()> {
 
 pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>> {
     let row = sqlx::query(
-        r#"SELECT id, path, name, indexed_at, config FROM repos WHERE path = $1"#,
+        r#"SELECT id, path, name, indexed_at, config, embedding_dim FROM repos WHERE path = $1"#,
     )
     .bind(path)
     .fetch_optional(pool)
@@ -140,7 +141,7 @@ pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>>
 
 pub async fn list_repos(pool: &PgPool) -> Result<Vec<Repo>> {
     let rows =
-        sqlx::query(r#"SELECT id, path, name, indexed_at, config FROM repos ORDER BY name"#)
+        sqlx::query(r#"SELECT id, path, name, indexed_at, config, embedding_dim FROM repos ORDER BY name"#)
             .fetch_all(pool)
             .await?;
 
@@ -257,5 +258,6 @@ fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
         name: row.try_get::<String, _>("name")?,
         indexed_at: row.try_get::<Option<DateTime<Utc>>, _>("indexed_at")?,
         config: row.try_get::<Option<serde_json::Value>, _>("config")?,
+        embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
     })
 }

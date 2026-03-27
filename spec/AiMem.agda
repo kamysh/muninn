@@ -56,11 +56,12 @@ record Chunk : Set where
 
 -- A registered repository.
 record Repo : Set where
-  field id        : RepoId
-        path      : FilePath
-        name      : String
-        indexedAt : Maybe String          -- ISO-8601 timestamp; nothing = never indexed
-        config    : Maybe String          -- JSON configuration blob
+  field id           : RepoId
+        path         : FilePath
+        name         : String
+        indexedAt    : Maybe String          -- ISO-8601 timestamp; nothing = never indexed
+        config       : Maybe String          -- JSON configuration blob
+        embeddingDim : ℕ                    -- dimension of VECTOR(n) recorded at registration time
 
 -- A single result returned by a search query.
 record SearchResult : Set where
@@ -206,3 +207,13 @@ EmbeddingDimension : EmbeddingBackend → ℕ
 EmbeddingDimension Voyage = 1024
 EmbeddingDimension OpenAI = 1536
 EmbeddingDimension Local  = 768
+
+-- ─── Embedding Dimension Invariant ─────────────────────────────────────────────
+-- The dimension stored on a Repo must equal the canonical dimension for the
+-- backend active at registration time.  It is set once and never changes, so
+-- the per-repo VECTOR(n) column stays consistent even if the configured backend
+-- is later switched.
+
+RepoDimMatchesBackend : Repo → EmbeddingBackend → Set
+RepoDimMatchesBackend repo backend =
+  Repo.embeddingDim repo ≡ EmbeddingDimension backend
