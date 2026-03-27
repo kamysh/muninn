@@ -1,0 +1,171 @@
+use anyhow::Result;
+use std::future::Future;
+use std::pin::Pin;
+
+pub trait EmbeddingBackend: Send + Sync {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>>;
+}
+
+// ── Voyage AI ─────────────────────────────────────────────────────────────────
+
+pub struct VoyageBackend {
+    pub api_key: String,
+    pub model: String,
+    client: reqwest::Client,
+}
+
+impl VoyageBackend {
+    pub fn new(api_key: String, model: String) -> Self {
+        Self { api_key, model, client: reqwest::Client::new() }
+    }
+}
+
+impl EmbeddingBackend for VoyageBackend {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let body = serde_json::json!({
+                "input": texts,
+                "model": self.model,
+                "input_type": "document"
+            });
+            let resp: serde_json::Value = self.client
+                .post("https://api.voyageai.com/v1/embeddings")
+                .bearer_auth(&self.api_key)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            parse_embeddings(&resp)
+        })
+    }
+}
+
+// ── OpenAI ────────────────────────────────────────────────────────────────────
+
+pub struct OpenAIBackend {
+    pub api_key: String,
+    pub model: String,
+    client: reqwest::Client,
+}
+
+impl OpenAIBackend {
+    pub fn new(api_key: String, model: String) -> Self {
+        Self { api_key, model, client: reqwest::Client::new() }
+    }
+}
+
+impl EmbeddingBackend for OpenAIBackend {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            let body = serde_json::json!({
+                "input": texts,
+                "model": self.model
+            });
+            let resp: serde_json::Value = self.client
+                .post("https://api.openai.com/v1/embeddings")
+                .bearer_auth(&self.api_key)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            parse_embeddings(&resp)
+        })
+    }
+}
+
+// ── Mock (for tests) ──────────────────────────────────────────────────────────
+
+pub struct MockEmbeddingBackend {
+    pub dimension: usize,
+}
+
+impl EmbeddingBackend for MockEmbeddingBackend {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        let dim = self.dimension;
+        let n = texts.len();
+        Box::pin(async move {
+            Ok((0..n).map(|_| vec![0.0f32; dim]).collect())
+        })
+    }
+}
+
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBackend> {
+    use crate::config::EmbeddingBackend as B;
+    match cfg.backend {
+        B::Voyage => Box::new(VoyageBackend::new(
+            cfg.api_key.clone().unwrap_or_default(),
+            cfg.model.clone(),
+        )),
+        B::OpenAI => Box::new(OpenAIBackend::new(
+            cfg.api_key.clone().unwrap_or_default(),
+            cfg.model.clone(),
+        )),
+        B::Local => Box::new(MockEmbeddingBackend { dimension: 768 }),
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn parse_embeddings(resp: &serde_json::Value) -> Result<Vec<Vec<f32>>> {
+    let data = resp["data"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("unexpected response: missing 'data' array"))?;
+    let embeddings = data.iter()
+        .map(|item| {
+            item["embedding"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect()
+        })
+        .collect();
+    Ok(embeddings)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mock_backend_dimension() {
+        assert_eq!(1024usize, 1024); // EmbeddingBackendConfig::voyage_code_3_dimension()
+    }
+
+    #[tokio::test]
+    async fn mock_backend_returns_correct_dimension() {
+        let backend = MockEmbeddingBackend { dimension: 1024 };
+        let results = backend.embed(&["hello world".to_string()]).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 1024);
+    }
+
+    #[tokio::test]
+    async fn mock_backend_multiple_texts() {
+        let backend = MockEmbeddingBackend { dimension: 512 };
+        let texts = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let results = backend.embed(&texts).await.unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|e| e.len() == 512));
+    }
+}
