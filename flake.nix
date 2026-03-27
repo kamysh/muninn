@@ -20,11 +20,8 @@
           extensions = [ "rust-src" "clippy" "rustfmt" "rust-analyzer" ];
         };
 
-        agdaStdlib = pkgs.agdaPackages.standard-library;
-
-        agdaWithStdlib = pkgs.agda.withPackages (ps: [
-          ps.standard-library
-        ]);
+        # agda.withPackages wraps the binary and registers stdlib automatically
+        agdaWithStdlib = pkgs.agda.withPackages (ps: [ ps.standard-library ]);
 
       in
       {
@@ -57,13 +54,9 @@
             export DATABASE_URL="''${DATABASE_URL:-postgresql://localhost/ai_mem_dev}"
             export TEST_DATABASE_URL="''${TEST_DATABASE_URL:-postgresql://localhost/ai_mem_test}"
 
-            # Ensure agda can locate the standard library
-            export AGDA_LIBS_DIR="${agdaStdlib}/share/agda"
-
             echo "ai-mem dev shell"
             echo "  Rust:  $(rustc --version)"
             echo "  Agda:  $(agda --version)"
-            echo "  Agda stdlib: ${agdaStdlib}/share/agda"
             echo "  DATABASE_URL=$DATABASE_URL"
           '';
 
