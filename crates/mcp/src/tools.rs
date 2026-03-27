@@ -1,8 +1,8 @@
 use ai_mem_core::{search, graph, store, embeddings::EmbeddingBackend};
+use ai_mem_core::types::Repo;
 use sqlx::PgPool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid::Uuid;
 use anyhow::Result;
 
 pub struct SearchContext {
@@ -46,13 +46,14 @@ impl From<ai_mem_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo_id = resolve_repo_id(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
 
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
+    validate_query_dim(&query_vec, &repo)?;
 
-    let semantic = search::semantic_search(&ctx.pool, &query_vec, repo_id, limit * 2).await?;
-    let fulltext = search::fulltext_search(&ctx.pool, &params.query, repo_id, limit * 2).await?;
+    let semantic = search::semantic_search(&ctx.pool, &query_vec, repo.id, limit * 2).await?;
+    let fulltext = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit * 2).await?;
     let merged = search::rrf_merge(semantic, fulltext, limit as usize);
 
     Ok(SearchResponse {
@@ -62,8 +63,8 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo_id = resolve_repo_id(&ctx.pool, &params.repo).await?;
-    let results = search::fulltext_search(&ctx.pool, &params.query, repo_id, limit).await?;
+    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+    let results = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -71,10 +72,13 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = params.limit.unwrap_or(10);
-    let repo_id = resolve_repo_id(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
+
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
-    let results = search::semantic_search(&ctx.pool, &query_vec, repo_id, limit).await?;
+    validate_query_dim(&query_vec, &repo)?;
+
+    let results = search::semantic_search(&ctx.pool, &query_vec, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -102,15 +106,29 @@ pub async fn search_structural(
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 
-    let repo_id = resolve_repo_id(&ctx.pool, &params.repo).await?;
+    let repo = resolve_repo(&ctx.pool, &params.repo).await?;
     let symbols =
-        graph::query_related(&ctx.pool, repo_id, &params.symbol, relation, incoming).await?;
+        graph::query_related(&ctx.pool, repo.id, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 
-async fn resolve_repo_id(pool: &PgPool, path: &str) -> Result<Uuid> {
-    let repo = store::get_repo_by_path(pool, path)
+async fn resolve_repo(pool: &PgPool, path: &str) -> Result<Repo> {
+    store::get_repo_by_path(pool, path)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("repo not found: {}", path))?;
-    Ok(repo.id)
+        .ok_or_else(|| anyhow::anyhow!("repo not found: {}", path))
+}
+
+/// Enforce RepoDimMatchesBackend: the query embedding must have the same
+/// dimension as the VECTOR(n) column in the repo's chunks table.
+fn validate_query_dim(query_vec: &[f32], repo: &Repo) -> Result<()> {
+    let expected = repo.embedding_dim as usize;
+    anyhow::ensure!(
+        query_vec.len() == expected,
+        "RepoDimMatchesBackend violation: query embedding has {} dimensions but \
+         repo '{}' was indexed with {} (re-register the repo to switch backends)",
+        query_vec.len(),
+        repo.path,
+        expected
+    );
+    Ok(())
 }
