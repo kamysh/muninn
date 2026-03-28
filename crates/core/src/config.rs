@@ -142,26 +142,75 @@ impl GlobalConfig {
     }
 }
 
-const CONFIG_TEMPLATE: &str = r#"[database]
+const CONFIG_TEMPLATE: &str = r#"# ~/.config/muninn/config.toml — muninn global configuration
+#
+# Lines marked REQUIRED must be filled in before muninn will work correctly.
+# Everything else can be left at its default value to start.
+#
+# After editing, run:  muninn register <path/to/your/repo>
+#                then: muninn index    <path/to/your/repo>
+
+# ── Database ──────────────────────────────────────────────────────────────────
+# muninn stores chunks, embeddings, and the symbol graph in PostgreSQL.
+# Make sure the database exists before running muninn:
+#
+#   createdb muninn
+#   psql muninn -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+#   psql muninn -c 'CREATE EXTENSION IF NOT EXISTS age;'
+
+[database]
 host   = "localhost"
 port   = 5432
 dbname = "muninn"
-user   = "YOUR_DB_USER"          # required: your PostgreSQL username
-# Password is read from ~/.pgpass (host:port:dbname:user:password)
-# dsn_override = "postgresql://pooler/muninn"  # escape hatch: use this DSN verbatim
+user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username (e.g. "alice")
+
+# Password: muninn never stores a password here.
+# Add a line to ~/.pgpass instead:  localhost:5432:muninn:alice:yourpassword
+# (file must be chmod 600)
+
+# If you need a custom connection string (e.g. pgBouncer, SSL params, socket path),
+# uncomment dsn_override and set it verbatim — host/port/dbname/user above are ignored.
+# dsn_override = "postgresql://alice@localhost:5432/muninn?sslmode=require"
+
+# ── Embeddings ────────────────────────────────────────────────────────────────
+# Embeddings power semantic (vector) search.  Choose one backend:
+#
+#   voyage  — Voyage AI (https://www.voyageai.com).  Best quality for code.
+#             Get a key at https://dash.voyageai.com  →  API Keys.
+#             Default model: voyage-code-3 (2048 dims).
+#
+#   openai  — OpenAI Embeddings API.
+#             Get a key at https://platform.openai.com  →  API keys.
+#             Suggested model: text-embedding-3-small (1536 dims).
+#
+#   local   — No API key required.  Runs a small model (all-MiniLM, 768 dims)
+#             entirely on-device via ONNX.  Lower quality but free and private.
+#
+# WARNING: the backend (and therefore the vector dimension) is frozen after the
+# first index run.  To switch backends you must unregister and re-index the repo.
 
 [embeddings]
-backend    = "voyage"              # voyage | openai | local
+backend    = "voyage"           # voyage | openai | local
 model      = "voyage-code-3"
-api_key    = "YOUR_API_KEY"        # required: Voyage AI or OpenAI API key
-batch_size = 64
+api_key    = "YOUR_API_KEY"     # REQUIRED for voyage/openai — paste your key here
+batch_size = 64                 # texts sent to the API in one request; reduce if you hit rate limits
+
+# ── Watcher ───────────────────────────────────────────────────────────────────
+# The muninn-index daemon watches your repos for file changes and re-indexes
+# modified files automatically.  debounce_ms is how long to wait after the last
+# change before triggering a re-index (avoids thrashing during large saves/rebases).
 
 [watcher]
-debounce_ms = 300                  # file change debounce (milliseconds)
+debounce_ms = 300   # milliseconds; 300 is a good default for most editors
+
+# ── Indexer ───────────────────────────────────────────────────────────────────
+# The daemon scans these directories for muninn.toml files to find repos.
+# Add every top-level directory that contains projects you want to index.
+# scan_depth controls how many directory levels deep to search within each root.
 
 [indexer]
-scan_roots = []                    # required: list of directories to scan, e.g. ["/home/you/projects"]
-scan_depth = 5                     # max directory depth to scan for muninn.toml
+scan_roots = []   # REQUIRED — e.g. ["/home/alice/projects", "/home/alice/work"]
+scan_depth = 5    # 5 is enough for most layouts; increase if repos are deeply nested
 "#;
 
 // ── Per-repo config ────────────────────────────────────────────────────────
@@ -197,25 +246,40 @@ impl RepoConfig {
         let path = repo_root.join(Self::FILE_NAME);
         if !path.exists() {
             let content = format!(
-                "# muninn.toml — repo config for {dir_name}\n\
-                 # All sections are optional. Empty file marks this directory as a muninn repo root.\n\
-                 # Uncomment and edit any section to override global defaults.\n\
+                "# muninn.toml — per-repo config for {dir_name}\n\
+                 #\n\
+                 # The presence of this file marks the directory as a muninn repo root.\n\
+                 # An empty file (everything commented out) is perfectly valid — all settings\n\
+                 # are inherited from ~/.config/muninn/config.toml.\n\
+                 #\n\
+                 # Uncomment and edit only the sections you need to override.\n\
+                 # After editing, run:  muninn index <path/to/this/repo>\n\
                  \n\
-                 # repo_name = \"{dir_name}\"   # override repo name (default: directory name)\n\
+                 # repo_name = \"{dir_name}\"\n\
+                 # Override the display name shown in `muninn list` and `muninn status`.\n\
+                 # Default: the directory name.\n\
                  \n\
                  # [database]\n\
+                 # Override to use a different PostgreSQL database for this repo.\n\
+                 # Useful when isolating large repos or using a remote database.\n\
                  # host   = \"localhost\"\n\
                  # port   = 5432\n\
                  # dbname = \"muninn\"\n\
                  # user   = \"alice\"\n\
+                 # dsn_override = \"postgresql://alice@localhost:5432/muninn\"\n\
                  \n\
                  # [embeddings]\n\
+                 # Override to use a different embedding backend for this repo.\n\
+                 # WARNING: changing backend after the first index requires re-indexing\n\
+                 # (run `muninn unregister` then `muninn register` + `muninn index`).\n\
                  # backend    = \"voyage\"   # voyage | openai | local\n\
                  # model      = \"voyage-code-3\"\n\
                  # api_key    = \"pa-...\"\n\
                  # batch_size = 64\n\
                  \n\
                  # [watcher]\n\
+                 # Override the file-change debounce for this repo.\n\
+                 # Increase if you see excessive re-indexing during large rebases.\n\
                  # debounce_ms = 300\n",
                 dir_name = dir_name
             );
