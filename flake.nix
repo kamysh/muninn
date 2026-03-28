@@ -23,8 +23,37 @@
         # agda.withPackages wraps the binary and registers stdlib automatically
         agdaWithStdlib = pkgs.agda.withPackages (ps: [ ps.standard-library ]);
 
+        # Dynamically linked (default) — depends on Nix store at runtime.
+        # Install via `nix profile install` to keep GC roots intact.
+        muninn = pkgs.rustPlatform.buildRustPackage {
+          pname = "muninn";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+        };
+
+        # Fully static build via musl — safe to copy anywhere, no Nix store deps.
+        muninnStatic = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+          pname = "muninn-static";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkgsStatic.pkg-config ];
+          buildInputs = [ pkgs.pkgsStatic.openssl ];
+          OPENSSL_STATIC = "1";
+          OPENSSL_NO_VENDOR = "1";
+        };
+
       in
       {
+        packages = {
+          default = muninn;
+          muninn = muninn;
+          muninn-static = muninnStatic;
+        };
+
         devShells.default = pkgs.mkShell {
           name = "muninn-dev";
 

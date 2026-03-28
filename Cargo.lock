@@ -1219,6 +1219,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "ignore",
  "quickcheck",
  "quickcheck_macros",
  "reqwest",
@@ -1228,6 +1229,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-python",

@@ -4,7 +4,7 @@ This directory contains the Agda formal specification for muninn.
 
 ## What is specified
 
-`Muninn.agda` covers six areas:
+`Muninn.agda` covers seven areas:
 
 1. **Core data types** — `UUID`, `FilePath`, `RepoId`, `ChunkId`, `LineRange`,
    `Chunk` (with optional embedding), `Repo` (with optional `indexedAt`),
@@ -29,11 +29,16 @@ This directory contains the Agda formal specification for muninn.
 6. **Embedding backend dimensions** — `EmbeddingDimension` maps each backend to
    its fixed vector width (Voyage → 1024, OpenAI → 1536, Local → 768).
 
+7. **Two-layer configuration** — `GlobalConfig`, `RepoConfig`, `EffectiveConfig`,
+   field-level merge semantics, the `DimFrozen` invariant (embedding dimension
+   fixed after first index), repo discovery via scan roots, and MCP walk-up
+   resolution from `cwd` to nearest `muninn.toml`.
+
 ## Checking the spec
 
 With the nix dev shell (which provides Agda 2.8.0 and the standard library):
 
-    nix develop --command agda spec/Muninn.agda
+    cd spec && nix develop --command agda Muninn.agda
 
 No errors are expected.
 

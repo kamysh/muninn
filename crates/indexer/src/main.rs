@@ -1,11 +1,11 @@
 mod discovery;
-mod pipeline;
 mod watcher;
 
 use muninn_core::{
     config::{GlobalConfig, RepoConfig, EffectiveConfig},
     db,
     embeddings::{make_backend, expected_dimension},
+    pipeline::index_repo,
     types::IndexState,
 };
 use std::sync::Arc;
@@ -63,43 +63,41 @@ async fn main() -> anyhow::Result<()> {
             ),
         };
 
-        let initial_state = match (repo.indexed_at.is_some(), is_new) {
-            (true, _) => IndexState::Indexed,
-            (false, true) => IndexState::Unindexed,
-            (false, false) => IndexState::Indexed,
-        };
-        let state = Arc::new(Mutex::new(initial_state));
-
         if repo.indexed_at.is_none() {
             if is_new {
-                tracing::info!("first index: {}", repo_path.display());
-            } else {
-                tracing::info!("reindex requested: {}", repo_path.display());
+                // Never indexed — skip. User must run `muninn index <path>` explicitly.
+                tracing::info!(
+                    "skipping {} — not yet indexed, run: muninn index {}",
+                    repo_path.display(), repo_path.display()
+                );
+                continue;
             }
-            *state.lock().await = IndexState::Indexing;
-            pipeline::index_repo(
+            // indexed_at was reset via `muninn reindex` — re-index in background.
+            tracing::info!("reindexing: {}", repo_path.display());
+            let state = Arc::new(Mutex::new(IndexState::Indexing));
+            index_repo(
                 &pool,
                 repo.id,
                 &repo_path,
                 embedder.clone(),
                 eff.embeddings.batch_size,
                 repo_dim,
+                |_, _, _| {},
             )
             .await?;
             *state.lock().await = IndexState::Indexed;
         }
 
-        *state.lock().await = IndexState::Watching;
+        let initial_state = Arc::new(Mutex::new(IndexState::Watching));
 
         let pool2 = pool.clone();
         let embedder2 = embedder.clone();
         let debounce = eff.watcher.debounce_ms;
-        let state2 = state.clone();
         let id = repo.id;
 
         handles.push(tokio::spawn(async move {
             if let Err(e) =
-                watcher::watch_repo(pool2, id, repo_path, embedder2, debounce, state2, repo_dim)
+                watcher::watch_repo(pool2, id, repo_path, embedder2, debounce, initial_state, repo_dim)
                     .await
             {
                 tracing::error!("watcher error: {}", e);

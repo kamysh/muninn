@@ -9,7 +9,7 @@ use uuid::Uuid;
 use anyhow::Result;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::types::IndexState;
-use crate::pipeline::index_file;
+use muninn_core::pipeline::index_file;
 
 pub async fn watch_repo(
     pool: PgPool,

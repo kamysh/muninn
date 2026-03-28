@@ -1,4 +1,4 @@
-use muninn_core::{
+use crate::{
     embeddings::EmbeddingBackend,
     graph,
     parser::{detect_language, parse_file, chunk_file},
@@ -61,8 +61,6 @@ pub async fn index_file(
 
     // Persist parsed symbols into the per-repo AGE graph (IsolatedGraph invariant:
     // chunks are persisted above before symbols reference them).
-    // chunk_file with symbols creates one chunk per symbol in the same order,
-    // skipping symbols whose content is empty; match by line range.
     for chunk in &chunks {
         if let Some(sym) = symbols.iter().find(|s| s.range == chunk.range) {
             let kind_str = match sym.kind {
@@ -84,6 +82,10 @@ pub async fn index_file(
     Ok(())
 }
 
+/// Index all files in a repo.
+///
+/// `on_progress` is called after each file with `(files_done, total_files, path)`.
+/// Pass `|_, _, _| {}` for no-op (daemon background use).
 pub async fn index_repo(
     pool: &PgPool,
     repo_id: Uuid,
@@ -91,6 +93,7 @@ pub async fn index_repo(
     embedder: Arc<dyn EmbeddingBackend>,
     batch_size: usize,
     expected_dim: usize,
+    on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<()> {
     use ignore::WalkBuilder;
 
@@ -106,14 +109,19 @@ pub async fn index_repo(
         }
     }
 
+    let total = files.len();
+    let mut done = 0usize;
+
     for batch in files.chunks(batch_size) {
         for file in batch {
             if let Err(e) = index_file(pool, repo_id, file, embedder.as_ref(), 4096, expected_dim).await {
                 tracing::warn!("skipping {}: {}", file.display(), e);
             }
+            done += 1;
+            on_progress(done, total, file);
         }
     }
 
-    muninn_core::store::mark_indexed(pool, repo_id).await?;
+    crate::store::mark_indexed(pool, repo_id).await?;
     Ok(())
 }

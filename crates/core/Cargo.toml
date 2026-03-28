@@ -18,6 +18,8 @@ tree-sitter-javascript = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+ignore = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

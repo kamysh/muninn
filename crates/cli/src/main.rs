@@ -10,17 +10,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Register a repository and queue it for indexing
+    /// Create muninn.toml in a repository and open it for editing
     Register {
         path: String,
         #[arg(long)]
         name: Option<String>,
     },
+    /// Run the initial index of a repository (foreground, with progress)
+    Index { path: String },
     /// Unregister a repository and delete its index data
     Unregister { path: String },
     /// List registered repositories and their index status
     List,
-    /// Force full reindex of a repository (or all repos)
+    /// Mark a repository for re-indexing (daemon picks it up on next run)
     Reindex {
         path: Option<String>,
         #[arg(long, conflicts_with = "path")]
@@ -56,7 +58,72 @@ async fn main() -> anyhow::Result<()> {
             std::process::Command::new(&editor)
                 .arg(&toml_path)
                 .status()?;
-            println!("Done. Restart muninn-index to pick up the new repo.");
+            println!("Done. Run `muninn index {}` when ready to index.", path);
+        }
+
+        Commands::Index { path } => {
+            let repo_path = std::path::Path::new(&path);
+            if !repo_path.exists() {
+                anyhow::bail!("path does not exist: {}", path);
+            }
+            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
+            if !toml_path.exists() {
+                anyhow::bail!(
+                    "no muninn.toml found at {}  — run `muninn register {}` first",
+                    path, path
+                );
+            }
+
+            let dir_name = repo_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let repo_cfg = muninn_core::config::RepoConfig::load(repo_path)?;
+            let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
+
+            let embedder: std::sync::Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
+                std::sync::Arc::from(muninn_core::embeddings::make_backend(&eff.embeddings));
+            let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
+
+            // Register in DB (idempotent — safe to call even if already registered)
+            let repo = store::register_repo(
+                &pool,
+                &repo_path.to_string_lossy(),
+                &eff.repo_name,
+                repo_dim,
+            )
+            .await?;
+
+            println!("Indexing {} ({} dims, {} backend)…",
+                repo_path.display(), repo_dim,
+                format!("{:?}", eff.embeddings.backend).to_lowercase()
+            );
+
+            let started = std::time::Instant::now();
+
+            muninn_core::pipeline::index_repo(
+                &pool,
+                repo.id,
+                repo_path,
+                embedder,
+                eff.embeddings.batch_size,
+                repo_dim,
+                |done, total, file| {
+                    let rel = file.strip_prefix(repo_path).unwrap_or(file);
+                    print!("\r  [{:>width$}/{}] {}",
+                        done, total, rel.display(),
+                        width = total.to_string().len()
+                    );
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                },
+            )
+            .await?;
+
+            println!();
+            println!("Done in {:.1}s.", started.elapsed().as_secs_f64());
+            println!("Start or restart muninn-index to begin watching for changes.");
         }
 
         Commands::Unregister { path } => {
