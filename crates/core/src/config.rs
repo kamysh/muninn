@@ -117,21 +117,52 @@ impl GlobalConfig {
     pub fn load() -> anyhow::Result<Self> {
         let path = Self::config_path();
         if !path.exists() {
-            return Ok(Self::default());
+            anyhow::bail!(
+                "no config file found at {}\n\
+                 Run `muninn config init` to create one.",
+                path.display()
+            );
         }
         let content = std::fs::read_to_string(&path)?;
         Ok(toml::from_str(&content)?)
     }
 
-    pub fn save(&self) -> anyhow::Result<()> {
+    /// Create a template config at the default path.
+    /// Returns an error if the file already exists.
+    pub fn create_template() -> anyhow::Result<std::path::PathBuf> {
         let path = Self::config_path();
+        if path.exists() {
+            anyhow::bail!("config already exists at {}", path.display());
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, toml::to_string_pretty(self)?)?;
-        Ok(())
+        std::fs::write(&path, CONFIG_TEMPLATE)?;
+        Ok(path)
     }
 }
+
+const CONFIG_TEMPLATE: &str = r#"[database]
+host   = "localhost"
+port   = 5432
+dbname = "muninn"
+user   = "YOUR_DB_USER"          # required: your PostgreSQL username
+# Password is read from ~/.pgpass (host:port:dbname:user:password)
+# dsn_override = "postgresql://pooler/muninn"  # escape hatch: use this DSN verbatim
+
+[embeddings]
+backend    = "voyage"              # voyage | openai | local
+model      = "voyage-code-3"
+api_key    = "YOUR_API_KEY"        # required: Voyage AI or OpenAI API key
+batch_size = 64
+
+[watcher]
+debounce_ms = 300                  # file change debounce (milliseconds)
+
+[indexer]
+scan_roots = []                    # required: list of directories to scan, e.g. ["/home/you/projects"]
+scan_depth = 5                     # max directory depth to scan for muninn.toml
+"#;
 
 // ── Per-repo config ────────────────────────────────────────────────────────
 

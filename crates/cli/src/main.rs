@@ -9,7 +9,18 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommands {
+    /// Create ~/.config/muninn/config.toml and open it for editing
+    Init,
+}
+
+#[derive(Subcommand)]
 enum Commands {
+    /// Manage global configuration
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCommands,
+    },
     /// Create muninn.toml in a repository and open it for editing
     Register {
         path: String,
@@ -35,6 +46,22 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Config subcommand runs before loading global config (it's the bootstrap command).
+    if let Commands::Config { cmd } = &cli.command {
+        match cmd {
+            ConfigCommands::Init => {
+                let path = muninn_core::config::GlobalConfig::create_template()?;
+                println!("Created: {}", path.display());
+                println!("Opening in $EDITOR… (save and close to finish)");
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                std::process::Command::new(&editor).arg(&path).status()?;
+                println!("Done. Run `muninn register <repo-path>` to add a repository.");
+                return Ok(());
+            }
+        }
+    }
+
     let cfg = GlobalConfig::load()?;
     let pool = db::connect(&cfg.database.dsn()).await?;
 
@@ -190,6 +217,8 @@ async fn main() -> anyhow::Result<()> {
                 println!("  {} — {}", r.name, status);
             }
         }
+
+        Commands::Config { .. } => unreachable!("handled before loading config"),
     }
 
     Ok(())
