@@ -16,11 +16,12 @@ open import Relation.Nullary using (¬_)
 -- ─── Database Connection ─────────────────────────────────────────────────────
 
 record DbConfig : Set where
-  field host   : String
-        port   : ℕ
-        dbname : String
-        user   : String
+  field host        : String
+        port        : ℕ
+        dbname      : String
+        user        : String
         -- password intentionally absent: supplied via ~/.pgpass
+        dsnOverride : Maybe String  -- escape hatch: if present, used verbatim instead of constructing DSN
 
 -- ─── Watcher Config ──────────────────────────────────────────────────────────
 
@@ -35,7 +36,13 @@ record EmbeddingConfig : Set where
         apiKey    : Maybe String
         batchSize : ℕ
 
--- ─── Global Config ───────────────────────────────────────────────────────────
+-- ─── Indexer Config ──────────────────────────────────────────────────────────
+
+record IndexerConfig : Set where
+  field scanRoots : List FilePath   -- directories to scan for muninn.toml
+        scanDepth : ℕ              -- max directory depth per scan root
+
+-- ─── Global Config ──────────────────────────────────────────────────────────
 -- Loaded from ~/.config/muninn/config.toml.
 -- Provides defaults for every setting; must be fully populated (no Maybes).
 
@@ -43,8 +50,7 @@ record GlobalConfig : Set where
   field database   : DbConfig
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
-        scanRoots  : List FilePath   -- directories to scan for muninn.toml
-        scanDepth  : ℕ              -- max directory depth per scan root
+        indexer    : IndexerConfig
 
 -- ─── Per-Repo Config ─────────────────────────────────────────────────────────
 -- Loaded from <repo-root>/muninn.toml.
