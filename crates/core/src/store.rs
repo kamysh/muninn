@@ -158,6 +158,16 @@ pub async fn list_repos(pool: &PgPool) -> Result<Vec<Repo>> {
     rows.into_iter().map(row_to_repo).collect()
 }
 
+/// Notify the indexer daemon that the set of registered repos has changed.
+/// The daemon listens on the `muninn_repos_changed` channel via PostgreSQL LISTEN/NOTIFY
+/// and will re-scan the repos table on receipt.
+pub async fn notify_repos_changed(pool: &PgPool) -> Result<()> {
+    sqlx::query("SELECT pg_notify('muninn_repos_changed', '')")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn mark_indexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
     sqlx::query(r#"UPDATE repos SET indexed_at = NOW() WHERE id = $1"#)
         .bind(repo_id)

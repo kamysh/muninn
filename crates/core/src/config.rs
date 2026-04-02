@@ -80,9 +80,6 @@ pub struct DatabaseConfig {
     /// Shown in pg_stat_activity. Default: binary name chosen by driver.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application_name: Option<String>,
-    /// Set to true when connecting through PgBouncer (disables prepared statements).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pgbouncer: Option<bool>,
 }
 
 impl Default for DatabaseConfig {
@@ -100,7 +97,6 @@ impl Default for DatabaseConfig {
             max_connections:  None,
             connect_timeout:  None,
             application_name: None,
-            pgbouncer:        None,
         }
     }
 }
@@ -115,26 +111,6 @@ pub struct WatcherConfig {
 impl Default for WatcherConfig {
     fn default() -> Self {
         Self { debounce_ms: 300 }
-    }
-}
-
-// ── Indexer config ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IndexerConfig {
-    pub scan_roots: Vec<String>,
-    pub scan_depth: usize,
-    #[serde(default)]
-    pub include_hidden: bool,
-}
-
-impl Default for IndexerConfig {
-    fn default() -> Self {
-        Self {
-            scan_roots: vec![],
-            scan_depth: 5,
-            include_hidden: false,
-        }
     }
 }
 
@@ -189,7 +165,6 @@ pub struct GlobalConfig {
     pub database: DatabaseConfig,
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
-    pub indexer: IndexerConfig,
     #[serde(default)]
     pub mcp: McpConfig,
 }
@@ -277,7 +252,6 @@ user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username 
 # max_connections = 10       # connection pool size
 # connect_timeout = 30       # seconds; omit for no timeout
 # application_name = "muninn"  # shown in pg_stat_activity
-# pgbouncer = false          # set true to disable prepared statements (PgBouncer compatibility)
 
 # If you need a fully custom connection string (e.g. Unix socket, special params),
 # uncomment dsn_override — host/port/dbname/user above are ignored for routing,
@@ -313,19 +287,11 @@ batch_size = 64                 # texts sent to the API in one request; reduce i
 # The muninn-index daemon watches your repos for file changes and re-indexes
 # modified files automatically.  debounce_ms is how long to wait after the last
 # change before triggering a re-index (avoids thrashing during large saves/rebases).
+# The daemon discovers repos automatically from the database — no scan_roots needed.
+# Use `muninn register <path>` to add a repo and `muninn unregister <path>` to remove it.
 
 [watcher]
 debounce_ms = 300   # milliseconds; 300 is a good default for most editors
-
-# ── Indexer ───────────────────────────────────────────────────────────────────
-# The daemon scans these directories for muninn.toml files to find repos.
-# Add every top-level directory that contains projects you want to index.
-# scan_depth controls how many directory levels deep to search within each root.
-
-[indexer]
-scan_roots = []   # REQUIRED — e.g. ["/home/alice/projects", "/home/alice/work"]
-scan_depth = 5    # 5 is enough for most layouts; increase if repos are deeply nested
-include_hidden = false  # include hidden directories when scanning
 
 # ── MCP (Claude Code) ─────────────────────────────────────────────────────────
 # muninn-mcp serves search tools to Claude Code and can keep a local usage log.

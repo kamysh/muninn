@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
                 muninn_core::types::BatchOutcome::SomeSucceeded => " (some files skipped — see warnings above)",
             };
             println!("Done in {:.1}s.{}", started.elapsed().as_secs_f64(), outcome_note);
-            println!("Start or restart muninn-index to begin watching for changes.");
+            store::notify_repos_changed(&pool).await?;
         }
 
         Commands::Unregister { path } => {
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("Removed index data for: {}", repo_path.display());
                 }
                 println!("Unregistered: {}", repo_path.display());
-                println!("Restart muninn-index to stop watching this repo.");
+                store::notify_repos_changed(&pool).await?;
             } else {
                 println!("Aborted.");
             }
@@ -235,13 +235,15 @@ async fn main() -> anyhow::Result<()> {
             if all {
                 sqlx::query("UPDATE repos SET indexed_at = NULL")
                     .execute(&pool).await?;
-                println!("Marked all repos for reindex. Restart muninn-index to apply.");
+                store::notify_repos_changed(&pool).await?;
+                println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
                 sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
                     .bind(resolved.to_string_lossy().as_ref())
                     .execute(&pool).await?;
-                println!("Marked {} for reindex. Restart muninn-index to apply.", resolved.display());
+                store::notify_repos_changed(&pool).await?;
+                println!("Marked {} for reindex. The daemon will pick it up shortly.", resolved.display());
             } else {
                 eprintln!("Specify a path or --all");
                 std::process::exit(1);

@@ -1,4 +1,4 @@
-use sqlx::{PgPool, postgres::{PgConnectOptions, PgPoolOptions, PgSslMode}};
+use sqlx::{PgPool, postgres::{PgConnectOptions, PgListener, PgPoolOptions, PgSslMode}};
 use anyhow::Result;
 use std::str::FromStr;
 
@@ -49,8 +49,7 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
             o = o.ssl_client_key(path);
         }
 
-        let statement_cache = if cfg.pgbouncer.unwrap_or(false) { 0 } else { 1024 };
-        o = o.statement_cache_capacity(statement_cache);
+        o = o.statement_cache_capacity(1024);
         o
     };
 
@@ -68,6 +67,50 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
     }
 
     Ok(pool_opts.connect_with(opts).await?)
+}
+
+/// Create a `PgListener` connected to the given database.
+/// Uses a dedicated internal pool (max 2 connections) so the caller does not need to
+/// manage a separate pool — PgListener clones the pool Arc internally.
+pub async fn connect_listener(cfg: &DatabaseConfig) -> Result<PgListener> {
+    let opts = pg_connect_options(cfg)?;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await?;
+    let listener = PgListener::connect_with(&pool).await?;
+    Ok(listener)
+    // `pool` goes out of scope here, but PgListener clones the Arc<Pool> internally
+    // and keeps it alive as long as the listener is alive.
+}
+
+/// Build a `PgConnectOptions` suitable for use with `PgListener`.
+/// PgListener requires its own dedicated connection (cannot share the pool).
+pub fn pg_connect_options(cfg: &DatabaseConfig) -> Result<PgConnectOptions> {
+    let mut opts = if let Some(ref dsn) = cfg.dsn_override {
+        PgConnectOptions::from_str(dsn)?
+    } else {
+        let url = pg_url(cfg)?;
+        let mut o = PgConnectOptions::from_str(&url)?;
+        if let Some(mode) = cfg.ssl_mode {
+            o = o.ssl_mode(to_pg_ssl_mode(mode));
+        }
+        if let Some(ref path) = cfg.ssl_root_cert {
+            o = o.ssl_root_cert(path);
+        }
+        if let Some(ref path) = cfg.ssl_client_cert {
+            o = o.ssl_client_cert(path);
+        }
+        if let Some(ref path) = cfg.ssl_client_key {
+            o = o.ssl_client_key(path);
+        }
+        o
+    };
+    opts = opts.options([("search_path", SEARCH_PATH)]);
+    if let Some(name) = cfg.application_name.as_deref() {
+        opts = opts.application_name(name);
+    }
+    Ok(opts)
 }
 
 /// Build a properly percent-encoded postgres:// URL from config fields.

@@ -1,16 +1,18 @@
 -- Muninn/Config.agda
 -- Two-layer configuration: global defaults merged with per-repo overrides.
--- Specifies merge semantics, repo discovery, repo resolution, and the
--- DimFrozen invariant that prevents embedding backend changes after indexing.
+-- Specifies merge semantics, repo resolution, and the DimFrozen invariant
+-- that prevents embedding backend changes after indexing.
+-- Repo discovery is database-driven: the indexer daemon watches all repos
+-- registered in the DB, notified via PostgreSQL LISTEN/NOTIFY with a 60s
+-- fallback poll (implementation detail; not a config-level invariant).
 module Muninn.Config where
 
 open import Muninn.Types
 open import Muninn.Embeddings
+open import Data.Bool    using (Bool)
 open import Data.String  using (String)
-open import Data.List    using (List)
 open import Data.Maybe   using (Maybe; just; nothing)
 open import Data.Nat     using (ℕ)
-open import Data.Bool    using (Bool; true; false)
 open import Data.Unit    using (⊤; tt)
 open import Data.Product using (_×_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
@@ -43,7 +45,6 @@ record DbConfig : Set where
     maxConnections  : Maybe ℕ         -- connection pool size
     connectTimeout  : Maybe ℕ         -- seconds; nothing = no timeout
     applicationName : Maybe String    -- shown in pg_stat_activity
-    pgbouncer       : Maybe Bool      -- true disables prepared statements
 
 -- ─── Watcher Config ──────────────────────────────────────────────────────────
 
@@ -58,13 +59,6 @@ record EmbeddingConfig : Set where
         apiKey    : Maybe String
         cacheDir  : Maybe String
         batchSize : ℕ
-
--- ─── Indexer Config ──────────────────────────────────────────────────────────
-
-record IndexerConfig : Set where
-  field scanRoots : List FilePath   -- directories to scan for muninn.toml
-        scanDepth : ℕ              -- max directory depth per scan root
-        includeHidden : Bool       -- whether hidden directories are scanned
 
 -- ─── MCP Config ──────────────────────────────────────────────────────────────
 
@@ -86,7 +80,6 @@ record GlobalConfig : Set where
   field database   : DbConfig
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
-        indexer    : IndexerConfig
         mcp        : McpConfig
 
 -- ─── Per-Repo Config ─────────────────────────────────────────────────────────
@@ -139,24 +132,12 @@ DimFrozen repo cfg =
   ¬ (Repo.indexedAt repo ≡ nothing) →
   Repo.embeddingDim repo ≡ EmbeddingDimension (EmbeddingConfig.backend (EffectiveConfig.embeddings cfg))
 
--- ─── Repo Discovery ──────────────────────────────────────────────────────────
+-- ─── Repo Root Predicate ─────────────────────────────────────────────────────
 -- A path is a RepoRoot iff it contains a muninn.toml file.
--- Discovery scans each scan root up to scanDepth levels deep and collects
--- all RepoRoots found.
+-- Used by both `muninn register` and the MCP server's cwd walk-up.
 
--- Abstract evidence types: inhabited iff the runtime filesystem confirms the fact.
+-- Abstract evidence type: inhabited iff the runtime filesystem confirms the fact.
 record IsRepoRoot (p : FilePath) : Set where
-record IsHidden   (p : FilePath) : Set where
-
--- All discovered repo roots are within a bounded depth of some scan root.
--- (Encoded as a membership predicate; the actual walk is an implementation detail.)
-AllowsHidden : Bool → FilePath → Set
-AllowsHidden true  _ = ⊤
-AllowsHidden false p = ¬ IsHidden p
-
-DiscoveredUnder : FilePath → ℕ → Bool → FilePath → Set
-DiscoveredUnder scanRoot depth includeHidden repoRoot =
-  IsRepoRoot repoRoot × AllowsHidden includeHidden repoRoot
 
 -- ─── Repo Resolution (MCP walk-up) ───────────────────────────────────────────
 -- Given a cwd, the MCP server resolves the repo root by walking up the
