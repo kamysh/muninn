@@ -1,17 +1,27 @@
 -- Muninn/Float.agda
--- Postulated Float support used throughout the specification.
--- Agda's built-in Float does not expose ordered arithmetic conveniently,
--- so we postulate the operations we need.  These are realised by IEEE 754
--- doubles in every concrete backend.
+-- Float support used throughout the specification.
+-- Uses Agda's built-in IEEE 754 Float primitives directly so the module
+-- is compatible with --safe mode.
+--
+-- Implementation note: in the Rust implementation Float corresponds to
+-- f32 (IEEE 754 single-precision, 32-bit), not the 64-bit double that
+-- Agda's built-in Float provides.  The spec uses Float as an
+-- over-approximation.  Precision loss is intentional: pgvector and the
+-- embedding libraries (fastembed, Voyage, OpenAI) all operate on f32.
 module Muninn.Float where
 
 open import Data.Nat using (ℕ)
+open import Agda.Builtin.Float public using (Float)
+open import Agda.Builtin.Float using (primFloatPlus; primFloatDiv; primNatToFloat)
 
-postulate
-  Float  : Set
-  _+F_   : Float → Float → Float
-  _/F_   : Float → Float → Float
-  fromℕF : ℕ → Float
+_+F_ : Float → Float → Float
+_+F_ = primFloatPlus
+
+_/F_ : Float → Float → Float
+_/F_ = primFloatDiv
+
+fromℕF : ℕ → Float
+fromℕF = primNatToFloat
 
 infixl 6 _+F_
 infixl 7 _/F_

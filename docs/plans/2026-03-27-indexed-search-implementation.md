@@ -198,7 +198,7 @@ data EmbeddingBackend : Set where
 EmbeddingDimension : EmbeddingBackend → ℕ
 EmbeddingDimension Voyage = 1024   -- voyage-code-3
 EmbeddingDimension OpenAI = 1536   -- text-embedding-3-small
-EmbeddingDimension Local  = 768    -- default fastembed model
+EmbeddingDimension Local  = 384    -- default fastembed model
 
 -- All chunks for a repo must use the same embedding dimension
 ConsistentEmbeddings : EmbeddingBackend → List Chunk → Set
@@ -1043,8 +1043,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_backend_returns_correct_dimension() {
-        let backend = MockEmbeddingBackend { dimension: 1024 };
+    async fn test_backend_returns_correct_dimension() {
+        let backend = TestEmbeddingBackend { dimension: 1024 };
         let results = backend.embed(&["hello world".to_string()]).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].len(), 1024);
@@ -1183,11 +1183,11 @@ impl EmbeddingBackend for OpenAIBackend {
 
 // ── Mock (for tests) ──────────────────────────────────────────────────────────
 
-pub struct MockEmbeddingBackend {
+pub struct TestEmbeddingBackend {
     pub dimension: usize,
 }
 
-impl EmbeddingBackend for MockEmbeddingBackend {
+impl EmbeddingBackend for TestEmbeddingBackend {
     fn embed<'a>(
         &'a self,
         texts: &'a [String],
@@ -1213,7 +1213,7 @@ pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBa
             cfg.api_key.clone().unwrap_or_default(),
             cfg.model.clone(),
         )),
-        B::Local => Box::new(MockEmbeddingBackend { dimension: 768 }),
+        B::Local => Box::new(TestEmbeddingBackend { dimension: 384 }),
     }
 }
 ```
@@ -1426,7 +1426,7 @@ async fn index_single_rust_file() {
     let file = dir.path().join("foo.rs");
     std::fs::write(&file, "fn hello() { println!(\"hi\"); }\n").unwrap();
 
-    let backend = Arc::new(muninn_core::embeddings::MockEmbeddingBackend { dimension: 1024 });
+    let backend = Arc::new(muninn_core::embeddings::TestEmbeddingBackend { dimension: 1024 });
     let pool = test_pool().await;
     let repo_id = uuid::Uuid::new_v4();
 

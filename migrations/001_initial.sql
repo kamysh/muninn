@@ -1,9 +1,18 @@
--- Enable required extensions
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "vector";
-CREATE EXTENSION IF NOT EXISTS "age";
-LOAD 'age';
-SET search_path = ag_catalog, "$user", public;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
+        RAISE EXCEPTION 'Missing extension pgcrypto. Install with: CREATE EXTENSION pgcrypto;';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        RAISE EXCEPTION 'Missing extension vector (pgvector). Install with: CREATE EXTENSION vector;';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'age') THEN
+        RAISE EXCEPTION 'Missing extension age (Apache AGE). Install with: CREATE EXTENSION age;';
+    END IF;
+    IF NOT has_schema_privilege(current_user, 'ag_catalog', 'USAGE') THEN
+        RAISE EXCEPTION 'Missing USAGE on schema ag_catalog. Run: GRANT USAGE ON SCHEMA ag_catalog TO %;', current_user;
+    END IF;
+END $$;
 
 -- Repos registry
 CREATE TABLE IF NOT EXISTS repos (
@@ -31,4 +40,9 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding 
 CREATE INDEX IF NOT EXISTS chunks_repo_file_idx ON chunks (repo_id, file_path);
 
 -- AGE graph for structural relationships
-SELECT * FROM ag_catalog.create_graph('code_graph');
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM ag_catalog.ag_graph WHERE name = 'code_graph') THEN
+        PERFORM ag_catalog.create_graph('code_graph');
+    END IF;
+END $$;

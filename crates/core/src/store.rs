@@ -37,9 +37,19 @@ pub async fn register_repo(
     .await?;
 
     let repo = row_to_repo(row)?;
+    let stored_dim = repo.embedding_dim as usize;
+    anyhow::ensure!(
+        stored_dim == embedding_dim,
+        "repo {} registered with embedding_dim {} but config expects {}; \
+         unregister + re-register to change embedding backends",
+        repo.path,
+        stored_dim,
+        embedding_dim
+    );
 
     // Create per-repo chunks table (idempotent)
     let table = chunks_table(repo.id);
+    let embedding_dim = stored_dim;
     sqlx::query(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS "{table}" (
@@ -164,6 +174,10 @@ pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
         chunk.range.end
     );
     anyhow::ensure!(
+        !chunk.file_path.is_empty(),
+        "NonEmptyFilePath violation: chunk file_path must not be empty"
+    );
+    anyhow::ensure!(
         !chunk.content.is_empty(),
         "chunk content must not be empty (ValidChunk invariant)"
     );
@@ -225,6 +239,12 @@ pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
 }
 
 pub async fn delete_file_chunks(pool: &PgPool, repo_id: Uuid, file_path: &str) -> Result<()> {
+    // NonEmptyFilePath invariant: an empty path would execute a vacuous delete
+    // (matching nothing) or, worse, delete all chunks if the schema changes.
+    anyhow::ensure!(
+        !file_path.is_empty(),
+        "NonEmptyFilePath violation: file_path must not be empty"
+    );
     let table = chunks_table(repo_id);
     sqlx::query(&format!(
         r#"DELETE FROM "{table}" WHERE file_path = $1"#

@@ -8,6 +8,7 @@ module Muninn.Cli where
 open import Muninn.Types
 open import Muninn.Config
 open import Muninn.Index
+open import Data.Nat     using (ℕ)
 open import Data.String  using (String)
 open import Data.Maybe   using (Maybe; just; nothing)
 open import Data.Product using (_×_)
@@ -19,11 +20,11 @@ open import Relation.Nullary using (¬_)
 
 -- ─── Runtime predicates (postulated; truth determined at runtime) ─────────────
 
-postulate
-  PathExists        : FilePath → Set   -- path names an existing directory
-  HasMuninnToml     : FilePath → Set   -- path/muninn.toml exists
-  GlobalConfigExists : Set             -- ~/.config/muninn/config.toml present
-  GlobalConfigAbsent : Set             -- ~/.config/muninn/config.toml absent
+-- Abstract evidence types: inhabited iff the runtime filesystem confirms the fact.
+record PathExists         (p : FilePath) : Set where
+record HasMuninnToml      (p : FilePath) : Set where
+record GlobalConfigExists : Set where
+record GlobalConfigAbsent : Set where
 
 -- ─── Command AST ─────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ data Command : Set where
   CmdList       : Command                        -- muninn list
   CmdReindex    : ReindexTarget → Command        -- muninn reindex (<path>|--all)
   CmdStatus     : Command                        -- muninn status
+  CmdStats      : Maybe ℕ → Command             -- muninn stats [--days N]; nothing = default (30)
 
 -- ─── Bootstrap invariant ─────────────────────────────────────────────────────
 -- `muninn config init` is the only command that runs before GlobalConfig is
@@ -159,3 +161,7 @@ reindexSpec AllRepos    repo = record { pre = ⊤ ; post = ReindexAllPost  repo 
 
 statusSpec : CommandSpec
 statusSpec = record { pre = ⊤ ; post = ⊤ }
+
+-- stats [--days N]: read-only diagnostic; no preconditions or postconditions.
+statsSpec : CommandSpec
+statsSpec = record { pre = ⊤ ; post = ⊤ }

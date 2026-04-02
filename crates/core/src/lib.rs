@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod embeddings;
 pub mod graph;
+pub mod knowledge;
 pub mod parser;
 pub mod pipeline;
 pub mod repo_resolver;

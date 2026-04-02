@@ -9,6 +9,7 @@ open import Muninn.Graph
 open import Data.List   using (List)
 open import Data.Product using (Σ; _×_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
+open import Relation.Nullary                      using (¬_)
 open import Data.List.Membership.Propositional    using (_∈_)
 
 record RepoStorage : Set where
@@ -44,3 +45,11 @@ IsolatedGraph s =
   ∀ (sym : Symbol) →
     sym ∈ SymbolGraph.symbols (RepoStorage.graph s) →
     ChunkExists (Symbol.chunkId sym) (RepoStorage.chunks s)
+
+-- ─── File Path Validity ───────────────────────────────────────────────────────
+
+-- A file path used in chunk storage or deletion must not be the empty string.
+-- Passing "" to delete_file_chunks executes vacuously; passing "" to
+-- upsert_chunk would store an unaddressable chunk.
+NonEmptyFilePath : FilePath → Set
+NonEmptyFilePath fp = ¬ (FilePath.value fp ≡ "")

@@ -10,18 +10,40 @@ open import Data.String  using (String)
 open import Data.List    using (List)
 open import Data.Maybe   using (Maybe; just; nothing)
 open import Data.Nat     using (ℕ)
+open import Data.Bool    using (Bool; true; false)
+open import Data.Unit    using (⊤; tt)
+open import Data.Product using (_×_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary using (¬_)
 
 -- ─── Database Connection ─────────────────────────────────────────────────────
 
+data SslMode : Set where
+  Disable    : SslMode   -- never use TLS
+  Allow      : SslMode   -- use TLS if server offers it
+  Prefer     : SslMode   -- try TLS, fall back to plain (libpq default)
+  Require    : SslMode   -- TLS required, no certificate verification
+  VerifyCa   : SslMode   -- TLS + verify CA chain
+  VerifyFull : SslMode   -- TLS + verify CA chain + hostname
+
 record DbConfig : Set where
-  field host        : String
-        port        : ℕ
-        dbname      : String
-        user        : String
-        -- password intentionally absent: supplied via ~/.pgpass
-        dsnOverride : Maybe String  -- escape hatch: if present, used verbatim instead of constructing DSN
+  field
+    -- Required: must be present in every config layer that provides a DbConfig.
+    host   : String
+    port   : ℕ
+    dbname : String
+    user   : String
+    -- password intentionally absent: supplied via ~/.pgpass
+    -- Optional: absent means use the driver or pool default.
+    dsnOverride     : Maybe String    -- if present, used verbatim; other fields ignored
+    sslMode         : Maybe SslMode
+    sslRootCert     : Maybe FilePath  -- path to CA bundle
+    sslClientCert   : Maybe FilePath  -- path to client certificate
+    sslClientKey    : Maybe FilePath  -- path to client private key
+    maxConnections  : Maybe ℕ         -- connection pool size
+    connectTimeout  : Maybe ℕ         -- seconds; nothing = no timeout
+    applicationName : Maybe String    -- shown in pg_stat_activity
+    pgbouncer       : Maybe Bool      -- true disables prepared statements
 
 -- ─── Watcher Config ──────────────────────────────────────────────────────────
 
@@ -34,6 +56,7 @@ record EmbeddingConfig : Set where
   field backend   : EmbeddingBackend
         model     : String
         apiKey    : Maybe String
+        cacheDir  : Maybe String
         batchSize : ℕ
 
 -- ─── Indexer Config ──────────────────────────────────────────────────────────
@@ -41,6 +64,19 @@ record EmbeddingConfig : Set where
 record IndexerConfig : Set where
   field scanRoots : List FilePath   -- directories to scan for muninn.toml
         scanDepth : ℕ              -- max directory depth per scan root
+        includeHidden : Bool       -- whether hidden directories are scanned
+
+-- ─── MCP Config ──────────────────────────────────────────────────────────────
+
+record McpLogConfig : Set where
+  field enabled : Bool
+        dir : String
+        retentionDays : ℕ
+        pruneIntervalHours : ℕ
+
+record McpConfig : Set where
+  field recordUsage : Bool
+        logging : McpLogConfig
 
 -- ─── Global Config ──────────────────────────────────────────────────────────
 -- Loaded from ~/.config/muninn/config.toml.
@@ -51,6 +87,7 @@ record GlobalConfig : Set where
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
         indexer    : IndexerConfig
+        mcp        : McpConfig
 
 -- ─── Per-Repo Config ─────────────────────────────────────────────────────────
 -- Loaded from <repo-root>/muninn.toml.
@@ -107,23 +144,27 @@ DimFrozen repo cfg =
 -- Discovery scans each scan root up to scanDepth levels deep and collects
 -- all RepoRoots found.
 
--- We postulate the filesystem predicate; its truth is determined at runtime.
-postulate
-  IsRepoRoot : FilePath → Set
+-- Abstract evidence types: inhabited iff the runtime filesystem confirms the fact.
+record IsRepoRoot (p : FilePath) : Set where
+record IsHidden   (p : FilePath) : Set where
 
 -- All discovered repo roots are within a bounded depth of some scan root.
 -- (Encoded as a membership predicate; the actual walk is an implementation detail.)
-DiscoveredUnder : FilePath → ℕ → FilePath → Set
-DiscoveredUnder scanRoot depth repoRoot = IsRepoRoot repoRoot
+AllowsHidden : Bool → FilePath → Set
+AllowsHidden true  _ = ⊤
+AllowsHidden false p = ¬ IsHidden p
+
+DiscoveredUnder : FilePath → ℕ → Bool → FilePath → Set
+DiscoveredUnder scanRoot depth includeHidden repoRoot =
+  IsRepoRoot repoRoot × AllowsHidden includeHidden repoRoot
 
 -- ─── Repo Resolution (MCP walk-up) ───────────────────────────────────────────
 -- Given a cwd, the MCP server resolves the repo root by walking up the
 -- directory tree to the nearest ancestor (inclusive) that is a RepoRoot.
 -- If no ancestor is a RepoRoot the resolution fails.
 
--- We postulate the ancestor relation; directory structure is a runtime concern.
-postulate
-  IsAncestorOrSelf : FilePath → FilePath → Set   -- IsAncestorOrSelf ancestor path
+-- Abstract evidence type: inhabited iff the runtime filesystem confirms ancestry.
+record IsAncestorOrSelf (ancestor path : FilePath) : Set where
 
 -- The resolved repo root is the nearest RepoRoot ancestor of cwd.
 -- Parameterised by cwd so the ancestor relation is fully applied.

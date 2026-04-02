@@ -27,7 +27,7 @@ This directory contains the Agda formal specification for muninn.
    `HybridResultBound` constrains result-list length to the requested limit.
 
 6. **Embedding backend dimensions** — `EmbeddingDimension` maps each backend to
-   its fixed vector width (Voyage → 1024, OpenAI → 1536, Local → 768).
+   its fixed vector width (Voyage → 1024, OpenAI → 1536, Local → 384).
 
 7. **Two-layer configuration** — `GlobalConfig`, `RepoConfig`, `EffectiveConfig`,
    field-level merge semantics, the `DimFrozen` invariant (embedding dimension

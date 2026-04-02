@@ -82,6 +82,19 @@ pub enum IndexState {
     Stale,
 }
 
+/// Outcome of processing a batch of files during indexing.
+/// Spec: Muninn.Index.BatchOutcome.
+/// NoneSucceeded is intentionally absent: a totally-failed batch must NOT
+/// advance to Indexed.  Only a batch where at least one file was successfully
+/// indexed may close the Indexing state.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum BatchOutcome {
+    /// Every file in the batch was indexed without error.
+    AllSucceeded,
+    /// At least one file indexed; others were warned and skipped.
+    SomeSucceeded,
+}
+
 /// Cosine similarity score in [0, 1]. Spec: Similarity record.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Similarity(pub f32);

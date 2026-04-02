@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use muninn_core::{config::GlobalConfig, db, store};
+use sqlx::Row;
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager")]
@@ -41,6 +42,12 @@ enum Commands {
     },
     /// Show registered repos and index status
     Status,
+    /// Show MCP usage stats from the database
+    Stats {
+        /// How many days back to include
+        #[arg(long, default_value_t = 30)]
+        days: i64,
+    },
 }
 
 #[tokio::main]
@@ -63,13 +70,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = GlobalConfig::load()?;
-    let pool = db::connect(&cfg.database.dsn()).await?;
+    let pool = db::connect(&cfg.database).await?;
 
     match cli.command {
         Commands::Register { path, name } => {
-            let repo_path = std::path::Path::new(&path);
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
             if !repo_path.exists() {
-                anyhow::bail!("path does not exist: {}", path);
+                anyhow::bail!("path does not exist: {}", repo_path.display());
+            }
+            if !repo_path.is_dir() {
+                anyhow::bail!("path is not a directory: {}", repo_path.display());
             }
             let dir_name = name.unwrap_or_else(|| {
                 repo_path
@@ -78,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                     .to_string_lossy()
                     .to_string()
             });
-            let toml_path = muninn_core::config::RepoConfig::create_template(repo_path, &dir_name)?;
+            let toml_path = muninn_core::config::RepoConfig::create_template(&repo_path, &dir_name)?;
             println!("Created: {}", toml_path.display());
             println!("Opening in $EDITOR… (save and close to finish)");
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
@@ -89,15 +99,18 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Index { path } => {
-            let repo_path = std::path::Path::new(&path);
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
             if !repo_path.exists() {
-                anyhow::bail!("path does not exist: {}", path);
+                anyhow::bail!("path does not exist: {}", repo_path.display());
+            }
+            if !repo_path.is_dir() {
+                anyhow::bail!("path is not a directory: {}", repo_path.display());
             }
             let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
             if !toml_path.exists() {
                 anyhow::bail!(
-                    "no muninn.toml found at {}  — run `muninn register {}` first",
-                    path, path
+                    "no muninn.toml found at {} — run `muninn register {}` first",
+                    repo_path.display(), repo_path.display()
                 );
             }
 
@@ -106,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let repo_cfg = muninn_core::config::RepoConfig::load(repo_path)?;
+            let repo_cfg = muninn_core::config::RepoConfig::load(&repo_path)?;
             let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
 
             let embedder: std::sync::Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
@@ -128,20 +141,32 @@ async fn main() -> anyhow::Result<()> {
             );
 
             let started = std::time::Instant::now();
+            const MAX_PROGRESS_PATH_CHARS: usize = 80;
 
-            muninn_core::pipeline::index_repo(
+            let repo_path_for_progress = repo_path.clone();
+            let outcome = muninn_core::pipeline::index_repo(
                 &pool,
                 repo.id,
-                repo_path,
+                &repo_path,
                 embedder,
                 eff.embeddings.batch_size,
                 repo_dim,
                 |done, total, file| {
-                    let rel = file.strip_prefix(repo_path).unwrap_or(file);
-                    print!("\r  [{:>width$}/{}] {}",
-                        done, total, rel.display(),
+                    let rel = file.strip_prefix(&repo_path_for_progress).unwrap_or(file);
+                    let prefix = format!(
+                        "  [{:>width$}/{}] ",
+                        done,
+                        total,
                         width = total.to_string().len()
                     );
+                    let mut path = rel.display().to_string();
+                    if path.len() > MAX_PROGRESS_PATH_CHARS {
+                        let keep = MAX_PROGRESS_PATH_CHARS.saturating_sub(3);
+                        let suffix: String = path.chars().rev().take(keep).collect();
+                        path = format!("...{}", suffix.chars().rev().collect::<String>());
+                    }
+                    let line = format!("{prefix}{path}");
+                    print!("\r\x1b[K{line}");
                     use std::io::Write;
                     let _ = std::io::stdout().flush();
                 },
@@ -149,31 +174,46 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
             println!();
-            println!("Done in {:.1}s.", started.elapsed().as_secs_f64());
+            let outcome_note = match outcome {
+                muninn_core::types::BatchOutcome::AllSucceeded  => "",
+                muninn_core::types::BatchOutcome::SomeSucceeded => " (some files skipped — see warnings above)",
+            };
+            println!("Done in {:.1}s.{}", started.elapsed().as_secs_f64(), outcome_note);
             println!("Start or restart muninn-index to begin watching for changes.");
         }
 
         Commands::Unregister { path } => {
-            let toml_path = std::path::Path::new(&path).join(muninn_core::config::RepoConfig::FILE_NAME);
-            if !toml_path.exists() {
-                println!("No muninn.toml found at: {}", path);
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
+            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
+            let repo = muninn_core::store::get_repo_by_path(
+                &pool, &repo_path.to_string_lossy()
+            ).await?;
+            if !toml_path.exists() && repo.is_none() {
+                println!("No muninn.toml or registered repo found at: {}", repo_path.display());
+                return Ok(());
+            }
+            let prompt = if toml_path.exists() {
+                format!("Delete {} and remove index data? [y/N] ", toml_path.display())
             } else {
-                print!("Delete {} and remove index data? [y/N] ", toml_path.display());
-                use std::io::Write;
-                std::io::stdout().flush()?;
-                let mut line = String::new();
-                std::io::stdin().read_line(&mut line)?;
-                if line.trim().eq_ignore_ascii_case("y") {
+                format!("muninn.toml not found at {}. Remove index data anyway? [y/N] ", repo_path.display())
+            };
+            print!("{}", prompt);
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            if line.trim().eq_ignore_ascii_case("y") {
+                if toml_path.exists() {
                     std::fs::remove_file(&toml_path)?;
-                    if let Some(repo) = muninn_core::store::get_repo_by_path(&pool, &path).await? {
-                        muninn_core::store::delete_repo(&pool, repo.id).await?;
-                        println!("Removed index data for: {}", path);
-                    }
-                    println!("Unregistered: {}", path);
-                    println!("Restart muninn-index to stop watching this repo.");
-                } else {
-                    println!("Aborted.");
                 }
+                if let Some(repo) = repo {
+                    muninn_core::store::delete_repo(&pool, repo.id).await?;
+                    println!("Removed index data for: {}", repo_path.display());
+                }
+                println!("Unregistered: {}", repo_path.display());
+                println!("Restart muninn-index to stop watching this repo.");
+            } else {
+                println!("Aborted.");
             }
         }
 
@@ -197,10 +237,11 @@ async fn main() -> anyhow::Result<()> {
                     .execute(&pool).await?;
                 println!("Marked all repos for reindex. Restart muninn-index to apply.");
             } else if let Some(p) = path {
+                let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
                 sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
-                    .bind(&p)
+                    .bind(resolved.to_string_lossy().as_ref())
                     .execute(&pool).await?;
-                println!("Marked {} for reindex. Restart muninn-index to apply.", p);
+                println!("Marked {} for reindex. Restart muninn-index to apply.", resolved.display());
             } else {
                 eprintln!("Specify a path or --all");
                 std::process::exit(1);
@@ -215,6 +256,38 @@ async fn main() -> anyhow::Result<()> {
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "unindexed".to_string());
                 println!("  {} — {}", r.name, status);
+            }
+        }
+
+        Commands::Stats { days } => {
+            if days < 0 {
+                anyhow::bail!("days must be non-negative");
+            }
+            let total = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM mcp_usage
+                 WHERE ts >= now() - ($1::int * interval '1 day')",
+            )
+            .bind(days)
+            .fetch_one(&pool)
+            .await?;
+
+            println!("MCP usage (last {} days): {}", days, total);
+
+            let rows = sqlx::query(
+                "SELECT tool, COUNT(*) AS count
+                 FROM mcp_usage
+                 WHERE ts >= now() - ($1::int * interval '1 day')
+                 GROUP BY tool
+                 ORDER BY count DESC",
+            )
+            .bind(days)
+            .fetch_all(&pool)
+            .await?;
+
+            for row in rows {
+                let tool: String = row.try_get("tool")?;
+                let count: i64 = row.try_get("count")?;
+                println!("  {:18} {}", tool, count);
             }
         }
 

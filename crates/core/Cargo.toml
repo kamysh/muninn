@@ -19,7 +19,13 @@ tree-sitter-typescript = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 ignore = { workspace = true }
+url = { workspace = true }
 tracing = { workspace = true }
+fastembed = { version = "5.13", default-features = false, features = [
+  "hf-hub",
+  "hf-hub-native-tls",
+  "ort-load-dynamic",
+] }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

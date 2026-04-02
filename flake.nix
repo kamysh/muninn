@@ -30,8 +30,16 @@
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.openssl ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
+          buildInputs = [ pkgs.openssl pkgs.onnxruntime ];
+          postInstall = ''
+            for bin in muninn muninn-index muninn-mcp; do
+              if [ -x "$out/bin/$bin" ]; then
+                wrapProgram "$out/bin/$bin" \
+                  --set ORT_DYLIB_PATH "${pkgs.onnxruntime}/lib/libonnxruntime.so"
+              fi
+            done
+          '';
         };
 
         # Fully static build via musl — safe to copy anywhere, no Nix store deps.
@@ -73,6 +81,7 @@
             # Build deps for reqwest/openssl
             pkgs.pkg-config
             pkgs.openssl
+            pkgs.onnxruntime
 
             # Dev utilities
             pkgs.just
@@ -82,6 +91,7 @@
           shellHook = ''
             export DATABASE_URL="''${DATABASE_URL:-postgresql://localhost/muninn_dev}"
             export TEST_DATABASE_URL="''${TEST_DATABASE_URL:-postgresql://localhost/muninn_test}"
+            export ORT_DYLIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.so"
 
             echo "muninn dev shell"
             echo "  Rust:  $(rustc --version)"

@@ -1,13 +1,15 @@
-use muninn_core::{search, graph, store, embeddings::EmbeddingBackend};
+use muninn_core::{search, graph, knowledge, store, embeddings::EmbeddingBackend};
 use muninn_core::types::Repo;
 use sqlx::PgPool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use anyhow::Result;
+use uuid::Uuid;
 
 pub struct SearchContext {
     pub pool: PgPool,
     pub embedder: Arc<dyn EmbeddingBackend>,
+    pub record_usage: bool,
 }
 
 #[derive(Deserialize)]
@@ -47,7 +49,7 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 }
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
-    let limit = params.limit.unwrap_or(10);
+    let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.pool, &params).await?;
 
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
@@ -64,7 +66,7 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 }
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
-    let limit = params.limit.unwrap_or(10);
+    let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.pool, &params).await?;
     let results = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
@@ -73,7 +75,7 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 }
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
-    let limit = params.limit.unwrap_or(10);
+    let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.pool, &params).await?;
 
     let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
@@ -90,8 +92,10 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
 pub struct StructuralParams {
     pub symbol: String,
     pub relation: String,
-    /// Path of the repo to search (required).
-    pub repo: String,
+    /// Absolute path of the repo. Optional when `cwd` is provided.
+    pub repo: Option<String>,
+    /// Current working directory. Used to resolve the repo when `repo` is absent.
+    pub cwd: Option<String>,
 }
 
 pub async fn search_structural(
@@ -108,7 +112,13 @@ pub async fn search_structural(
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 
-    let repo = resolve_repo_by_path(&ctx.pool, &params.repo).await?;
+    let search_params = SearchParams {
+        query: String::new(),
+        repo: params.repo,
+        cwd: params.cwd,
+        limit: None,
+    };
+    let repo = resolve_repo(&ctx.pool, &search_params).await?;
     let symbols =
         graph::query_related(&ctx.pool, repo.id, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
@@ -131,11 +141,6 @@ async fn resolve_repo(pool: &PgPool, params: &SearchParams) -> Result<Repo> {
         .ok_or_else(|| anyhow::anyhow!("repo not found or not indexed: '{}'", path))
 }
 
-async fn resolve_repo_by_path(pool: &PgPool, path: &str) -> Result<Repo> {
-    store::get_repo_by_path(pool, path)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("repo not found: {}", path))
-}
 
 /// Enforce RepoDimMatchesBackend: the query embedding must have the same
 /// dimension as the VECTOR(n) column in the repo's chunks table.
@@ -150,4 +155,160 @@ fn validate_query_dim(query_vec: &[f32], repo: &Repo) -> Result<()> {
         expected
     );
     Ok(())
+}
+
+// ─── Knowledge tools ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RecordKnowledgeParams {
+    pub repo:          String,
+    pub title:         String,
+    pub body:          String,
+    #[serde(default)]
+    pub tags:          Vec<String>,
+    #[serde(default)]
+    pub related_files: Vec<String>,
+    /// If provided, update the existing item with this id instead of inserting.
+    pub id:            Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct KnowledgeItemResponse {
+    pub id:            String,
+    pub repo:          String,
+    pub title:         String,
+    pub body:          String,
+    pub tags:          Vec<String>,
+    pub related_files: Vec<String>,
+    pub created_at:    String,
+    pub updated_at:    String,
+}
+
+impl From<knowledge::KnowledgeItem> for KnowledgeItemResponse {
+    fn from(item: knowledge::KnowledgeItem) -> Self {
+        Self {
+            id:            item.id.to_string(),
+            repo:          item.repo_path,
+            title:         item.title,
+            body:          item.body,
+            tags:          item.tags,
+            related_files: item.related_files,
+            created_at:    item.created_at.to_rfc3339(),
+            updated_at:    item.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct KnowledgeResultItem {
+    pub id:            String,
+    pub title:         String,
+    pub body:          String,
+    pub tags:          Vec<String>,
+    pub related_files: Vec<String>,
+    pub score:         f32,
+}
+
+#[derive(Serialize)]
+pub struct KnowledgeSearchResponse {
+    pub results: Vec<KnowledgeResultItem>,
+}
+
+#[derive(Deserialize)]
+pub struct SearchKnowledgeParams {
+    pub query: String,
+    pub repo:  String,
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteKnowledgeParams {
+    pub id: String,
+}
+
+pub async fn record_knowledge(
+    ctx:    &SearchContext,
+    params: RecordKnowledgeParams,
+) -> Result<KnowledgeItemResponse> {
+    let id = params.id.as_deref().map(Uuid::parse_str).transpose()?;
+
+    // Embed the title + body for semantic search.
+    let text = format!("{}\n{}", params.title, params.body);
+    let embedding = ctx.embedder.embed(&[text]).await?;
+    let emb = embedding.into_iter().next().unwrap_or_default();
+
+    let item = knowledge::upsert(
+        &ctx.pool,
+        id,
+        &params.repo,
+        &params.title,
+        &params.body,
+        &params.tags,
+        &params.related_files,
+        Some(&emb),
+    )
+    .await?;
+
+    Ok(item.into())
+}
+
+pub async fn search_knowledge(
+    ctx:    &SearchContext,
+    params: SearchKnowledgeParams,
+) -> Result<KnowledgeSearchResponse> {
+    let limit = normalize_limit(params.limit)?;
+
+    let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
+    let emb = embedding.into_iter().next().unwrap_or_default();
+
+    let results = knowledge::search_hybrid(
+        &ctx.pool,
+        &params.repo,
+        &params.query,
+        &emb,
+        limit,
+    )
+    .await?;
+
+    Ok(KnowledgeSearchResponse {
+        results: results
+            .into_iter()
+            .map(|r| KnowledgeResultItem {
+                id:            r.item.id.to_string(),
+                title:         r.item.title,
+                body:          r.item.body,
+                tags:          r.item.tags,
+                related_files: r.item.related_files,
+                score:         r.score,
+            })
+            .collect(),
+    })
+}
+
+pub async fn delete_knowledge(
+    ctx:    &SearchContext,
+    params: DeleteKnowledgeParams,
+) -> Result<serde_json::Value> {
+    let id = Uuid::parse_str(&params.id)?;
+    let deleted = knowledge::delete(&ctx.pool, id).await?;
+    Ok(serde_json::json!({ "deleted": deleted }))
+}
+
+pub async fn list_knowledge(
+    ctx:       &SearchContext,
+    repo_path: &str,
+) -> Result<serde_json::Value> {
+    let items = knowledge::list(&ctx.pool, repo_path).await?;
+    let response: Vec<KnowledgeItemResponse> = items.into_iter().map(Into::into).collect();
+    Ok(serde_json::to_value(response)?)
+}
+
+fn normalize_limit(limit: Option<i64>) -> Result<i64> {
+    let limit = limit.unwrap_or(10);
+    anyhow::ensure!(limit >= 1, "limit must be at least 1");
+    anyhow::ensure!(
+        limit <= muninn_core::search::MAX_LIMIT,
+        "limit must not exceed {}", muninn_core::search::MAX_LIMIT
+    );
+    Ok(limit)
 }

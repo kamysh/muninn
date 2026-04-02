@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 /// Walk `root` up to `max_depth` directory levels deep.
 /// Return the path of every directory that contains a `muninn.toml` file.
 /// Does not descend into directories that are themselves repo roots.
-pub fn discover_repos(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+pub fn discover_repos(root: &Path, max_depth: usize, include_hidden: bool) -> Vec<PathBuf> {
     let mut results = Vec::new();
-    walk(root, 0, max_depth, &mut results);
+    walk(root, 0, max_depth, include_hidden, &mut results);
     results
 }
 
-fn walk(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
+fn walk(dir: &Path, depth: usize, max_depth: usize, include_hidden: bool, out: &mut Vec<PathBuf>) {
     if depth > max_depth {
         return;
     }
@@ -22,10 +22,10 @@ fn walk(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.starts_with('.') {
+            if !include_hidden && name.starts_with('.') {
                 continue; // skip hidden directories
             }
-            walk(&path, depth + 1, max_depth, out);
+            walk(&path, depth + 1, max_depth, include_hidden, out);
         }
     }
 }
@@ -41,7 +41,7 @@ mod tests {
         std::fs::create_dir(&repo_dir).unwrap();
         std::fs::write(repo_dir.join("muninn.toml"), "").unwrap();
 
-        let found = discover_repos(tmp.path(), 3);
+        let found = discover_repos(tmp.path(), 3, false);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], repo_dir);
     }
@@ -54,7 +54,7 @@ mod tests {
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(deep.join("muninn.toml"), "").unwrap();
 
-        let found = discover_repos(tmp.path(), 2);
+        let found = discover_repos(tmp.path(), 2, false);
         assert!(found.is_empty(), "depth 2 should not reach depth-3 dir");
     }
 
@@ -66,7 +66,7 @@ mod tests {
             std::fs::create_dir(&d).unwrap();
             std::fs::write(d.join("muninn.toml"), "").unwrap();
         }
-        let mut found = discover_repos(tmp.path(), 3);
+        let mut found = discover_repos(tmp.path(), 3, false);
         found.sort();
         assert_eq!(found.len(), 3);
     }
@@ -81,7 +81,7 @@ mod tests {
         std::fs::write(inner.join("muninn.toml"), "").unwrap();
 
         // stops descending at outer — inner is not returned separately
-        let found = discover_repos(tmp.path(), 5);
+        let found = discover_repos(tmp.path(), 5, false);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], outer);
     }
@@ -93,7 +93,19 @@ mod tests {
         std::fs::create_dir(&hidden).unwrap();
         std::fs::write(hidden.join("muninn.toml"), "").unwrap();
 
-        let found = discover_repos(tmp.path(), 3);
+        let found = discover_repos(tmp.path(), 3, false);
         assert!(found.is_empty(), "hidden dirs should be skipped");
+    }
+
+    #[test]
+    fn includes_hidden_directories_when_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hidden = tmp.path().join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("muninn.toml"), "").unwrap();
+
+        let found = discover_repos(tmp.path(), 3, true);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], hidden);
     }
 }

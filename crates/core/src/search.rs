@@ -5,12 +5,24 @@ use uuid::Uuid;
 use anyhow::Result;
 use std::collections::HashMap;
 
+/// Server-enforced ceiling on query limits (spec: Muninn.Search.MAX_LIMIT).
+/// Without this, a caller supplying limit=10⁹ would attempt a billion-row fetch.
+pub const MAX_LIMIT: i64 = 1000;
+
+/// Validate a search limit against the spec's ValidLimit invariant: 1 ≤ limit ≤ MAX_LIMIT.
+fn validate_limit(limit: i64) -> Result<()> {
+    anyhow::ensure!(limit >= 1, "limit must be at least 1");
+    anyhow::ensure!(limit <= MAX_LIMIT, "limit must not exceed {}", MAX_LIMIT);
+    Ok(())
+}
+
 pub async fn fulltext_search(
     pool: &PgPool,
     query: &str,
     repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
+    validate_limit(limit)?;
     use sqlx::Row;
     let table = chunks_table(repo_id);
     let rows = sqlx::query(&format!(
@@ -52,6 +64,7 @@ pub async fn semantic_search(
     repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
+    validate_limit(limit)?;
     use sqlx::Row;
     let table = chunks_table(repo_id);
     // Format embedding as pgvector literal: '[f1,f2,...]'

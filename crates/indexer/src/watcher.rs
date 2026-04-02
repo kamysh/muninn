@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
+use ignore::gitignore::GitignoreBuilder;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::types::IndexState;
 use muninn_core::pipeline::index_file;
@@ -18,8 +19,38 @@ pub async fn watch_repo(
     embedder: Arc<dyn EmbeddingBackend>,
     debounce_ms: u64,
     state: Arc<Mutex<IndexState>>,
+    embed_batch_size: usize,
     expected_dim: usize,
 ) -> Result<()> {
+    // Build gitignore matcher from the repo root so the watcher skips the same
+    // files that index_repo (WalkBuilder with git_ignore=true) would skip.
+    // Build gitignore from ALL nested .gitignore files so that patterns like
+    // BLD/ defined in subdirectory .gitignore files are respected.
+    let gitignore = {
+        let mut builder = GitignoreBuilder::new(&repo_path);
+        let walker = ignore::WalkBuilder::new(&repo_path)
+            .git_ignore(false)
+            .hidden(false)
+            .build();
+        for entry in walker.filter_map(|e| e.ok()) {
+            if entry.file_name() == ".gitignore" && entry.path().is_file() {
+                if let Some(err) = builder.add(entry.path()) {
+                    tracing::warn!(
+                        "failed to load gitignore {}: {}",
+                        entry.path().display(), err
+                    );
+                }
+            }
+        }
+        match builder.build() {
+            Ok(gi) => gi,
+            Err(e) => {
+                tracing::warn!("failed to build gitignore matcher for {}: {}", repo_path.display(), e);
+                ignore::gitignore::Gitignore::empty()
+            }
+        }
+    };
+
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -45,7 +76,15 @@ pub async fn watch_repo(
         let mut batch = vec![first];
 
         // Transition to Stale (changes detected, not yet reindexed)
-        *state.lock().await = IndexState::Stale;
+        // detectChange: Watching → Stale  (or Stale → Stale on failed-batch re-entry)
+        {
+            let mut s = state.lock().await;
+            debug_assert!(
+                *s == IndexState::Watching || *s == IndexState::Stale,
+                "detectChange: expected Watching or Stale, got {:?}", *s
+            );
+            *s = IndexState::Stale;
+        }
 
         // collect more events within the debounce window
         let _ = tokio::time::timeout(debounce, async {
@@ -60,13 +99,41 @@ pub async fn watch_repo(
         batch.sort();
         batch.dedup();
 
-        // Transition Stale → Indexing
-        *state.lock().await = IndexState::Indexing;
+        // reindexStale: Stale → Indexing
+        {
+            let mut s = state.lock().await;
+            debug_assert!(
+                *s == IndexState::Stale,
+                "reindexStale: expected Stale, got {:?}", *s
+            );
+            *s = IndexState::Indexing;
+        }
 
+        let mut any_succeeded = false;
         for path in batch {
-            if path.exists() {
-                if let Err(e) = index_file(&pool, repo_id, &path, embedder.as_ref(), 4096, expected_dim).await {
-                    tracing::warn!("incremental index error for {}: {}", path.display(), e);
+            // Skip .git internals and gitignored paths (mirrors WalkBuilder in index_repo)
+            let is_git_internal = path.components().any(|c| c.as_os_str() == ".git");
+            let is_ignored = path.strip_prefix(&repo_path)
+                .map(|rel| gitignore.matched(rel, false).is_ignore())
+                .unwrap_or(false);
+            if is_git_internal || is_ignored {
+                continue;
+            }
+
+            if path.is_file() {
+                match index_file(
+                    &pool,
+                    repo_id,
+                    &path,
+                    embedder.as_ref(),
+                    4096,
+                    embed_batch_size,
+                    expected_dim,
+                )
+                .await
+                {
+                    Ok(()) => any_succeeded = true,
+                    Err(e) => tracing::warn!("incremental index error for {}: {}", path.display(), e),
                 }
             } else {
                 if let Err(e) = muninn_core::store::delete_file_chunks(
@@ -74,14 +141,45 @@ pub async fn watch_repo(
                     path.to_string_lossy().as_ref(),
                 ).await {
                     tracing::warn!("failed to delete chunks for {}: {}", path.display(), e);
+                } else {
+                    any_succeeded = true;
                 }
             }
         }
 
-        // finishIndex: Indexing → Indexed
-        *state.lock().await = IndexState::Indexed;
+        // BatchOutcome invariant: finishIndex (Indexing → Indexed) requires at
+        // least one file successfully processed. A totally-failed batch stays Stale.
+        if any_succeeded {
+            // finishIndex: Indexing → Indexed
+            {
+                let mut s = state.lock().await;
+                debug_assert!(
+                    *s == IndexState::Indexing,
+                    "finishIndex: expected Indexing, got {:?}", *s
+                );
+                *s = IndexState::Indexed;
+            }
+        } else {
+            tracing::warn!("watcher batch for repo {} had no successes — staying Stale", repo_id);
+            {
+                let mut s = state.lock().await;
+                debug_assert!(
+                    *s == IndexState::Indexing,
+                    "stay-Stale: expected Indexing, got {:?}", *s
+                );
+                *s = IndexState::Stale;
+            }
+            continue;
+        }
         // attachWatcher: Indexed → Watching
-        *state.lock().await = IndexState::Watching;
+        {
+            let mut s = state.lock().await;
+            debug_assert!(
+                *s == IndexState::Indexed,
+                "attachWatcher: expected Indexed, got {:?}", *s
+            );
+            *s = IndexState::Watching;
+        }
     }
 
     Ok(())

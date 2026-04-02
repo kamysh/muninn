@@ -686,7 +686,7 @@ pub fn expected_dimension_for(cfg: &crate::config::EmbeddingConfig) -> usize {
     match cfg.backend {
         crate::config::EmbeddingBackend::Voyage => 1024,
         crate::config::EmbeddingBackend::OpenAI => 1536,
-        crate::config::EmbeddingBackend::Local  => 768,
+        crate::config::EmbeddingBackend::Local  => 384,
     }
 }
 ```

@@ -95,6 +95,7 @@ user   = "your_username"
 backend    = "voyage"              # voyage | openai | local
 model      = "voyage-code-3"
 api_key    = "pa-..."              # Voyage AI or OpenAI API key
+cache_dir  = "/path/to/cache"      # local-only; ONNX model cache
 batch_size = 64
 
 [watcher]
@@ -103,6 +104,16 @@ debounce_ms = 300                  # file change debounce (milliseconds)
 [indexer]
 scan_roots = ["/home/you/projects", "/home/you/work"]
 scan_depth = 3                     # max directory depth to scan for muninn.toml
+include_hidden = false             # include hidden directories when scanning
+
+[mcp]
+record_usage = true                # write aggregate usage stats into the database
+
+[mcp.logging]
+enabled = true
+dir = "~/.local/state/muninn/mcp"  # log directory (tilde expanded)
+retention_days = 7                 # prune logs older than this
+prune_interval_hours = 24          # prune cadence
 ```
 
 ### Per-repo config: `<repo-root>/muninn.toml`
@@ -119,6 +130,7 @@ An empty `muninn.toml` file marks a directory as a muninn repo root. All section
 # backend = "openai"              # use a different embedding backend
 # model   = "text-embedding-3-small"
 # api_key = "sk-..."
+# cache_dir = "/path/to/cache"    # local-only
 
 # [watcher]
 # debounce_ms = 500
@@ -179,6 +191,12 @@ Marks repos for reindex. Restart `muninn-index` to apply.
 muninn status
 ```
 
+### MCP usage stats
+
+```bash
+muninn stats --days 30
+```
+
 ## How it works
 
 ### Indexer daemon (`muninn-index`)
@@ -204,6 +222,7 @@ Exposes four search tools to Claude Code:
 | `search_structural` | Graph traversal — find callers, callees, imports, inheritors |
 
 The MCP server resolves which repo to search by walking up from the current working directory to the nearest `muninn.toml`. You can also specify a repo path explicitly.
+If logging is enabled, it writes rotating logs to `mcp.logging.dir` and prunes them periodically. Aggregate usage stats are stored in the database and can be viewed with `muninn stats`.
 
 ### CLI (`muninn`)
 

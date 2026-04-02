@@ -15,6 +15,8 @@ pub struct EmbeddingConfig {
     pub backend: EmbeddingBackend,
     pub model: String,
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_dir: Option<String>,
     pub batch_size: usize,
 }
 
@@ -24,46 +26,81 @@ impl Default for EmbeddingConfig {
             backend: EmbeddingBackend::Voyage,
             model: "voyage-code-3".to_string(),
             api_key: None,
+            cache_dir: None,
             batch_size: 64,
         }
     }
+}
+
+// ── SSL mode ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SslMode {
+    Disable,
+    Allow,
+    Prefer,
+    Require,
+    VerifyCa,
+    VerifyFull,
 }
 
 // ── Database config ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
+    // Required fields — must be present in every config layer.
+    pub host:   String,
+    pub port:   u16,
     pub dbname: String,
-    pub user: String,
-    /// Optional escape hatch: if set, used verbatim instead of constructing DSN.
+    pub user:   String,
+
+    // Optional fields — absent means use the driver or pool default.
+    /// If set, used verbatim as the connection string; other fields are ignored
+    /// for host/port/dbname/user but SSL and pool settings still apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dsn_override: Option<String>,
-}
-
-impl DatabaseConfig {
-    /// Construct a libpq DSN. Password intentionally omitted — libpq reads
-    /// it from ~/.pgpass (host:port:dbname:user:password).
-    pub fn dsn(&self) -> String {
-        if let Some(ref override_dsn) = self.dsn_override {
-            return override_dsn.clone();
-        }
-        format!(
-            "postgresql://{}@{}:{}/{}",
-            self.user, self.host, self.port, self.dbname
-        )
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssl_mode: Option<SslMode>,
+    /// Path to a PEM CA bundle for server certificate verification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssl_root_cert: Option<String>,
+    /// Path to a PEM client certificate (mutual TLS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssl_client_cert: Option<String>,
+    /// Path to a PEM client private key (mutual TLS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssl_client_key: Option<String>,
+    /// Connection pool size. Default: 10.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_connections: Option<u32>,
+    /// Seconds to wait for a connection before giving up. Default: no timeout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connect_timeout: Option<u64>,
+    /// Shown in pg_stat_activity. Default: binary name chosen by driver.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_name: Option<String>,
+    /// Set to true when connecting through PgBouncer (disables prepared statements).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pgbouncer: Option<bool>,
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            host: "localhost".to_string(),
-            port: 5432,
-            dbname: "muninn".to_string(),
-            user: std::env::var("USER").unwrap_or_else(|_| "muninn".to_string()),
-            dsn_override: None,
+            host:             "localhost".to_string(),
+            port:             5432,
+            dbname:           "muninn".to_string(),
+            user:             std::env::var("USER").unwrap_or_else(|_| "muninn".to_string()),
+            dsn_override:     None,
+            ssl_mode:         None,
+            ssl_root_cert:    None,
+            ssl_client_cert:  None,
+            ssl_client_key:   None,
+            max_connections:  None,
+            connect_timeout:  None,
+            application_name: None,
+            pgbouncer:        None,
         }
     }
 }
@@ -87,6 +124,8 @@ impl Default for WatcherConfig {
 pub struct IndexerConfig {
     pub scan_roots: Vec<String>,
     pub scan_depth: usize,
+    #[serde(default)]
+    pub include_hidden: bool,
 }
 
 impl Default for IndexerConfig {
@@ -94,8 +133,53 @@ impl Default for IndexerConfig {
         Self {
             scan_roots: vec![],
             scan_depth: 5,
+            include_hidden: false,
         }
     }
+}
+
+// ── MCP config ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct McpLogConfig {
+    pub enabled: bool,
+    pub dir: String,
+    pub retention_days: u64,
+    pub prune_interval_hours: u64,
+}
+
+impl Default for McpLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: "~/.local/state/muninn/mcp".to_string(),
+            retention_days: 7,
+            prune_interval_hours: 24,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct McpConfig {
+    #[serde(default = "default_true")]
+    pub record_usage: bool,
+    #[serde(default)]
+    pub logging: McpLogConfig,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            record_usage: true,
+            logging: McpLogConfig::default(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ── Global config ──────────────────────────────────────────────────────────
@@ -106,6 +190,8 @@ pub struct GlobalConfig {
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
     pub indexer: IndexerConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 impl GlobalConfig {
@@ -122,6 +208,21 @@ impl GlobalConfig {
                  Run `muninn config init` to create one.",
                 path.display()
             );
+        }
+        // Config may contain API keys — warn if it is readable by group or world.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&path) {
+                let mode = meta.permissions().mode();
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "WARNING: {} has permissions {:04o} — it may contain API keys \
+                         and should be readable only by the owner (chmod 600 {:?})",
+                        path.display(), mode & 0o777, path
+                    );
+                }
+            }
         }
         let content = std::fs::read_to_string(&path)?;
         Ok(toml::from_str(&content)?)
@@ -168,23 +269,35 @@ user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username 
 # Add a line to ~/.pgpass instead:  localhost:5432:muninn:alice:yourpassword
 # (file must be chmod 600)
 
-# If you need a custom connection string (e.g. pgBouncer, SSL params, socket path),
-# uncomment dsn_override and set it verbatim — host/port/dbname/user above are ignored.
-# dsn_override = "postgresql://alice@localhost:5432/muninn?sslmode=require"
+# ── Optional connection settings ──────────────────────────────────────────────
+# ssl_mode = "prefer"        # disable | allow | prefer | require | verify-ca | verify-full
+# ssl_root_cert   = "/path/to/ca.pem"           # CA bundle for server cert verification
+# ssl_client_cert = "/path/to/client-cert.pem"  # client certificate (mutual TLS)
+# ssl_client_key  = "/path/to/client-key.pem"   # client private key  (mutual TLS)
+# max_connections = 10       # connection pool size
+# connect_timeout = 30       # seconds; omit for no timeout
+# application_name = "muninn"  # shown in pg_stat_activity
+# pgbouncer = false          # set true to disable prepared statements (PgBouncer compatibility)
+
+# If you need a fully custom connection string (e.g. Unix socket, special params),
+# uncomment dsn_override — host/port/dbname/user above are ignored for routing,
+# but ssl_mode and pool settings above still apply on top.
+# dsn_override = "postgresql://alice@localhost:5432/muninn"
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
 # Embeddings power semantic (vector) search.  Choose one backend:
 #
 #   voyage  — Voyage AI (https://www.voyageai.com).  Best quality for code.
 #             Get a key at https://dash.voyageai.com  →  API Keys.
-#             Default model: voyage-code-3 (2048 dims).
+#             Default model: voyage-code-3 (1024 dims).
 #
 #   openai  — OpenAI Embeddings API.
 #             Get a key at https://platform.openai.com  →  API keys.
 #             Suggested model: text-embedding-3-small (1536 dims).
 #
-#   local   — No API key required.  Runs a small model (all-MiniLM, 768 dims)
-#             entirely on-device via ONNX.  Lower quality but free and private.
+#   local   — No API key required.  Runs BGE-Base-EN-v1.5 (768 dims) entirely
+#             on-device via ONNX (CPU).  ~200 MB download on first use.
+#             Good quality; lower than code-trained API backends (voyage/openai).
 #
 # WARNING: the backend (and therefore the vector dimension) is frozen after the
 # first index run.  To switch backends you must unregister and re-index the repo.
@@ -193,6 +306,7 @@ user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username 
 backend    = "voyage"           # voyage | openai | local
 model      = "voyage-code-3"
 api_key    = "YOUR_API_KEY"     # REQUIRED for voyage/openai — paste your key here
+cache_dir  = "/path/to/cache"   # optional: local model cache directory
 batch_size = 64                 # texts sent to the API in one request; reduce if you hit rate limits
 
 # ── Watcher ───────────────────────────────────────────────────────────────────
@@ -211,6 +325,20 @@ debounce_ms = 300   # milliseconds; 300 is a good default for most editors
 [indexer]
 scan_roots = []   # REQUIRED — e.g. ["/home/alice/projects", "/home/alice/work"]
 scan_depth = 5    # 5 is enough for most layouts; increase if repos are deeply nested
+include_hidden = false  # include hidden directories when scanning
+
+# ── MCP (Claude Code) ─────────────────────────────────────────────────────────
+# muninn-mcp serves search tools to Claude Code and can keep a local usage log.
+# Logs are rotated daily; old logs are pruned periodically.
+
+[mcp]
+record_usage = true  # write aggregate usage stats into the database
+
+[mcp.logging]
+enabled = true
+dir = "~/.local/state/muninn/mcp"
+retention_days = 7
+prune_interval_hours = 24
 "#;
 
 // ── Per-repo config ────────────────────────────────────────────────────────
@@ -275,6 +403,7 @@ impl RepoConfig {
                  # backend    = \"voyage\"   # voyage | openai | local\n\
                  # model      = \"voyage-code-3\"\n\
                  # api_key    = \"pa-...\"\n\
+                 # cache_dir  = \"/path/to/cache\"   # local-only\n\
                  # batch_size = 64\n\
                  \n\
                  # [watcher]\n\
@@ -369,6 +498,7 @@ mod tests {
                 backend: EmbeddingBackend::Local,
                 model: "all-minilm".to_string(),
                 api_key: None,
+                cache_dir: None,
                 batch_size: 32,
             }),
             watcher: None,
@@ -385,30 +515,6 @@ mod tests {
         let repo = RepoConfig { repo_name: Some("custom-name".to_string()), ..Default::default() };
         let eff = EffectiveConfig::merge(&global, &repo, "dir-name");
         assert_eq!(eff.repo_name, "custom-name");
-    }
-
-    #[test]
-    fn db_dsn_constructed_from_fields() {
-        let db = DatabaseConfig {
-            host: "db.internal".to_string(),
-            port: 5433,
-            dbname: "mydb".to_string(),
-            user: "alice".to_string(),
-            dsn_override: None,
-        };
-        assert_eq!(db.dsn(), "postgresql://alice@db.internal:5433/mydb");
-    }
-
-    #[test]
-    fn db_dsn_override_takes_precedence() {
-        let db = DatabaseConfig {
-            host: "localhost".to_string(),
-            port: 5432,
-            dbname: "muninn".to_string(),
-            user: "bob".to_string(),
-            dsn_override: Some("postgresql://pooler/muninn".to_string()),
-        };
-        assert_eq!(db.dsn(), "postgresql://pooler/muninn");
     }
 
     #[test]

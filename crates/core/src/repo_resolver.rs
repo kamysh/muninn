@@ -1,5 +1,38 @@
 use std::path::{Path, PathBuf};
 
+/// Resolve a user-supplied path string into a clean absolute PathBuf.
+///
+/// Handles:
+/// - Leading `~` → expanded to `$HOME` (shell does not expand `~` inside
+///   quoted strings or config files).
+/// - Relative paths → made absolute against the current working directory.
+/// - Symlinks and `.`/`..` components → resolved via `canonicalize` when the
+///   path exists.
+///
+/// For paths that do not exist on disk (e.g. `unregister` after the directory
+/// was already deleted), canonicalize is skipped and the path is returned as
+/// an absolute path without symlink resolution.
+pub fn resolve_path(raw: &str) -> anyhow::Result<PathBuf> {
+    // Expand leading ~ (only `~` alone or `~/…` — `~user` is intentionally
+    // not supported; the shell handles that before argv reaches us).
+    let expanded = if raw == "~" || raw.starts_with("~/") {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| anyhow::anyhow!("cannot expand '~': $HOME is not set"))?;
+        PathBuf::from(format!("{}{}", home, &raw[1..]))
+    } else {
+        PathBuf::from(raw)
+    };
+
+    // Prefer canonicalize (resolves symlinks, cleans . and ..).
+    // Fall back to a plain absolute path when the path does not yet exist.
+    match std::fs::canonicalize(&expanded) {
+        Ok(p) => Ok(p),
+        Err(_) if expanded.is_absolute() => Ok(expanded),
+        Err(_) => Ok(std::env::current_dir()?.join(expanded)),
+    }
+}
+
 /// Walk up the directory tree from `cwd` (inclusive) until a directory
 /// containing `muninn.toml` is found. Returns the first (nearest) match.
 /// Returns None if no ancestor contains muninn.toml.

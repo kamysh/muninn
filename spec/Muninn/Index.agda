@@ -17,15 +17,23 @@ data IndexState : Set where
   Watching  : IndexState   -- indexed + file-watcher active
   Stale     : IndexState   -- watcher detected changes not yet applied
 
+-- The outcome of processing a batch of files.
+-- NoneSucceeded is intentionally absent: a totally-failed batch must NOT
+-- advance to Indexed.  Only a batch where at least one file was successfully
+-- indexed may close the Indexing state.
+data BatchOutcome : Set where
+  AllSucceeded  : BatchOutcome  -- every file in the batch indexed without error
+  SomeSucceeded : BatchOutcome  -- at least one indexed; others warned and skipped
+
 -- Valid transitions encoded as an indexed inductive type so that only the
 -- permitted edges exist.
 data IndexTransition : IndexState → IndexState → Set where
-  startIndex    : IndexTransition Unindexed Indexing   -- first indexing run
-  finishIndex   : IndexTransition Indexing  Indexed    -- indexing complete
-  startReindex  : IndexTransition Indexed   Indexing   -- manual reindex
-  attachWatcher : IndexTransition Indexed   Watching   -- start watching
-  detectChange  : IndexTransition Watching  Stale      -- watcher fires
-  reindexStale  : IndexTransition Stale     Indexing   -- reindex after stale
+  startIndex    : IndexTransition Unindexed Indexing            -- first indexing run
+  finishIndex   : BatchOutcome → IndexTransition Indexing Indexed -- at-least-partial success required
+  startReindex  : IndexTransition Indexed   Indexing            -- manual reindex
+  attachWatcher : IndexTransition Indexed   Watching            -- start watching
+  detectChange  : IndexTransition Watching  Stale               -- watcher fires
+  reindexStale  : IndexTransition Stale     Indexing            -- reindex after stale
 
 -- ─── Validity Predicates ────────────────────────────────────────────────────────
 
