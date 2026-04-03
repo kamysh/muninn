@@ -22,7 +22,7 @@ enum Commands {
         #[command(subcommand)]
         cmd: ConfigCommands,
     },
-    /// Create muninn.toml in a repository and open it for editing
+    /// Create .muninn.toml in a repository and open it for editing
     Register {
         path: String,
         #[arg(long)]
@@ -109,7 +109,8 @@ async fn main() -> anyhow::Result<()> {
             let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
             if !toml_path.exists() {
                 anyhow::bail!(
-                    "no muninn.toml found at {} — run `muninn register {}` first",
+                    "no {} found at {} — run `muninn register {}` first",
+                    muninn_core::config::RepoConfig::FILE_NAME,
                     repo_path.display(), repo_path.display()
                 );
             }
@@ -189,13 +190,13 @@ async fn main() -> anyhow::Result<()> {
                 &pool, &repo_path.to_string_lossy()
             ).await?;
             if !toml_path.exists() && repo.is_none() {
-                println!("No muninn.toml or registered repo found at: {}", repo_path.display());
+                println!("No {} or registered repo found at: {}", muninn_core::config::RepoConfig::FILE_NAME, repo_path.display());
                 return Ok(());
             }
             let prompt = if toml_path.exists() {
                 format!("Delete {} and remove index data? [y/N] ", toml_path.display())
             } else {
-                format!("muninn.toml not found at {}. Remove index data anyway? [y/N] ", repo_path.display())
+                format!("{} not found at {}. Remove index data anyway? [y/N] ", muninn_core::config::RepoConfig::FILE_NAME, repo_path.display())
             };
             print!("{}", prompt);
             use std::io::Write;

@@ -22,7 +22,7 @@ open import Relation.Nullary using (¬_)
 
 -- Abstract evidence types: inhabited iff the runtime filesystem confirms the fact.
 record PathExists         (p : FilePath) : Set where
-record HasMuninnToml      (p : FilePath) : Set where
+record HasDotMuninnToml   (p : FilePath) : Set where
 record GlobalConfigExists : Set where
 record GlobalConfigAbsent : Set where
 
@@ -79,9 +79,9 @@ ConfigInitPre = GlobalConfigAbsent
 RegisterPre : FilePath → Set
 RegisterPre path = PathExists path
 
--- index <path>: path must exist AND contain muninn.toml (i.e. be registered).
+-- index <path>: path must exist AND contain .muninn.toml (i.e. be registered).
 IndexPre : FilePath → Set
-IndexPre path = PathExists path × HasMuninnToml path
+IndexPre path = PathExists path × HasDotMuninnToml path
 
 -- unregister, list, reindex, status: no per-argument path constraints beyond
 -- the GlobalConfig requirement captured by RequiresGlobalConfig.
@@ -92,18 +92,18 @@ IndexPre path = PathExists path × HasMuninnToml path
 ConfigInitPost : Set
 ConfigInitPost = GlobalConfigExists
 
--- After `register <path>` the path has a muninn.toml.
+-- After `register <path>` the path has a .muninn.toml.
 RegisterPost : FilePath → Set
-RegisterPost path = HasMuninnToml path
+RegisterPost path = HasDotMuninnToml path
 
 -- After `index <path>` the repo's indexedAt field is set (not nothing).
 -- Encoded as: the resulting Repo has indexedAt ≢ nothing.
 IndexPost : Repo → Set
 IndexPost repo = Repo.indexedAt repo ≢ nothing
 
--- After `unregister <path>` (confirmed) the muninn.toml is gone.
+-- After `unregister <path>` (confirmed) the .muninn.toml is gone.
 UnregisterPost : FilePath → Set
-UnregisterPost path = ¬ HasMuninnToml path
+UnregisterPost path = ¬ HasDotMuninnToml path
 
 -- After `reindex AllRepos` every repo in the DB has indexedAt = nothing
 -- (daemon will re-index on next run).
@@ -127,11 +127,11 @@ IndexTransitionsCorrect =
   IndexTransition Indexed Indexing
 
 -- ─── Register idempotency ────────────────────────────────────────────────────
--- Running `register` on a path that already has a muninn.toml is a no-op:
+-- Running `register` on a path that already has a .muninn.toml is a no-op:
 -- the file is not overwritten (create_template returns the existing path).
 -- Postcondition is the same whether or not the file pre-existed.
 RegisterIdempotent : FilePath → Set
-RegisterIdempotent path = HasMuninnToml path → RegisterPost path
+RegisterIdempotent path = HasDotMuninnToml path → RegisterPost path
 
 -- ─── Summary: per-command specification bundle ───────────────────────────────
 

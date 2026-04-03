@@ -133,7 +133,7 @@ DimFrozen repo cfg =
   Repo.embeddingDim repo ≡ EmbeddingDimension (EmbeddingConfig.backend (EffectiveConfig.embeddings cfg))
 
 -- ─── Repo Root Predicate ─────────────────────────────────────────────────────
--- A path is a RepoRoot iff it contains a muninn.toml file.
+-- A path is a RepoRoot iff it contains a .muninn.toml file.
 -- Used by both `muninn register` and the MCP server's cwd walk-up.
 
 -- Abstract evidence type: inhabited iff the runtime filesystem confirms the fact.

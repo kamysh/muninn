@@ -63,20 +63,30 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                 "serverInfo": { "name": "muninn", "version": env!("CARGO_PKG_VERSION") }
             }
         }),
-        "tools/list" => serde_json::json!({
+        "tools/list" => {
+            let fname = muninn_core::config::RepoConfig::FILE_NAME;
+            let walk_suffix = format!(
+                "Supply 'repo' (absolute path) or 'cwd' (current working directory) \
+                 — the nearest ancestor containing {fname} is used when 'repo' is absent."
+            );
+            let cwd_desc = format!(
+                "Current working directory. Used to resolve the repo by walking up \
+                 to the nearest {fname} when 'repo' is absent."
+            );
+            serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": {
                 "tools": [
                     {
                         "name": "search_hybrid",
-                        "description": "Semantic + fulltext hybrid search over indexed repos. Supply 'repo' (absolute path) or 'cwd' (current working directory) — the nearest ancestor containing muninn.toml is used when 'repo' is absent.",
+                        "description": format!("Semantic + fulltext hybrid search over indexed repos. {walk_suffix}"),
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "query": {"type": "string"},
                                 "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": "Current working directory. Used to resolve the repo by walking up to the nearest muninn.toml when 'repo' is absent."},
+                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
                                 "limit": {"type": "integer"}
                             },
                             "required": ["query"]
@@ -84,13 +94,13 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                     },
                     {
                         "name": "search_fulltext",
-                        "description": "Full-text keyword search. Supply 'repo' (absolute path) or 'cwd' (current working directory) — the nearest ancestor containing muninn.toml is used when 'repo' is absent.",
+                        "description": format!("Full-text keyword search. {walk_suffix}"),
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "query": {"type": "string"},
                                 "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": "Current working directory. Used to resolve the repo by walking up to the nearest muninn.toml when 'repo' is absent."},
+                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
                                 "limit": {"type": "integer"}
                             },
                             "required": ["query"]
@@ -98,13 +108,13 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                     },
                     {
                         "name": "search_semantic",
-                        "description": "Vector similarity search. Supply 'repo' (absolute path) or 'cwd' (current working directory) — the nearest ancestor containing muninn.toml is used when 'repo' is absent.",
+                        "description": format!("Vector similarity search. {walk_suffix}"),
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "query": {"type": "string"},
                                 "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": "Current working directory. Used to resolve the repo by walking up to the nearest muninn.toml when 'repo' is absent."},
+                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
                                 "limit": {"type": "integer"}
                             },
                             "required": ["query"]
@@ -112,7 +122,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                     },
                     {
                         "name": "search_structural",
-                        "description": "Graph traversal — find related symbols. Supply 'repo' (absolute path) or 'cwd' (current working directory) — the nearest ancestor containing muninn.toml is used when 'repo' is absent.",
+                        "description": format!("Graph traversal — find related symbols. {walk_suffix}"),
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -122,7 +132,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                     "enum": ["callers","callees","imports","defines","inheritors","inherits"]
                                 },
                                 "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": "Current working directory. Used to resolve the repo by walking up to the nearest muninn.toml when 'repo' is absent."}
+                                "cwd": {"type": "string", "description": (cwd_desc)}
                             },
                             "required": ["symbol", "relation"]
                         }
@@ -180,7 +190,8 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                     }
                 ]
             }
-        }),
+        })
+        },
         "tools/call" => {
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params

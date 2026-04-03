@@ -322,9 +322,9 @@ pub struct RepoConfig {
 }
 
 impl RepoConfig {
-    pub const FILE_NAME: &'static str = "muninn.toml";
+    pub const FILE_NAME: &'static str = ".muninn.toml";
 
-    /// Load muninn.toml from a repo root. Returns empty config if file absent.
+    /// Load .muninn.toml from a repo root. Returns empty config if file absent.
     pub fn load(repo_root: &std::path::Path) -> anyhow::Result<Self> {
         let path = repo_root.join(Self::FILE_NAME);
         if !path.exists() {
@@ -334,13 +334,13 @@ impl RepoConfig {
         Ok(toml::from_str(&content)?)
     }
 
-    /// Create a template muninn.toml in repo_root (does nothing if already exists).
+    /// Create a template .muninn.toml in repo_root (does nothing if already exists).
     /// Returns the path to the file.
     pub fn create_template(repo_root: &std::path::Path, dir_name: &str) -> anyhow::Result<std::path::PathBuf> {
         let path = repo_root.join(Self::FILE_NAME);
         if !path.exists() {
             let content = format!(
-                "# muninn.toml — per-repo config for {dir_name}\n\
+                "# .muninn.toml — per-repo config for {dir_name}\n\
                  #\n\
                  # The presence of this file marks the directory as a muninn repo root.\n\
                  # An empty file (everything commented out) is perfectly valid — all settings\n\

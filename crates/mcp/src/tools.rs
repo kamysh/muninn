@@ -130,7 +130,7 @@ async fn resolve_repo(pool: &PgPool, params: &SearchParams) -> Result<Repo> {
     } else if let Some(ref cwd) = params.cwd {
         let cwd_path = std::path::Path::new(cwd);
         let root = muninn_core::repo_resolver::find_repo_root(cwd_path)
-            .ok_or_else(|| anyhow::anyhow!("no muninn.toml found above '{}'", cwd))?;
+            .ok_or_else(|| anyhow::anyhow!("no {} found above '{}'", muninn_core::config::RepoConfig::FILE_NAME, cwd))?;
         root.to_string_lossy().to_string()
     } else {
         anyhow::bail!("provide either 'repo' path or 'cwd' to resolve the repository");
