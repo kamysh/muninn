@@ -9,7 +9,6 @@ open import Muninn.Types
 open import Data.String  using (String)
 open import Data.List    using (List; length)
 open import Data.Nat     using (ℕ; _≤_)
-open import Data.Maybe   using (Maybe)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary                      using (¬_)
 open import Data.List.Membership.Propositional    using (_∈_)
@@ -25,7 +24,8 @@ record KnowledgeItem : Set where
         body         : String
         tags         : List String
         relatedFiles : List FilePath   -- code files this item describes
-        embedding    : Maybe (List Float)
+        -- embedding is intentionally absent: it is stored in the database for
+        -- semantic search but is never returned to callers (large, opaque, internal).
 
 -- ─── Validity Invariants ──────────────────────────────────────────────────────
 

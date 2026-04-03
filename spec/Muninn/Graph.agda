@@ -31,6 +31,9 @@ record StructuralEdge : Set where
         relation : Relation
 
 -- A per-repo structural graph: symbol nodes and directed relationship edges.
+-- NARROWS (intentional): in the implementation SymbolGraph is not a Rust type.
+-- The graph is stored in Apache AGE (PostgreSQL graph extension) and queried via
+-- ag_catalog.cypher.  This record models the logical structure only.
 record SymbolGraph : Set where
   field symbols : List Symbol
         edges   : List StructuralEdge

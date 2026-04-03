@@ -8,9 +8,10 @@ use muninn_core::{
     store,
     types::{BatchOutcome, IndexState},
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -28,8 +29,10 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("muninn-index started — watching all repos registered in the database");
 
-    // Track which repos have an active watcher task so we don't spawn duplicates.
-    let mut watched: HashSet<Uuid> = HashSet::new();
+    // Map from repo_id to the running watcher task handle.
+    // Storing the handle (not just the id) lets us abort the watcher before a
+    // full reindex so both cannot mutate the same chunks table concurrently.
+    let mut watched: HashMap<Uuid, JoinHandle<()>> = HashMap::new();
 
     // Initial scan
     scan_and_dispatch(&cfg, &pool, &mut watched).await;
@@ -61,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 async fn scan_and_dispatch(
     cfg: &GlobalConfig,
     pool: &sqlx::PgPool,
-    watched: &mut HashSet<Uuid>,
+    watched: &mut HashMap<Uuid, JoinHandle<()>>,
 ) {
     let repos = match store::list_repos(pool).await {
         Ok(r) => r,
@@ -101,15 +104,27 @@ async fn scan_and_dispatch(
         }
 
         if repo.indexed_at.is_none() {
-            if watched.contains(&repo.id) {
-                // indexed_at was reset via `muninn reindex` — run a background full reindex.
-                tracing::info!("reindexing {} (triggered by muninn reindex)", repo.path);
+            if watched.contains_key(&repo.id) {
+                // indexed_at was reset via `muninn reindex`.
+                // Abort the watcher first to prevent it from racing with index_repo
+                // (both would delete-and-reinsert chunks for the same files).
+                if let Some(handle) = watched.remove(&repo.id) {
+                    handle.abort();
+                    tracing::info!(
+                        "paused watcher for {} to run full reindex",
+                        repo.path
+                    );
+                }
+                // Spawn background full reindex.  After success, notify the daemon so
+                // it re-scans and re-attaches the watcher (startReindex → Indexing →
+                // Indexed → attachWatcher → Watching in the spec state machine).
                 let pool2 = pool.clone();
                 let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
                     Arc::from(make_backend(&eff.embeddings));
                 let batch_size = eff.embeddings.batch_size;
                 let repo_id = repo.id;
                 let repo_path_owned = repo_path.to_path_buf();
+                let repo_path_str = repo.path.clone();
                 tokio::spawn(async move {
                     let state = Arc::new(Mutex::new(IndexState::Indexing));
                     match index_repo(
@@ -127,27 +142,36 @@ async fn scan_and_dispatch(
                             if outcome == BatchOutcome::SomeSucceeded {
                                 tracing::warn!(
                                     "reindex of {} completed with some files skipped",
-                                    repo_path_owned.display()
+                                    repo_path_str
                                 );
                             } else {
-                                tracing::info!("reindex of {} complete", repo_path_owned.display());
+                                tracing::info!("reindex of {} complete", repo_path_str);
+                            }
+                            // mark_indexed was called inside index_repo; now notify
+                            // so the daemon re-scans and re-attaches the watcher promptly.
+                            if let Err(e) = store::notify_repos_changed(&pool2).await {
+                                tracing::warn!(
+                                    "reindex of {} complete but notify failed: {}",
+                                    repo_path_str, e
+                                );
                             }
                         }
-                        Err(e) => tracing::error!("reindex of {} failed: {}", repo_path_owned.display(), e),
+                        Err(e) => tracing::error!(
+                            "reindex of {} failed: {}", repo_path_str, e
+                        ),
                     }
                 });
             }
-            // else: repo registered but never indexed — user must run `muninn index <path>`
+            // else: registered but never indexed — user must run `muninn index <path>`
             continue;
         }
 
         // indexed_at IS NOT NULL — start watcher if not already watching.
-        if watched.contains(&repo.id) {
+        if watched.contains_key(&repo.id) {
             continue;
         }
 
         tracing::info!("starting watcher for {}", repo.path);
-        watched.insert(repo.id);
 
         let pool2 = pool.clone();
         let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
@@ -157,7 +181,7 @@ async fn scan_and_dispatch(
         let repo_path_owned = repo_path.to_path_buf();
         let initial_state = Arc::new(Mutex::new(IndexState::Watching));
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(e) = watcher::watch_repo(
                 pool2, id, repo_path_owned, embedder,
                 debounce, initial_state,
@@ -168,5 +192,7 @@ async fn scan_and_dispatch(
                 tracing::error!("watcher error: {}", e);
             }
         });
+
+        watched.insert(repo.id, handle);
     }
 }
