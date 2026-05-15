@@ -11,6 +11,7 @@ pub enum EmbeddingBackend {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EmbeddingConfig {
     pub backend: EmbeddingBackend,
     pub model: String,
@@ -48,6 +49,7 @@ pub enum SslMode {
 // ── Database config ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     // Required fields — must be present in every config layer.
     pub host:   String,
@@ -104,6 +106,7 @@ impl Default for DatabaseConfig {
 // ── Watcher config ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct WatcherConfig {
     pub debounce_ms: u64,
 }
@@ -117,7 +120,7 @@ impl Default for WatcherConfig {
 // ── MCP config ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpLogConfig {
     pub enabled: bool,
     pub dir: String,
@@ -137,7 +140,7 @@ impl Default for McpLogConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
     #[serde(default = "default_true")]
     pub record_usage: bool,
@@ -161,6 +164,7 @@ fn default_true() -> bool {
 // ── Global config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GlobalConfig {
     pub database: DatabaseConfig,
     pub embeddings: EmbeddingConfig,
@@ -316,6 +320,7 @@ prune_interval_hours = 24
 // ── Per-repo config ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RepoConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo_name: Option<String>,
@@ -330,6 +335,12 @@ pub struct RepoConfig {
 impl RepoConfig {
     pub const FILE_NAME: &'static str = ".muninn.toml";
 
+    /// Parse a RepoConfig from a TOML string (e.g. read from a temp file).
+    /// Returns an error with a descriptive message on unknown fields or bad syntax.
+    pub fn from_str(content: &str) -> anyhow::Result<Self> {
+        toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
     /// Load .muninn.toml from a repo root. Returns empty config if file absent.
     pub fn load(repo_root: &std::path::Path) -> anyhow::Result<Self> {
         let path = repo_root.join(Self::FILE_NAME);
@@ -337,15 +348,35 @@ impl RepoConfig {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(&path)?;
-        Ok(toml::from_str(&content)?)
+        toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
     }
 
-    /// Create a template .muninn.toml in repo_root (does nothing if already exists).
-    /// Returns the path to the file.
-    pub fn create_template(repo_root: &std::path::Path, dir_name: &str) -> anyhow::Result<std::path::PathBuf> {
-        let path = repo_root.join(Self::FILE_NAME);
-        if !path.exists() {
-            let content = format!(
+    /// Validate semantic constraints on a parsed RepoConfig.
+    /// Call after `load()` to surface configuration errors early.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(ref emb) = self.embeddings {
+            anyhow::ensure!(
+                emb.batch_size > 0,
+                "[embeddings] batch_size must be greater than 0"
+            );
+            anyhow::ensure!(
+                !emb.model.trim().is_empty(),
+                "[embeddings] model must not be empty"
+            );
+        }
+        if let Some(ref w) = self.watcher {
+            anyhow::ensure!(
+                w.debounce_ms > 0,
+                "[watcher] debounce_ms must be greater than 0"
+            );
+        }
+        Ok(())
+    }
+
+    /// Return the template content for a new .muninn.toml (all sections commented out).
+    pub fn template_content(dir_name: &str) -> String {
+        format!(
                 "# .muninn.toml — per-repo config for {dir_name}\n\
                  #\n\
                  # The presence of this file marks the directory as a muninn repo root.\n\
@@ -383,8 +414,15 @@ impl RepoConfig {
                  # Increase if you see excessive re-indexing during large rebases.\n\
                  # debounce_ms = 300\n",
                 dir_name = dir_name
-            );
-            std::fs::write(&path, content)?;
+        )
+    }
+
+    /// Create a .muninn.toml template in repo_root (does nothing if already exists).
+    /// Returns the path to the file.
+    pub fn create_template(repo_root: &std::path::Path, dir_name: &str) -> anyhow::Result<std::path::PathBuf> {
+        let path = repo_root.join(Self::FILE_NAME);
+        if !path.exists() {
+            std::fs::write(&path, Self::template_content(dir_name))?;
         }
         Ok(path)
     }

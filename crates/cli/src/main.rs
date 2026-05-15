@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use muninn_core::{config::GlobalConfig, db, store};
 use sqlx::Row;
+use std::io::Write as _;
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager")]
@@ -34,6 +35,8 @@ enum Commands {
     Unregister { path: String },
     /// List registered repositories and their index status
     List,
+    /// Edit .muninn.toml for a registered repository, validate it, and re-apply settings
+    Edit { path: String },
     /// Mark a repository for re-indexing (daemon picks it up on next run)
     Reindex {
         path: Option<String>,
@@ -48,6 +51,45 @@ enum Commands {
         #[arg(long, default_value_t = 30)]
         days: i64,
     },
+}
+
+/// Open `initial_content` in $EDITOR inside a named temp file (`.toml` suffix),
+/// validate with `check`, and loop until the user produces a valid file or aborts.
+///
+/// Returns the validated TOML content as a String.  The caller is responsible for
+/// atomically writing it to the real destination.
+fn edit_toml_in_temp(
+    initial_content: &str,
+    check: impl Fn(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
+    // Keep the NamedTempFile alive for the duration so the file isn't deleted
+    // before the editor reads it.
+    let mut tmp = tempfile::Builder::new()
+        .suffix(".muninn.toml")
+        .tempfile()?;
+    tmp.write_all(initial_content.as_bytes())?;
+    tmp.flush()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    loop {
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        std::process::Command::new(&editor).arg(&tmp_path).status()?;
+
+        let content = std::fs::read_to_string(&tmp_path)?;
+        match check(&content) {
+            Ok(()) => return Ok(content),
+            Err(e) => {
+                eprintln!("\nConfiguration error: {}", e);
+                print!("Open editor again to fix it? [Y/n] ");
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                if !line.trim().is_empty() && !line.trim().eq_ignore_ascii_case("y") {
+                    anyhow::bail!("Aborted — changes not applied.");
+                }
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -88,18 +130,25 @@ async fn main() -> anyhow::Result<()> {
                     .to_string_lossy()
                     .to_string()
             });
-            let toml_path = muninn_core::config::RepoConfig::create_template(&repo_path, &dir_name)?;
-            println!("Created: {}", toml_path.display());
+            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
+            let template = muninn_core::config::RepoConfig::template_content(&dir_name);
+
             println!("Opening in $EDITOR… (save and close to finish)");
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            std::process::Command::new(&editor)
-                .arg(&toml_path)
-                .status()?;
+
+            // Edit in a temp file; only write to the real path once the content is valid.
+            let validated_content = edit_toml_in_temp(&template, |content| {
+                muninn_core::config::RepoConfig::from_str(content)?.validate()
+            })
+            .map_err(|e| anyhow::anyhow!("{} — {} not registered.", e, repo_path.display()))?;
+
+            std::fs::write(&toml_path, &validated_content)?;
+            println!("Created: {}", toml_path.display());
+
+            let repo_cfg = muninn_core::config::RepoConfig::from_str(&validated_content)?;
 
             // After the editor session the user has set the [embeddings] backend, so
             // the VECTOR(n) dimension is now known.  Register the repo in the database:
             // this creates the per-repo chunks table + AGE graph and fixes the dimension.
-            let repo_cfg = muninn_core::config::RepoConfig::load(&repo_path)?;
             let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
             store::register_repo(
@@ -234,6 +283,81 @@ async fn main() -> anyhow::Result<()> {
             };
             println!("Done in {:.1}s.{}", started.elapsed().as_secs_f64(), outcome_note);
             store::notify_repos_changed(&pool).await?;
+        }
+
+        Commands::Edit { path } => {
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
+            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
+
+            if !toml_path.exists() {
+                anyhow::bail!(
+                    "no {} found at {} — run `muninn register {}` first",
+                    muninn_core::config::RepoConfig::FILE_NAME,
+                    repo_path.display(), path
+                );
+            }
+
+            // Need the stored repo to enforce DimFrozen.
+            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "repo not found in database — run `muninn register {}` first",
+                    repo_path.display()
+                ))?;
+
+            let dir_name = repo_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let existing_content = std::fs::read_to_string(&toml_path)?;
+
+            println!("Opening in $EDITOR… (save and close to finish)");
+
+            // Edit in a temp file; only replace the real file after all checks pass.
+            let validated_content = edit_toml_in_temp(&existing_content, |content| {
+                let rc = muninn_core::config::RepoConfig::from_str(content)?;
+                rc.validate()?;
+                // DimFrozen: embedding dimension cannot change after registration.
+                let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
+                let new_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
+                if new_dim != repo.embedding_dim as usize {
+                    anyhow::bail!(
+                        "DimFrozen: this repo uses embedding_dim {} but the edited config \
+                         yields {}.\nRemove the [embeddings] section to inherit the global \
+                         backend, or:\n  muninn unregister {path}\n  muninn register   {path}\
+                         \n  muninn index      {path}",
+                        repo.embedding_dim, new_dim
+                    );
+                }
+                Ok(())
+            })?;
+
+            // Atomically replace the real .muninn.toml.
+            std::fs::write(&toml_path, &validated_content)?;
+
+            let repo_cfg = muninn_core::config::RepoConfig::from_str(&validated_content)?;
+
+            // Apply: update repo name in DB if it changed.
+            let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
+            if eff.repo_name != repo.name {
+                sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
+                    .bind(&eff.repo_name)
+                    .bind(repo.id)
+                    .execute(&pool)
+                    .await?;
+                println!("Renamed: {} → {}", repo.name, eff.repo_name);
+            }
+
+            store::notify_repos_changed(&pool).await?;
+            println!("Saved.");
+            if repo_cfg.watcher.is_some() || repo_cfg.embeddings.is_some() {
+                println!(
+                    "Note: changes to [watcher] and [embeddings] settings take effect \
+                     after `muninn reindex {}`.", path
+                );
+            }
         }
 
         Commands::Unregister { path } => {
