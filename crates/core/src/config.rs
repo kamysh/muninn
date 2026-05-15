@@ -233,8 +233,7 @@ const CONFIG_TEMPLATE: &str = r#"# ~/.config/muninn/config.toml — muninn globa
 # Lines marked REQUIRED must be filled in before muninn will work correctly.
 # Everything else can be left at its default value to start.
 #
-# After editing, run:  muninn register <path/to/your/repo>
-#                then: muninn index    <path/to/your/repo>
+# After editing, run:  muninn add <path/to/your/repo>
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # muninn stores chunks, embeddings, and the symbol graph in PostgreSQL.
@@ -298,7 +297,7 @@ batch_size = 64                 # texts sent to the API in one request; reduce i
 # modified files automatically.  debounce_ms is how long to wait after the last
 # change before triggering a re-index (avoids thrashing during large saves/rebases).
 # The daemon discovers repos automatically from the database — no scan_roots needed.
-# Use `muninn register <path>` to add a repo and `muninn unregister <path>` to remove it.
+# Use `muninn add <path>` to add a repo and `muninn remove <path>` to remove it.
 
 [watcher]
 debounce_ms = 300   # milliseconds; 300 is a good default for most editors
@@ -384,7 +383,7 @@ impl RepoConfig {
                  # are inherited from ~/.config/muninn/config.toml.\n\
                  #\n\
                  # Uncomment and edit only the sections you need to override.\n\
-                 # After editing, run:  muninn index <path/to/this/repo>\n\
+                 # After editing, run:  muninn add <path/to/this/repo>\n\
                  \n\
                  # repo_name = \"{dir_name}\"\n\
                  # Override the display name shown in `muninn list` and `muninn status`.\n\
@@ -402,7 +401,7 @@ impl RepoConfig {
                  # [embeddings]\n\
                  # Override to use a different embedding backend for this repo.\n\
                  # WARNING: changing backend after the first index requires re-indexing\n\
-                 # (run `muninn unregister` then `muninn register` + `muninn index`).\n\
+                 # (run `muninn remove <path>` then `muninn add <path>`).\n\
                  # backend    = \"voyage\"   # voyage | openai | local\n\
                  # model      = \"voyage-code-3\"\n\
                  # api_key    = \"pa-...\"\n\

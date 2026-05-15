@@ -1,26 +1,34 @@
 # muninn
 
-Indexed code search for Claude Code — full-text, semantic (vector), and structural (graph) search over your repositories.
+> *Muninn* (Old Norse: "memory") — one of Odin's two ravens, sent out each day to observe the world and return with knowledge.
+
+Full-text, semantic (vector), and structural (graph) code search for [Claude Code](https://claude.ai/code) — and any other MCP client. Index your repositories once; query them from any AI assistant.
+
+## Features
+
+- **Semantic search** — pgvector cosine similarity over code embeddings (Voyage AI, OpenAI, or local ONNX)
+- **Full-text search** — PostgreSQL tsvector for keyword and identifier search
+- **Structural search** — Apache AGE graph traversal: find callers, callees, imports, inheritors
+- **Hybrid search** — semantic + full-text results merged with Reciprocal Rank Fusion
+- **Knowledge store** — record and search freeform notes anchored to your codebase
+- **Incremental indexing** — daemon watches for file changes and re-indexes incrementally
+- **Distributed lock** — safe concurrent operation; only one indexer holds the lock per repo at a time
+- **Formal specification** — core invariants type-checked in Agda
 
 ## Prerequisites
 
 - **Nix** (with flakes enabled) — provides Rust, Agda, and all build dependencies
-- **PostgreSQL 16+** with extensions:
+- **PostgreSQL 16+** with:
   - [pgvector](https://github.com/pgvector/pgvector) — vector similarity search
-  - [Apache AGE](https://age.apache.org/) — graph queries for structural search
-- A **Voyage AI** or **OpenAI** API key (for embeddings), or use the `local` backend
+  - [Apache AGE](https://age.apache.org/) — property graph queries
+- An embedding API key (**Voyage AI** or **OpenAI**), or use the bundled `local` ONNX backend
 
 ### Database setup
 
 ```bash
-# Create the database
 createdb muninn
-
-# Enable required extensions (run as superuser or with CREATE EXTENSION privilege)
 psql muninn -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 psql muninn -c 'CREATE EXTENSION IF NOT EXISTS age;'
-
-# Run migrations
 nix develop --command sqlx migrate run
 ```
 
@@ -29,230 +37,243 @@ nix develop --command sqlx migrate run
 ### Option A: Nix profile (recommended)
 
 ```bash
-# From a local checkout — installs into ~/.nix-profile/bin/
+# From a local checkout
 nix profile install .
 
-# Or directly from the repository
-nix profile install github:your-org/muninn
-
-# Register MCP server with Claude Code
-claude mcp add muninn ~/.nix-profile/bin/muninn-mcp
+# Register the MCP server with Claude Code
+claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
 ```
 
-The Nix profile is a GC root, so the shared libraries in the Nix store are kept alive. Do not use `nix build` + manual copy — the copied binaries reference Nix store paths that will be collected by `nix store gc`.
+The Nix profile is a GC root — the binaries' shared library dependencies in the Nix store will not be garbage-collected. Do **not** use `nix build` + manual copy; those binaries reference store paths that `nix store gc` will remove.
 
-### Option B: Static build
+### Option B: Static binary
 
-For a fully self-contained binary with no Nix store runtime dependencies:
+A fully self-contained binary with no Nix store runtime dependencies:
 
 ```bash
 nix build .#muninn-static
-# Binaries in ./result/bin/ — safe to copy anywhere
 cp result/bin/muninn* ~/.local/bin/
-claude mcp add muninn ~/.local/bin/muninn-mcp
+claude mcp add --scope user muninn ~/.local/bin/muninn-mcp
 ```
 
 ### Option C: install.sh
 
 ```bash
-git clone <repo-url> muninn
+git clone https://github.com/YOUR_ORG/muninn
 cd muninn
-./install.sh    # nix profile install + registers MCP
+./install.sh    # nix profile install + registers MCP with Claude Code
 ```
 
 ### Systemd service (optional)
 
-To run the indexer as a background daemon:
-
 ```bash
-# Install the service file
 cp muninn-index.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-
-# Enable and start
 systemctl --user enable --now muninn-index
+```
 
-# Check status
-systemctl --user status muninn-index
+## Quick start
+
+```bash
+# 1. Bootstrap global config (opens $EDITOR — fill in your API key and DB user)
+muninn config init
+
+# 2. Add a repository (configures + indexes in one step)
+muninn add /path/to/your/repo
+
+# 3. Start the daemon (watches for file changes, reindexes incrementally)
+systemctl --user start muninn-index
+
+# Claude Code now has muninn search tools available
 ```
 
 ## Configuration
 
 ### Global config: `~/.config/muninn/config.toml`
 
-Created automatically with defaults on first run. All settings are fully populated — no optional fields.
+Created by `muninn config init`. All settings have defaults; only `database.user` and `embeddings.api_key` must be filled in.
 
 ```toml
 [database]
 host   = "localhost"
 port   = 5432
 dbname = "muninn"
-user   = "your_username"
-# Password is read from ~/.pgpass (host:port:dbname:user:password)
-# dsn_override = "postgresql://pooler/muninn"  # escape hatch: use this DSN verbatim
+user   = "alice"           # your PostgreSQL username
+# Password: add to ~/.pgpass — localhost:5432:muninn:alice:yourpassword
+# (chmod 600 ~/.pgpass)
+
+# Optional:
+# ssl_mode        = "prefer"   # disable | allow | prefer | require | verify-ca | verify-full
+# ssl_root_cert   = "/path/to/ca.pem"
+# ssl_client_cert = "/path/to/client-cert.pem"
+# ssl_client_key  = "/path/to/client-key.pem"
+# max_connections = 10
+# connect_timeout = 30
+# dsn_override    = "postgresql://alice@localhost/muninn"  # bypasses host/port/dbname/user
 
 [embeddings]
-backend    = "voyage"              # voyage | openai | local
+backend    = "voyage"          # voyage | openai | local
 model      = "voyage-code-3"
-api_key    = "pa-..."              # Voyage AI or OpenAI API key
-cache_dir  = "/path/to/cache"      # local-only; ONNX model cache
+api_key    = "pa-..."          # Voyage AI or OpenAI key; omit for local backend
+# cache_dir  = "/path/to/cache"  # local backend: ONNX model cache
 batch_size = 64
 
 [watcher]
-debounce_ms = 300                  # file change debounce (milliseconds)
-
-[indexer]
-scan_roots = ["/home/you/projects", "/home/you/work"]
-scan_depth = 3                     # max directory depth to scan for muninn.toml
-include_hidden = false             # include hidden directories when scanning
+debounce_ms = 300              # ms to wait after last file change before reindexing
 
 [mcp]
-record_usage = true                # write aggregate usage stats into the database
+record_usage = true            # write aggregate usage stats to the database
 
 [mcp.logging]
-enabled = true
-dir = "~/.local/state/muninn/mcp"  # log directory (tilde expanded)
-retention_days = 7                 # prune logs older than this
-prune_interval_hours = 24          # prune cadence
+enabled              = true
+dir                  = "~/.local/state/muninn/mcp"
+retention_days       = 7
+prune_interval_hours = 24
 ```
 
-### Per-repo config: `<repo-root>/muninn.toml`
+**Embedding backends:**
 
-An empty `muninn.toml` file marks a directory as a muninn repo root. All sections are optional — absent fields inherit from the global config.
+| Backend | Model | Dims | Notes |
+|---------|-------|------|-------|
+| `voyage` | `voyage-code-3` | 1024 | Best quality for code; [API key](https://dash.voyageai.com) required |
+| `openai` | `text-embedding-3-small` | 1536 | [API key](https://platform.openai.com) required |
+| `local` | BGE-Base-EN-v1.5 | 768 | No key needed; ~200 MB ONNX download on first use |
+
+> **DimFrozen**: the embedding dimension is fixed at `muninn add` time. To switch backends, run `muninn remove <path>` then `muninn add <path>` again.
+
+### Per-repo config: `<repo-root>/.muninn.toml`
+
+The presence of this file marks a directory as a muninn repo root. An empty file is valid — all settings inherit from the global config. `muninn add` creates it and opens it in `$EDITOR`.
 
 ```toml
-# repo_name = "my-project"        # override repo name (default: directory name)
+# repo_name = "my-project"   # display name; default: directory name
 
 # [database]
-# host = "db.internal"            # use a different database for this repo
+# host   = "db.internal"     # use a different database for this repo
 
 # [embeddings]
-# backend = "openai"              # use a different embedding backend
-# model   = "text-embedding-3-small"
-# api_key = "sk-..."
-# cache_dir = "/path/to/cache"    # local-only
+# backend    = "openai"
+# model      = "text-embedding-3-small"
+# api_key    = "sk-..."
 
 # [watcher]
 # debounce_ms = 500
 ```
 
-## Usage
+## CLI reference
 
-### Register and index a repository
-
-```bash
-# Step 1: create muninn.toml and edit it
-muninn register /path/to/your/repo
-
-# Step 2: run the initial index (foreground, shows progress)
-muninn index /path/to/your/repo
+```
+muninn add <path>           Register a repo, configure it, and run the initial index
+muninn configure <path>     Edit .muninn.toml; validates and reindexes if content changed
+muninn remove <path>        Delete .muninn.toml and all index data
+muninn list                 List registered repos and their index status
+muninn reindex [<path>]     Signal the daemon to reindex (--all for all repos)
+muninn status               Show registered repos and index state
+muninn stats [--days N]     Show MCP tool usage statistics
+muninn config init          Create ~/.config/muninn/config.toml and open it for editing
 ```
 
-`register` creates `muninn.toml` and opens it in `$EDITOR`. Edit the file (set API key, choose backend, etc.) before indexing.
+### `muninn add <path>`
 
-`index` runs the full indexing pipeline in the foreground:
+Opens `$EDITOR` with a template `.muninn.toml` (in a temp file). Validates the config on save — loops back if there are errors. Once valid, writes the real `.muninn.toml`, registers the repo in the database, and runs a foreground index with a progress bar:
+
 ```
 Indexing /path/to/repo (1024 dims, voyage)…
   [   1/4231] src/main.rs
   [   2/4231] src/lib.rs
-  ...
+  …
 Done in 312.4s.
-Start or restart muninn-index to begin watching for changes.
 ```
 
-After the initial index, `muninn-index` daemon takes over — it watches for file changes and re-indexes incrementally.
+Fails with a clear message if the repo is already registered — use `muninn configure` to change the config.
 
-### Unregister a repository
+### `muninn configure <path>`
 
-```bash
-muninn unregister /path/to/your/repo
-```
+Opens the existing `.muninn.toml` in a temp file. Validates on save (including the DimFrozen check — embedding dimension cannot change). If the content changed, writes the real file and runs a foreground reindex. If the content is identical, prints "No changes." and exits.
 
-Deletes `muninn.toml` and removes all index data (chunks, embeddings, graph) from the database.
+### `muninn remove <path>`
 
-### List registered repos
-
-```bash
-muninn list
-```
-
-### Force reindex
-
-```bash
-muninn reindex /path/to/your/repo   # single repo
-muninn reindex --all                 # all repos
-```
-
-Marks repos for reindex. Restart `muninn-index` to apply.
-
-### Check status
-
-```bash
-muninn status
-```
-
-### MCP usage stats
-
-```bash
-muninn stats --days 30
-```
+Prompts for confirmation, then deletes `.muninn.toml` and drops all index data (chunks, embeddings, graph nodes) from the database. Refuses to proceed if a live indexing lock is held.
 
 ## How it works
 
 ### Indexer daemon (`muninn-index`)
 
-1. Scans each directory in `indexer.scan_roots` (up to `scan_depth` levels) for `muninn.toml` files
-2. For each discovered repo:
-   - Loads per-repo config, merges with global defaults
-   - Parses source files with tree-sitter (Rust, Python, JavaScript, TypeScript)
-   - Splits files into chunks by symbol boundaries
-   - Generates embeddings via the configured backend
-   - Stores chunks, embeddings, and symbol graph in PostgreSQL
-3. Watches for file changes and re-indexes incrementally
+The daemon discovers repos from the `repos` database table — it does not scan the filesystem. When `muninn add` or `muninn remove` registers or removes a repo, it sends a `NOTIFY muninn_repos_changed` PostgreSQL notification; the daemon receives this and updates its watcher set within milliseconds. A 60-second fallback poll handles any missed notifications.
+
+For each repo the daemon either watches for file changes (`notify` crate) or spawns a full reindex task. A distributed lock (`indexing_heartbeat` column, pulsed every 60 s, stale after 120 s) ensures only one indexer operates on a repo at a time — even if multiple daemon instances are running.
+
+### Indexing pipeline
+
+For each file:
+1. **Parse** — tree-sitter extracts symbols and call graph edges (Rust, Python, JavaScript, TypeScript)
+2. **Chunk** — split into chunks at symbol boundaries
+3. **Embed** — generate embeddings via the configured backend
+4. **Store** — write chunks and embeddings to a per-repo PostgreSQL table; write symbol graph to Apache AGE
 
 ### MCP server (`muninn-mcp`)
 
-Exposes four search tools to Claude Code:
+Exposes 8 tools to Claude Code via stdio JSON-RPC:
 
 | Tool | Description |
 |------|-------------|
-| `search_hybrid` | Combined semantic + full-text search with RRF ranking |
-| `search_fulltext` | Keyword search using PostgreSQL tsvector |
-| `search_semantic` | Vector similarity search using pgvector |
-| `search_structural` | Graph traversal — find callers, callees, imports, inheritors |
+| `search_hybrid` | Semantic + full-text with RRF ranking |
+| `search_fulltext` | PostgreSQL tsvector keyword search |
+| `search_semantic` | pgvector cosine similarity |
+| `search_structural` | Graph traversal — callers, callees, imports, inheritors |
+| `record_knowledge` | Store a freeform note anchored to a repo |
+| `search_knowledge` | Hybrid search over knowledge notes |
+| `list_knowledge` | List knowledge notes for a repo |
+| `delete_knowledge` | Delete a knowledge note |
 
-The MCP server resolves which repo to search by walking up from the current working directory to the nearest `muninn.toml`. You can also specify a repo path explicitly.
-If logging is enabled, it writes rotating logs to `mcp.logging.dir` and prunes them periodically. Aggregate usage stats are stored in the database and can be viewed with `muninn stats`.
-
-### CLI (`muninn`)
-
-Manages repo registration and index lifecycle. Does not perform indexing itself — that's the daemon's job.
+Repo resolution: tools accept `repo` (explicit path) or `cwd` (walks up to the nearest `.muninn.toml`). MCP usage is logged to `mcp.logging.dir` and aggregate counts stored in the database (`muninn stats`).
 
 ## Architecture
 
 ```
 ~/.config/muninn/config.toml          Global defaults
          │
-         ├── muninn-index              Daemon: scan, parse, embed, index
-         │     ├── tree-sitter         Source parsing (Rust/Python/JS/TS)
+         ├── muninn-index              Daemon: watch, parse, embed, index
+         │     ├── tree-sitter         Source parsing (Rust / Python / JS / TS)
          │     ├── Voyage AI / OpenAI  Embedding generation
-         │     └── PostgreSQL          Storage (pgvector + AGE + FTS)
+         │     └── PostgreSQL          Chunks + pgvector + Apache AGE graph
          │
          ├── muninn-mcp                MCP server (stdio JSON-RPC)
-         │     └── Claude Code         Calls search tools
+         │     └── Claude Code         Calls search + knowledge tools
          │
-         └── muninn                    CLI (register, unregister, list, reindex)
+         └── muninn                    CLI (add, configure, remove, reindex, …)
 
-<repo>/muninn.toml                     Per-repo overrides (optional)
+<repo>/.muninn.toml                   Per-repo overrides (optional)
+```
+
+Four-crate Rust workspace:
+
+```
+crates/
+  core/       — muninn_core library (shared by all binaries)
+  indexer/    — muninn-index daemon
+  mcp/        — muninn-mcp MCP server
+  cli/        — muninn CLI
 ```
 
 ## Formal specification
 
-`spec/Muninn.agda` — Agda specification covering core types, indexing state machine, validity predicates, query semantics, embedding dimensions, and config merge semantics.
+`spec/Muninn.agda` — Agda type-checked specification covering types, indexing state machine, validity predicates, query semantics, embedding dimension invariants, and config merge semantics.
 
 ```bash
-# Type-check the spec (from the spec/ directory)
 cd spec && nix develop --command agda Muninn.agda
 ```
 
-See [spec/README.md](spec/README.md) for details.
+Key invariants the Rust implementation maintains:
+
+- **ValidChunk** — no empty-content chunks
+- **ValidStoredEmbedding** — embedding length must equal `repo.embedding_dim`
+- **BatchOutcome** — a fully-failed batch does not advance the repo to `Indexed`
+- **DimFrozen** — embedding dimension is fixed at registration time
+- **IsolatedGraph** — chunks are written to the DB before symbols reference them
+- **UniqueRepoPaths** — enforced by a `UNIQUE` constraint on `repos.path`
+- **Concurrency / heartbeat mutex** — one indexer per repo; stale lock threshold 120 s
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
