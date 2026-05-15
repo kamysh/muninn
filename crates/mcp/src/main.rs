@@ -1,6 +1,6 @@
 mod tools;
 
-use muninn_core::{config::GlobalConfig, db, embeddings::make_backend};
+use muninn_core::{config::GlobalConfig, db, embeddings::{make_backend, expected_dimension}};
 use std::{path::{Path, PathBuf}, sync::Arc, time::{Duration, SystemTime}};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tools::SearchContext;
@@ -14,9 +14,11 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
+    let embedding_dim = expected_dimension(&cfg.embeddings);
     let ctx = Arc::new(SearchContext {
         pool,
         embedder,
+        embedding_dim,
         record_usage: cfg.mcp.record_usage,
     });
 
@@ -38,11 +40,14 @@ async fn main() -> anyhow::Result<()> {
             Err(_) => continue,
         };
 
+        let is_notification = request.get("id").is_none();
         let response = handle_request(&ctx, &request).await;
-        let mut out = serde_json::to_string(&response)?;
-        out.push('\n');
-        writer.write_all(out.as_bytes()).await?;
-        writer.flush().await?;
+        if !is_notification {
+            let mut out = serde_json::to_string(&response)?;
+            out.push('\n');
+            writer.write_all(out.as_bytes()).await?;
+            writer.flush().await?;
+        }
     }
 
     Ok(())

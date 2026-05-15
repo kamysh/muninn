@@ -31,6 +31,8 @@ pub struct KnowledgeResult {
 /// Insert or update a knowledge item for the given repo.
 /// If `id` is Some, tries to update that record; if not found, inserts with a new id.
 /// If `id` is None, always inserts.
+/// `expected_dim` is the dimension of the active embedding backend; if `embedding` is
+/// present its length must match to prevent dimension-mismatch errors at query time.
 /// Returns the persisted item (with embedding cleared — caller must re-embed if needed).
 pub async fn upsert(
     pool:          &PgPool,
@@ -41,9 +43,19 @@ pub async fn upsert(
     tags:          &[String],
     related_files: &[String],
     embedding:     Option<&[f32]>,
+    expected_dim:  usize,
 ) -> Result<KnowledgeItem> {
     anyhow::ensure!(!title.is_empty(), "knowledge title must not be empty");
     anyhow::ensure!(!body.is_empty(),  "knowledge body must not be empty");
+    if let Some(emb) = embedding {
+        anyhow::ensure!(
+            emb.len() == expected_dim,
+            "knowledge embedding dimension {} does not match configured backend dimension {}; \
+             switching backends requires re-embedding all existing knowledge items",
+            emb.len(),
+            expected_dim
+        );
+    }
 
     let record_id = id.unwrap_or_else(Uuid::new_v4);
     let emb_literal = embedding.map(|v| {

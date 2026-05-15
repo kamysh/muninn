@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub struct SearchContext {
     pub pool: PgPool,
     pub embedder: Arc<dyn EmbeddingBackend>,
+    pub embedding_dim: usize,
     pub record_usage: bool,
 }
 
@@ -246,6 +247,7 @@ pub async fn record_knowledge(
         &params.tags,
         &params.related_files,
         Some(&emb),
+        ctx.embedding_dim,
     )
     .await?;
 
