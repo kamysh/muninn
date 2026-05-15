@@ -203,6 +203,12 @@ impl GlobalConfig {
         Ok(toml::from_str(&content)?)
     }
 
+    pub fn load_from(path: &std::path::Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("cannot read config {}: {}", path.display(), e))?;
+        Ok(toml::from_str(&content)?)
+    }
+
     /// Create a template config at the default path.
     /// Returns an error if the file already exists.
     pub fn create_template() -> anyhow::Result<std::path::PathBuf> {

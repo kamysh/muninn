@@ -1,9 +1,9 @@
 use crate::{
     embeddings::EmbeddingBackend,
     graph,
-    parser::{detect_language, parse_file, chunk_file},
+    parser::{detect_language, extract_edges, parse_file, chunk_file},
     store::{upsert_chunk, delete_file_chunks},
-    types::{BatchOutcome, SymbolKind},
+    types::{BatchOutcome, StructuralEdge, SymbolKind},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -32,8 +32,8 @@ pub async fn index_file(
     };
 
     let language = detect_language(&file_path);
-    let symbols = match language {
-        Some(lang) => parse_file(&source, lang).unwrap_or_default(),
+    let symbols = match &language {
+        Some(lang) => parse_file(&source, *lang).unwrap_or_default(),
         None => vec![],
     };
 
@@ -98,6 +98,12 @@ pub async fn index_file(
 
     // Persist parsed symbols into the per-repo AGE graph (IsolatedGraph invariant:
     // chunks are persisted above before symbols reference them).
+    // Also build a range→chunk_id and name→chunk_id map for edge resolution.
+    let mut range_to_chunk: std::collections::HashMap<(u32, u32), uuid::Uuid> =
+        std::collections::HashMap::new();
+    let mut name_to_chunk: std::collections::HashMap<String, uuid::Uuid> =
+        std::collections::HashMap::new();
+
     for chunk in &chunks {
         if let Some(sym) = symbols.iter().find(|s| s.range == chunk.range) {
             let kind_str = match sym.kind {
@@ -112,6 +118,28 @@ pub async fn index_file(
                 chunk.range.start, chunk.range.end,
             ).await {
                 tracing::warn!("failed to store symbol '{}' in graph: {}", sym.name, e);
+            } else {
+                range_to_chunk.insert((chunk.range.start, chunk.range.end), chunk.id);
+                // first occurrence wins for name lookup
+                name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
+            }
+        }
+    }
+
+    // Persist structural edges (DEFINES, CALLS) derived from intra-file analysis.
+    if let Some(lang) = language {
+        let parsed_edges = extract_edges(&symbols, &source, &lang);
+        for pe in parsed_edges {
+            let from_id = range_to_chunk.get(&(pe.from_range.start, pe.from_range.end));
+            let to_id = name_to_chunk.get(&pe.to_name);
+            if let (Some(&from), Some(&to)) = (from_id, to_id) {
+                let edge = StructuralEdge { from, to, relation: pe.relation };
+                if let Err(e) = graph::upsert_edge(pool, repo_id, &edge).await {
+                    tracing::warn!(
+                        "failed to store edge {:?}→'{}': {}",
+                        pe.from_range, pe.to_name, e
+                    );
+                }
             }
         }
     }

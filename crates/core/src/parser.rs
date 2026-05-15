@@ -1,7 +1,7 @@
-use crate::types::{LineRange, SymbolKind};
+use crate::types::{LineRange, StructuralRelation, SymbolKind};
 use anyhow::Result;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Language {
     Rust,
     Python,
@@ -25,6 +25,207 @@ pub struct ParsedSymbol {
     pub name: String,
     pub kind: SymbolKind,
     pub range: LineRange,
+}
+
+/// A directed structural relationship between two symbols in the same file,
+/// identified by their line ranges (resolved to chunk_ids by the pipeline).
+#[derive(Debug, Clone)]
+pub struct ParsedEdge {
+    /// Range of the source symbol (the one that defines/calls).
+    pub from_range: LineRange,
+    /// Name of the target symbol.
+    pub to_name: String,
+    pub relation: StructuralRelation,
+}
+
+/// Extract intra-file structural edges from a parsed symbol list.
+///
+/// Produces two kinds of edges:
+/// - DEFINES: a Class/Module whose range contains a Function's range.
+/// - CALLS: call expressions found inside a Function body that name another
+///   symbol in the same file (same-file resolution only; cross-file calls
+///   are not resolved here).
+pub fn extract_edges(
+    symbols: &[ParsedSymbol],
+    source: &str,
+    language: &Language,
+) -> Vec<ParsedEdge> {
+    let mut edges = extract_defines(symbols);
+    edges.extend(extract_calls(symbols, source, language));
+    edges
+}
+
+/// DEFINES edges: a container symbol (Class/Module) defines each symbol whose
+/// range is strictly contained within it.
+fn extract_defines(symbols: &[ParsedSymbol]) -> Vec<ParsedEdge> {
+    let mut edges = Vec::new();
+    for (i, outer) in symbols.iter().enumerate() {
+        if !matches!(outer.kind, SymbolKind::Class | SymbolKind::Module) {
+            continue;
+        }
+        for (j, inner) in symbols.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if outer.range.start <= inner.range.start && inner.range.end <= outer.range.end {
+                edges.push(ParsedEdge {
+                    from_range: outer.range.clone(),
+                    to_name: inner.name.clone(),
+                    relation: StructuralRelation::Defines,
+                });
+            }
+        }
+    }
+    edges
+}
+
+/// CALLS edges: for each Function symbol, walk its subtree in the tree-sitter
+/// parse tree, find call expressions, and match callee names against other
+/// symbols in the same file.
+fn extract_calls(
+    symbols: &[ParsedSymbol],
+    source: &str,
+    language: &Language,
+) -> Vec<ParsedEdge> {
+    // Build a set of known symbol names for fast lookup.
+    let known: std::collections::HashSet<&str> =
+        symbols.iter().map(|s| s.name.as_str()).collect();
+
+    let mut parser = tree_sitter::Parser::new();
+    let ts_lang = match language {
+        Language::Rust => tree_sitter_rust::language(),
+        Language::Python => tree_sitter_python::language(),
+        Language::JavaScript => tree_sitter_javascript::language(),
+        Language::TypeScript => tree_sitter_typescript::language_typescript(),
+    };
+    if parser.set_language(&ts_lang).is_err() {
+        return vec![];
+    }
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return vec![],
+    };
+
+    let call_node_kind = match language {
+        Language::Rust => "call_expression",
+        Language::Python => "call",
+        Language::JavaScript | Language::TypeScript => "call_expression",
+    };
+
+    let mut edges = Vec::new();
+
+    for sym in symbols {
+        if sym.kind != SymbolKind::Function {
+            continue;
+        }
+        // Find the tree-sitter node that corresponds to this function's range.
+        let func_node = match find_node_at_range(tree.root_node(), source, &sym.range) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Walk the function's subtree and collect call expression callee names.
+        let callees = collect_callees(func_node, source, call_node_kind);
+        for callee in callees {
+            // Only emit edges to symbols we know exist in this file, and skip
+            // self-calls.
+            if callee != sym.name && known.contains(callee.as_str()) {
+                edges.push(ParsedEdge {
+                    from_range: sym.range.clone(),
+                    to_name: callee,
+                    relation: StructuralRelation::Calls,
+                });
+            }
+        }
+    }
+    edges
+}
+
+/// Find the tree-sitter node whose start/end lines match the given LineRange.
+fn find_node_at_range<'a>(
+    root: tree_sitter::Node<'a>,
+    _source: &str,
+    range: &LineRange,
+) -> Option<tree_sitter::Node<'a>> {
+    let target_start = (range.start as usize).saturating_sub(1); // 0-based row
+    let target_end = range.end as usize;
+
+    // Depth-first search for the node whose row span matches.
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let start_row = node.start_position().row;
+        let end_row = node.end_position().row + 1; // make inclusive end 1-past
+        if start_row == target_start && end_row == target_end {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// Collect unique callee names from call expressions within a node's subtree.
+fn collect_callees(node: tree_sitter::Node, source: &str, call_kind: &str) -> Vec<String> {
+    let mut callees = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    collect_callees_rec(node, source, call_kind, &mut callees, &mut seen);
+    callees
+}
+
+fn collect_callees_rec(
+    node: tree_sitter::Node,
+    source: &str,
+    call_kind: &str,
+    out: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if node.kind() == call_kind {
+        // The function/callee is the "function" field (Rust, JS/TS) or
+        // the first named child (Python).
+        let callee_node = node.child_by_field_name("function")
+            .or_else(|| node.named_child(0));
+
+        if let Some(cn) = callee_node {
+            // For `foo(...)` the node is an identifier; for `self.foo(...)`
+            // or `obj.method(...)` we want the last identifier child.
+            let name = extract_callee_name(cn, source);
+            if !name.is_empty() && seen.insert(name.clone()) {
+                out.push(name);
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_callees_rec(child, source, call_kind, out, seen);
+    }
+}
+
+/// Extract a simple name from a callee node.
+/// For identifiers, returns the text directly.
+/// For field expressions / attribute access (`a.b`), returns the field name (`b`).
+fn extract_callee_name(node: tree_sitter::Node, source: &str) -> String {
+    match node.kind() {
+        "identifier" | "field_identifier" => {
+            node.utf8_text(source.as_bytes())
+                .unwrap_or("")
+                .to_string()
+        }
+        // Rust: `field_expression` → last child is the method name
+        // Python: `attribute` → `attribute` field
+        // JS/TS: `member_expression` → `property` field
+        _ => {
+            let name_node = node.child_by_field_name("field")
+                .or_else(|| node.child_by_field_name("attribute"))
+                .or_else(|| node.child_by_field_name("property"));
+            name_node
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                .unwrap_or("")
+                .to_string()
+        }
+    }
 }
 
 pub fn parse_file(source: &str, language: Language) -> Result<Vec<ParsedSymbol>> {
