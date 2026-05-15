@@ -95,7 +95,22 @@ async fn main() -> anyhow::Result<()> {
             std::process::Command::new(&editor)
                 .arg(&toml_path)
                 .status()?;
-            println!("Done. Run `muninn index {}` when ready to index.", path);
+
+            // After the editor session the user has set the [embeddings] backend, so
+            // the VECTOR(n) dimension is now known.  Register the repo in the database:
+            // this creates the per-repo chunks table + AGE graph and fixes the dimension.
+            let repo_cfg = muninn_core::config::RepoConfig::load(&repo_path)?;
+            let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
+            let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
+            store::register_repo(
+                &pool,
+                &repo_path.to_string_lossy(),
+                &eff.repo_name,
+                repo_dim,
+            )
+            .await?;
+            store::notify_repos_changed(&pool).await?;
+            println!("Registered {}. Run `muninn index {}` when ready to index.", eff.repo_name, path);
         }
 
         Commands::Index { path } => {
@@ -127,14 +142,32 @@ async fn main() -> anyhow::Result<()> {
                 std::sync::Arc::from(muninn_core::embeddings::make_backend(&eff.embeddings));
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
 
-            // Register in DB (idempotent — safe to call even if already registered)
-            let repo = store::register_repo(
-                &pool,
-                &repo_path.to_string_lossy(),
-                &eff.repo_name,
-                repo_dim,
-            )
-            .await?;
+            // Enforce two-step: the repo must already be registered via `muninn register`.
+            // That command creates the DB entry + chunks table with the fixed VECTOR(n) dimension.
+            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "repo not found in database — run `muninn register {}` first",
+                    repo_path.display()
+                ))?;
+
+            // DimFrozen: reject if the stored dimension has diverged from effective config.
+            if repo.embedding_dim as usize != repo_dim {
+                anyhow::bail!(
+                    "repo '{}' was registered with embedding_dim {} but current config yields {}; \
+                     run `muninn unregister` + `muninn register` to switch backends",
+                    repo_path.display(), repo.embedding_dim, repo_dim
+                );
+            }
+
+            // IndexingPre: atomically acquire the distributed lock (CAS on indexing_heartbeat).
+            if !store::try_lock_repo(&pool, repo.id).await? {
+                anyhow::bail!(
+                    "repo '{}' is currently being indexed by another process. \
+                     Wait for it to finish, or wait 2 minutes for a stale lock to expire.",
+                    repo_path.display()
+                );
+            }
 
             println!("Indexing {} ({} dims, {} backend)…",
                 repo_path.display(), repo_dim,
@@ -144,8 +177,22 @@ async fn main() -> anyhow::Result<()> {
             let started = std::time::Instant::now();
             const MAX_PROGRESS_PATH_CHARS: usize = 80;
 
+            // Pulse the heartbeat every 60 s to keep the lock live while indexing.
+            let pool_hb = pool.clone();
+            let hb_repo_id = repo.id;
+            let heartbeat = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await; // consume the immediate first tick
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = store::pulse_heartbeat(&pool_hb, hb_repo_id).await {
+                        eprintln!("warning: heartbeat pulse failed: {}", e);
+                    }
+                }
+            });
+
             let repo_path_for_progress = repo_path.clone();
-            let outcome = muninn_core::pipeline::index_repo(
+            let index_result = muninn_core::pipeline::index_repo(
                 &pool,
                 repo.id,
                 &repo_path,
@@ -172,7 +219,13 @@ async fn main() -> anyhow::Result<()> {
                     let _ = std::io::stdout().flush();
                 },
             )
-            .await?;
+            .await;
+
+            heartbeat.abort();
+            if let Err(e) = store::release_lock(&pool, repo.id).await {
+                eprintln!("warning: release_lock failed: {}", e);
+            }
+            let outcome = index_result?;
 
             println!();
             let outcome_note = match outcome {
@@ -192,6 +245,18 @@ async fn main() -> anyhow::Result<()> {
             if !toml_path.exists() && repo.is_none() {
                 println!("No {} or registered repo found at: {}", muninn_core::config::RepoConfig::FILE_NAME, repo_path.display());
                 return Ok(());
+            }
+            // UnregisterSafe: refuse if an indexer process is actively holding the lock.
+            // Unregistering while index_repo runs would drop the chunks table out from
+            // under the writer, causing every subsequent upsert_chunk to fail.
+            if let Some(ref r) = repo {
+                if r.is_lock_live() {
+                    anyhow::bail!(
+                        "repo '{}' is currently being indexed (live lock held). \
+                         Wait for indexing to complete or stop the indexer before unregistering.",
+                        repo_path.display()
+                    );
+                }
             }
             let prompt = if toml_path.exists() {
                 format!("Delete {} and remove index data? [y/N] ", toml_path.display())
@@ -240,9 +305,15 @@ async fn main() -> anyhow::Result<()> {
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
-                sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
+                let result = sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
                     .bind(resolved.to_string_lossy().as_ref())
                     .execute(&pool).await?;
+                if result.rows_affected() == 0 {
+                    anyhow::bail!(
+                        "no registered repo found at '{}' — run `muninn list` to see registered repos",
+                        resolved.display()
+                    );
+                }
                 store::notify_repos_changed(&pool).await?;
                 println!("Marked {} for reindex. The daemon will pick it up shortly.", resolved.display());
             } else {
@@ -258,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
                 let status = r.indexed_at
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "unindexed".to_string());
-                println!("  {} — {}", r.name, status);
+                println!("  {} — {} — {}", r.name, r.path, status);
             }
         }
 
