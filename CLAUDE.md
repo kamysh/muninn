@@ -94,7 +94,12 @@ Repo resolution: tools accept `repo` (explicit path) or `cwd` (walks up to neare
 
 ### CLI (`muninn`)
 
-`register`, `unregister`, `list`, `index`, `reindex`, `status`, `stats`. Does not perform background indexing — that is the daemon's job. `register` creates `.muninn.toml` and opens `$EDITOR`.
+`add`, `configure`, `remove`, `list`, `reindex`, `status`, `stats`. Does not perform background indexing — that is the daemon's job.
+
+- `add <path>` — creates `.muninn.toml` (via `$EDITOR` in a temp file), registers the repo in the DB, and runs a foreground index in one step; fails if the repo is already registered
+- `configure <path>` — opens existing `.muninn.toml` in a temp file, validates (including DimFrozen check), writes the real file only on success, and runs a foreground reindex if the content changed; prints "No changes." otherwise
+- `remove <path>` — deletes `.muninn.toml` and all index data (refuses if a live indexing lock is held)
+- `reindex <path>` — signals the daemon to reindex (sets `indexed_at = NULL`; daemon picks it up)
 
 ## Database Schema
 
@@ -113,7 +118,7 @@ Key `repos` columns:
 - **`ValidChunk`** — no empty-content chunks (enforced in `pipeline.rs`)
 - **`ValidStoredEmbedding`** — embedding length must equal `repo.embedding_dim`; mismatch is a hard error
 - **`BatchOutcome`** — a totally-failed batch must NOT advance repo to `Indexed` state
-- **`DimFrozen`** — embedding dimension is frozen at registration; switching backends requires `unregister` + `register` + `index`
+- **`DimFrozen`** — embedding dimension is frozen at registration; switching backends requires `muninn remove` + `muninn add`
 - **`IsolatedGraph`** — chunks must be written to DB before symbols can reference them via `chunk_id`
 - **`UniqueRepoPaths`** — enforced by `UNIQUE` constraint on `repos.path`
 - **`Concurrency` / heartbeat mutex** — only one indexer may hold the lock per repo at a time; stale lock threshold is 120 s

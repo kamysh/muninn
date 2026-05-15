@@ -1654,6 +1654,7 @@ dependencies = [
  "clap",
  "muninn-core",
  "sqlx",
+ "tempfile",
  "tokio",
  "uuid",
 ]
