@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Docs
+
+- [README.md](README.md) — user-facing install guide (binaries + Docker)
+- [docs/development.md](docs/development.md) — dev shell, building, spec, architecture
+
 ## Development Environment
 
 All commands assume you are inside the Nix dev shell:
