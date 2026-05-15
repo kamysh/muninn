@@ -5,6 +5,7 @@ module Muninn.Types where
 open import Muninn.Float
 open import Data.String using (String)
 open import Data.List   using (List)
+open import Data.Bool   using (Bool; true; false)
 open import Data.Maybe  using (Maybe)
 open import Data.Nat    using (ℕ)
 
@@ -35,11 +36,13 @@ record Chunk : Set where
 
 -- A registered repository.
 record Repo : Set where
-  field id           : RepoId
-        path         : FilePath
-        name         : String
-        indexedAt    : Maybe String   -- ISO-8601 timestamp; nothing = never indexed
-        embeddingDim : ℕ             -- VECTOR(n) dimension recorded at registration time
+  field id                : RepoId
+        path              : FilePath
+        name              : String
+        indexedAt         : Maybe String   -- ISO-8601 timestamp; nothing = never indexed
+        everIndexed       : Bool           -- true after the first successful index; survives reindex reset
+        embeddingDim      : ℕ             -- VECTOR(n) dimension recorded at registration time
+        indexingHeartbeat : Maybe String   -- NULL = unlocked; just hb = lock held, last heartbeat at hb
 
 -- A single result returned by a search query.
 record SearchResult : Set where

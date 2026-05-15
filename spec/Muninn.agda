@@ -13,16 +13,18 @@
 --   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
 --   Muninn.Config     — GlobalConfig, RepoConfig, EffectiveConfig, merge, DimFrozen, discovery
 --   Muninn.Cli        — CLI command AST, argument constraints, pre/postconditions
---   Muninn.Knowledge  — KnowledgeItem, validity invariants, repo scoping, search bounds
+--   Muninn.Knowledge     — KnowledgeItem, validity invariants, repo scoping, search bounds
+--   Muninn.Concurrency   — heartbeat-based distributed mutex, lock acquisition, watcher eviction
 module Muninn where
 
-open import Muninn.Float      public
-open import Muninn.Types      public
-open import Muninn.Graph      public
-open import Muninn.Storage    public
-open import Muninn.Index      public
-open import Muninn.Search     public
-open import Muninn.Embeddings public
-open import Muninn.Config     public
-open import Muninn.Cli        public
-open import Muninn.Knowledge  public
+open import Muninn.Float        public
+open import Muninn.Types        public
+open import Muninn.Graph        public
+open import Muninn.Storage      public
+open import Muninn.Index        public
+open import Muninn.Search       public
+open import Muninn.Embeddings   public
+open import Muninn.Config       public
+open import Muninn.Cli          public
+open import Muninn.Knowledge    public
+open import Muninn.Concurrency  public
