@@ -20,9 +20,27 @@ pub struct Repo {
     pub path: String,
     pub name: String,
     pub indexed_at: Option<DateTime<Utc>>,
+    /// True after the first successful index; survives reindex reset.
+    /// Used by the daemon to distinguish "never indexed" from "needs reindex".
+    pub ever_indexed: bool,
     /// Embedding vector dimension used when this repo was registered.
     /// Authoritative: the per-repo chunks table was created with VECTOR(embedding_dim).
     pub embedding_dim: u32,
+    /// Heartbeat-based distributed mutex. NULL = unlocked. non-NULL = locked;
+    /// holder pulses every 60 s. Stale (dead holder) if older than 2 minutes.
+    /// Spec: Muninn.Concurrency.
+    pub indexing_heartbeat: Option<DateTime<Utc>>,
+}
+
+impl Repo {
+    /// True if the indexing lock is currently held by a live process.
+    /// A heartbeat older than 2 minutes means the holder is dead (stale lock).
+    pub fn is_lock_live(&self) -> bool {
+        match self.indexing_heartbeat {
+            None => false,
+            Some(hb) => (Utc::now() - hb) < chrono::Duration::seconds(120),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

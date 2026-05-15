@@ -26,7 +26,7 @@ pub async fn register_repo(
         INSERT INTO repos (id, path, name, indexed_at, embedding_dim)
         VALUES ($1, $2, $3, NULL, $4)
         ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name
-        RETURNING id, path, name, indexed_at, embedding_dim
+        RETURNING id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat
         "#,
     )
     .bind(Uuid::new_v4())
@@ -140,7 +140,7 @@ pub async fn delete_repo(pool: &PgPool, repo_id: Uuid) -> Result<()> {
 
 pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>> {
     let row = sqlx::query(
-        r#"SELECT id, path, name, indexed_at, embedding_dim FROM repos WHERE path = $1"#,
+        r#"SELECT id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat FROM repos WHERE path = $1"#,
     )
     .bind(path)
     .fetch_optional(pool)
@@ -151,7 +151,7 @@ pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>>
 
 pub async fn list_repos(pool: &PgPool) -> Result<Vec<Repo>> {
     let rows =
-        sqlx::query(r#"SELECT id, path, name, indexed_at, embedding_dim FROM repos ORDER BY name"#)
+        sqlx::query(r#"SELECT id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat FROM repos ORDER BY name"#)
             .fetch_all(pool)
             .await?;
 
@@ -169,7 +169,7 @@ pub async fn notify_repos_changed(pool: &PgPool) -> Result<()> {
 }
 
 pub async fn mark_indexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexed_at = NOW() WHERE id = $1"#)
+    sqlx::query(r#"UPDATE repos SET indexed_at = NOW(), ever_indexed = TRUE WHERE id = $1"#)
         .bind(repo_id)
         .execute(pool)
         .await?;
@@ -279,6 +279,46 @@ pub async fn chunk_exists(pool: &PgPool, repo_id: Uuid, chunk_id: Uuid) -> Resul
     Ok(exists)
 }
 
+// ---- indexing lock ----------------------------------------------------------
+
+/// Atomically acquire the indexing lock for a repo (CAS on indexing_heartbeat).
+/// Returns true if the lock was acquired, false if held by a live process.
+/// Stale locks (heartbeat > 2 min old) are taken over automatically.
+/// Spec: Muninn.Concurrency.CanAcquire / try_lock_repo.
+pub async fn try_lock_repo(pool: &PgPool, repo_id: Uuid) -> Result<bool> {
+    let result = sqlx::query(
+        r#"UPDATE repos
+              SET indexing_heartbeat = NOW()
+            WHERE id = $1
+              AND (indexing_heartbeat IS NULL
+                   OR indexing_heartbeat < NOW() - INTERVAL '2 minutes')"#,
+    )
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Release the indexing lock. Always call this in a finally-equivalent after
+/// index_repo completes (success or failure).
+pub async fn release_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NULL WHERE id = $1"#)
+        .bind(repo_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Pulse the heartbeat to keep the lock live. Call every 60 s while index_repo
+/// is running. Staleness window is 2 min, so two missed pulses = stale.
+pub async fn pulse_heartbeat(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NOW() WHERE id = $1"#)
+        .bind(repo_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
@@ -287,6 +327,8 @@ fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
         path: row.try_get::<String, _>("path")?,
         name: row.try_get::<String, _>("name")?,
         indexed_at: row.try_get::<Option<DateTime<Utc>>, _>("indexed_at")?,
+        ever_indexed: row.try_get::<bool, _>("ever_indexed")?,
         embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
+        indexing_heartbeat: row.try_get::<Option<DateTime<Utc>>, _>("indexing_heartbeat")?,
     })
 }
