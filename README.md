@@ -2,128 +2,59 @@
 
 > *Muninn* (Old Norse: "memory") — one of Odin's two ravens, sent out each day to observe the world and return with knowledge.
 
-Full-text, semantic, and structural (graph) code search for [Claude Code](https://claude.ai/code) and any other MCP client. Index your repositories once; search them from any AI assistant.
+Code search for [Claude Code](https://claude.ai/code). Index your repositories once; ask questions about them from anywhere.
 
-## How it works
+## What it does
 
-Three components work together:
+Muninn indexes your git repositories into a local database and exposes search tools to Claude Code. When you ask about your codebase, Claude Code queries muninn instead of reading files line by line. You get semantic search (meaning-based), full-text search (keyword-based), and graph traversal (who calls what, what imports where) — all running on your own machine.
 
-- **`muninn-index`** — daemon that watches your repos for changes and indexes them into PostgreSQL
-- **`muninn-mcp`** — MCP server that exposes search tools to Claude Code (or any MCP client)
-- **`muninn`** — CLI to register repos and manage the index
+Three pieces work together: `muninn` (the CLI), `muninn-index` (a background daemon that watches repos for file changes and keeps the index current), and `muninn-mcp` (the MCP server Claude Code talks to).
 
-## Prerequisites
+## Privacy
 
-- [Docker](https://docs.docker.com/get-docker/) — for the database
-- [Claude Code](https://claude.ai/code) — or any other MCP client
+Everything runs locally. No source code, no file tree structure, no graph data ever leaves your machine. If you choose Voyage AI or OpenAI as the embedding backend, short text chunks are sent to those services to generate vector embeddings — but your source files are never transmitted. If you use the local backend, nothing goes outside at all.
 
-## Installation
+## Which guide?
 
-### 1. Start the database
-
-```bash
-docker run -d \
-  --name muninn-postgres \
-  --restart always \
-  -e POSTGRES_PASSWORD=changeme \
-  -p 127.0.0.1:5432:5432 \
-  -v muninn_data:/var/lib/postgresql/data \
-  kamysh/postgres-ai:latest
-```
-
-This image ships with [pgvector](https://github.com/pgvector/pgvector) and [Apache AGE](https://age.apache.org/) pre-installed and pre-configured.
-
-### 2. Download muninn binaries
-
-Pick the archive for your platform from the [latest release](https://github.com/kamysh/muninn/releases/latest):
-
-| Platform | File |
-|----------|------|
-| Linux x86_64 | `muninn-linux-amd64.tar.gz` |
-| Linux ARM64 | `muninn-linux-arm64.tar.gz` |
-| macOS Apple Silicon | `muninn-darwin-arm64.tar.gz` |
-| macOS Intel | `muninn-darwin-amd64.tar.gz` |
-
-```bash
-# Example for Linux x86_64
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-linux-amd64.tar.gz \
-  | tar -xz -C ~/.local/bin
-chmod +x ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
-```
-
-### 3. Configure
-
-```bash
-muninn config
-```
-
-This creates `~/.config/muninn/config.toml` (or opens the existing one) in `$EDITOR`. Fill in your database credentials and embedding API key (see below), then save. When you close the editor, muninn validates the config, connects to the database, and applies all schema migrations automatically — no `sqlx-cli` or separate migration step required.
-
-**Embedding backends** — pick one:
-
-| Backend | Model | API key |
-|---------|-------|---------|
-| [Voyage AI](https://www.voyageai.com) | `voyage-code-3` | [dash.voyageai.com](https://dash.voyageai.com) |
-| [OpenAI](https://platform.openai.com) | `text-embedding-3-small` | [platform.openai.com](https://platform.openai.com) |
-| Local (no key) | BGE-Base-EN-v1.5 | — |
-
-### 4. Start the indexer daemon
-
-```bash
-muninn-index &
-```
-
-Or as a systemd user service:
-
-```bash
-cp muninn-index.service ~/.config/systemd/user/
-systemctl --user enable --now muninn-index
-```
-
-### 5. Add Claude Code integration
-
-```bash
-claude mcp add --scope user muninn ~/.local/bin/muninn-mcp
-```
-
-### 6. Add a repository
-
-```bash
-muninn add /path/to/your/repo
-```
-
-This opens your editor to configure the repo, then indexes it in the foreground. The daemon takes over afterward, watching for file changes.
+| I want to... | Go here |
+|---|---|
+| Get up and running with Docker (easiest path) | [docs/get-started.md](docs/get-started.md) |
+| Use my own existing PostgreSQL instance | [docs/own-database.md](docs/own-database.md) |
+| Build from source or contribute | [docs/development.md](docs/development.md) |
 
 ## CLI reference
 
-```
-muninn add <path>           Register a repo, configure it, and run the initial index
-muninn configure <path>     Edit .muninn.toml; reindexes if content changed
-muninn remove <path>        Delete .muninn.toml and all index data
-muninn list                 List registered repos and their index status
-muninn reindex [<path>]     Signal the daemon to reindex (--all for all repos)
-muninn status               Show registered repos and index state
-muninn stats [--days N]     Show MCP tool usage statistics
-muninn config               Create or edit ~/.config/muninn/config.toml; applies DB migrations
-```
+| Command | What it does |
+|---|---|
+| `muninn config` | Create or edit `~/.config/muninn/config.toml`; validates and applies DB schema on save |
+| `muninn add <path>` | Register a repo, open editor for per-repo config, run initial index |
+| `muninn configure <path>` | Edit per-repo config; reindexes if anything changed |
+| `muninn remove <path>` | Remove a repo from the index and delete all its data |
+| `muninn list` | List registered repos and index status |
+| `muninn reindex [<path>] [--all]` | Mark repo(s) for re-indexing by the daemon |
+| `muninn status` | Show repos and current index state |
+| `muninn stats [--days N]` | Show MCP tool usage statistics |
 
-## MCP search tools
+## MCP tools
 
-Once connected, Claude Code has access to:
+Once muninn is connected to Claude Code, these tools are available:
 
-| Tool | Description |
-|------|-------------|
+| Tool | What it does |
+|---|---|
 | `search_hybrid` | Semantic + full-text search with RRF ranking |
-| `search_fulltext` | PostgreSQL keyword search |
+| `search_fulltext` | Keyword search |
 | `search_semantic` | Vector similarity search |
-| `search_structural` | Graph traversal — callers, callees, imports, inheritors |
+| `search_structural` | Graph traversal: callers, callees, imports, inheritors |
 | `record_knowledge` | Store a note anchored to your codebase |
 | `search_knowledge` | Search over stored notes |
+| `delete_knowledge` | Remove a stored note |
+| `list_knowledge` | List stored notes |
 
 ## Further reading
 
-- [Building from source / development setup](docs/development.md)
-- [Configuration reference](docs/configuration.md)
+- [docs/upgrading.md](docs/upgrading.md) — upgrade binaries and apply migrations
+- [docs/configuration.md](docs/configuration.md) — full config file reference
+- [docs/uninstall.md](docs/uninstall.md) — full removal
 
 ## License
 

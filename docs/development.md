@@ -16,117 +16,198 @@ nix develop
 The shell sets:
 - `DATABASE_URL=postgresql://localhost/muninn_dev`
 - `TEST_DATABASE_URL=postgresql://localhost/muninn_test`
-- `ORT_DYLIB_PATH` — path to the ONNX runtime for the local embedding backend
+- `ORT_DYLIB_PATH` — path to the ONNX runtime shared library, needed by the local embedding backend
 
 ## Database setup
 
 ```bash
 createdb muninn_dev
+createdb muninn_test
 sqlx migrate run
 ```
 
 ## Common commands
 
-```bash
-# Build
-cargo build
-cargo build --release
+| Task | Command |
+|------|---------|
+| Build (debug) | `cargo build` |
+| Build (release) | `cargo build --release` |
+| Test (all) | `cargo nextest run` |
+| Test (single crate) | `cargo nextest run -p muninn_core` |
+| Test (single test by name) | `cargo nextest run -p muninn_core -- types::tests::line_range_valid_when_start_equals_end` |
+| Lint | `cargo clippy -- -D warnings` |
+| Format | `cargo fmt` |
+| Watch mode | `cargo watch -x build` |
+| Regenerate offline query cache | `cargo sqlx prepare --workspace` |
+| Apply pending migrations | `sqlx migrate run` |
+| Roll back one migration | `sqlx migrate revert` |
+| Type-check Agda spec | `cd spec && agda Muninn.agda` |
+| Build (dynamically linked) | `nix build` |
+| Build (fully static) | `nix build .#muninn-static` |
 
-# Test
-cargo nextest run
-cargo nextest run -p muninn_core          # single crate
-cargo nextest run -- <test_name>          # single test
+After changing any `sqlx::query!` macro, run `cargo sqlx prepare --workspace` to update the offline query cache (`.sqlx/` directory). This cache lets CI compile without a live database. The CI build will fail if the cache is stale — commit the updated `.sqlx/` files along with your SQL changes.
 
-# Lint and format
-cargo clippy -- -D warnings
-cargo fmt
+---
 
-# Watch mode
-cargo watch -x build
+## Architecture
 
-# After changing SQL queries, regenerate the offline query cache
-cargo sqlx prepare --workspace
+This section explains the non-obvious design decisions. Reading code is faster once you understand why things are shaped the way they are.
 
-# Database migrations
-sqlx migrate run      # apply pending
-sqlx migrate revert   # roll back one
+### Why the indexer is database-driven
+
+The indexer daemon does not scan the filesystem for repos. It queries the `repos` table. This means adding or removing a repo via the CLI takes effect in the daemon within seconds — the CLI sends `NOTIFY muninn_repos_changed` after any mutation, and the daemon wakes up and re-queries. There is also a 60-second fallback poll because NOTIFY is not durable: it is delivered only to clients connected at the moment the notification fires, so a daemon that was down during a CLI operation would miss it entirely.
+
+When the daemon receives a repo change (or the 60-second timer fires), it calls `scan_and_dispatch`, which queries all registered repos and makes one of two decisions per repo:
+
+- If the repo has `indexed_at IS NOT NULL` and no watcher running, spawn a file-watcher task (`notify` crate).
+- If `indexed_at IS NULL` and `ever_indexed` is true, abort the existing watcher (if any) and spawn a full reindex task. The watcher is aborted first to prevent concurrent chunk mutations in the same table.
+
+The `ever_indexed` column distinguishes "freshly registered, never indexed" (skip — the user must run `muninn add` which does the first index in the foreground) from "was indexed, then reset via `muninn reindex`" (daemon must act).
+
+### Why per-repo chunk tables
+
+Each registered repo gets its own PostgreSQL table, named `chunks_<uuid>` where `uuid` is the repo's primary key in the `repos` table. Each table has a `VECTOR(N)` column where N is the embedding dimension chosen at registration time.
+
+This design is forced by how vector columns work: a `VECTOR(768)` column cannot store a `VECTOR(1024)` embedding — the type is parameterised by dimension. Because different repos can use different embedding backends, and different backends produce different dimensions (local=768, voyage=1024, openai=1536), a single shared `chunks` table is not viable unless all repos use the same dimension. The per-repo table design sidesteps this entirely.
+
+The consequence is the DimFrozen invariant: once a repo's embedding dimension is recorded in `repos.embedding_dim`, it cannot change without dropping and recreating the table. `muninn remove` + `muninn add` is the supported migration path. The dimension is recorded at `muninn add` time by calling `expected_dimension(&eff.embeddings)`, which maps (backend, model) → fixed integer. This function must return a stable value — see the contributor note in the Embedding backends section.
+
+Per-repo AGE graphs follow the same pattern: each repo gets a graph named `code_graph_<uuid>`, created alongside the chunks table in `store::register_repo`.
+
+### The distributed indexer lock
+
+`repos.indexing_heartbeat` is a lightweight distributed mutex. Before starting to index a repo, the daemon calls `store::try_lock_repo`, which does a conditional update:
+
+```sql
+UPDATE repos
+   SET indexing_heartbeat = NOW()
+ WHERE id = $1
+   AND (indexing_heartbeat IS NULL
+        OR indexing_heartbeat < NOW() - INTERVAL '2 minutes')
 ```
+
+If `rows_affected == 1`, the lock was acquired. If `0`, another process holds a live lock and the repo is skipped for this cycle.
+
+During indexing, a background task pulses the heartbeat every 60 seconds. The stale threshold is 120 seconds — exactly 2× the pulse interval. This allows one missed pulse (e.g. due to a transient network delay to the database) before the lock is declared stale and can be taken over by another indexer. The lock is released unconditionally in a finally-equivalent after `index_repo` completes (success or error).
+
+`muninn remove` checks `repo.is_lock_live()` before deleting any index data. If the lock is live, removal is refused. This prevents a race where an in-progress indexer writes chunks into a table that the CLI just deleted.
+
+### How repo resolution works in muninn-mcp
+
+MCP tools accept two ways to identify a repo: `repo` (an explicit absolute path) or `cwd` (the caller's working directory). When `cwd` is provided, `repo_resolver::find_repo_root` walks up the directory tree until it finds `.muninn.toml`. This is why the marker file must sit at the repo root — it is the anchor for resolution.
+
+The MCP server does not cache a list of registered repos in memory. It resolves the repo root from the filesystem marker on every query, then looks up the repo record in the database by path. The decoupling means the MCP server starts instantly with no warmup query and never gets out of sync with the `repos` table.
+
+### Config merge semantics
+
+The merge logic in `EffectiveConfig::merge(global, repo_cfg, dir_name)` is section-level, not key-level. If `repo_cfg.embeddings` is present, it entirely replaces `global.embeddings`. If it is absent, `global.embeddings` is used as-is. Individual key merging is not supported — partial overrides create confusing precedence interactions and are hard to reason about statically.
+
+All config structs carry `#[serde(deny_unknown_fields)]`. Unknown keys in TOML are rejected at parse time with a clear error. Typos do not silently inherit the global value.
+
+### The Agda formal specification
+
+`spec/Muninn.agda` and its submodules (`spec/Muninn/Types.agda`, `spec/Muninn/Index.agda`, `spec/Muninn/Concurrency.agda`) are a machine-checked formal model of the system's core invariants. The spec does not generate code and is not wired into the build. It is type-checked with Agda separately and exists to:
+
+1. Make invariants precise and checkable — "no empty chunks" is a theorem, not a comment in a README.
+2. Catch implementation drift — when you change Rust code that touches an invariant, updating and re-checking the spec verifies that the invariant still holds as stated.
+
+Run the spec check (without `--safe`, since `Concurrency.agda` has intentional postulates):
+
+```bash
+cd spec && agda Muninn.agda
+```
+
+Invariants formalised (these must match the implementation):
+
+| Invariant | What it says | Where enforced |
+|-----------|-------------|----------------|
+| `ValidChunk` | No empty-content chunks | `store::upsert_chunk`, `pipeline.rs` |
+| `ValidStoredEmbedding` | Embedding length must equal `repos.embedding_dim` | `pipeline.rs` |
+| `BatchOutcome` | A totally-failed batch must not advance repo to Indexed state | `pipeline.rs` |
+| `DimFrozen` | Embedding dimension is immutable after registration | `store::register_repo`, indexer DimFrozen check |
+| `IsolatedGraph` | Chunks written to DB before symbols can reference them | `pipeline.rs` ordering |
+| `UniqueRepoPaths` | One registration per filesystem path | `UNIQUE` constraint on `repos.path` |
+| `Concurrency` | One indexer per repo; stale lock threshold 120 s | `store::try_lock_repo`, heartbeat pulse |
+
+When you make a change touching any of these, update the spec and re-run `agda Muninn.agda`. Use the `spec-reconcile` Claude Code skill for systematic audits.
+
+---
+
+## Embedding backends
+
+The `EmbeddingBackend` trait lives in `crates/core/src/embeddings/`. `make_backend(&eff.embeddings)` dispatches to the correct implementation. `expected_dimension(&eff.embeddings)` returns the fixed output dimension for a (backend, model) pair.
+
+| Backend | Model | Dims |
+|---------|-------|------|
+| `local` | BGE-Base-EN-v1.5 | 768 |
+| `voyage` | voyage-code-3 | 1024 |
+| `openai` | text-embedding-3-small | 1536 |
+
+**Critical constraint for contributors:** `expected_dimension` must return a stable value for a given (backend, model) pair. Changing this value for an existing combination would invalidate all repos registered with that combination — their stored `embedding_dim` would no longer match what the backend produces, and every query would fail the DimFrozen check. If you add a new model or backend, the dimension is determined by what the embedding API actually returns and must match exactly.
+
+---
+
+## Adding a language parser
+
+Parsers live in `crates/core/src/parser.rs`. Each language needs four additions:
+
+1. A tree-sitter grammar crate dependency in `crates/core/Cargo.toml`
+2. A match arm in `detect_language` mapping file extensions to a `Language` enum value
+3. A match arm in `chunk_file` mapping `Language` to a tree-sitter query for chunking
+4. A match arm in `extract_edges` mapping `Language` to a tree-sitter query for symbol edges
+
+Run `cargo nextest run -p muninn_core` after adding a parser. Tests in `parser.rs` cover round-trip parse → chunk → edge extraction.
+
+---
+
+## Adding an embedding backend
+
+1. Add a variant to `EmbeddingBackend` enum in `crates/core/src/config.rs`
+2. Implement the `EmbeddingBackend` trait for the new backend in `crates/core/src/embeddings/`
+3. Add the dispatch case to `make_backend`
+4. Add the dimension to `expected_dimension` — this value is permanent once the backend ships
+5. Add the backend name to `docs/configuration.md`
+
+---
+
+## Database migrations
+
+Migrations are SQL files in `migrations/`, numbered sequentially (`001_initial.sql` through the latest). They are embedded into the binary at compile time:
+
+```rust
+sqlx::migrate!("../../migrations").run(pool).await?
+```
+
+Migrations run automatically when `muninn config` is called. Applied migrations are tracked in `_sqlx_migrations`. Migrations are idempotent — re-running is always safe.
+
+After adding or changing a `sqlx::query!` macro anywhere in the workspace:
+
+```bash
+cargo sqlx prepare --workspace
+```
+
+This regenerates `.sqlx/` — the offline query cache that allows CI to compile without a live database. Commit the updated `.sqlx/` files alongside your SQL changes.
+
+---
 
 ## Building distributable binaries
 
 ```bash
-# Dynamically linked — install via nix profile, do not copy the binary directly
+# Dynamically linked — requires nix profile install to run
 nix build
 
-# Fully static (Linux: musl; macOS: links only against libSystem)
+# Fully static (musl on Linux)
 # Safe to copy anywhere, no Nix store dependencies
 nix build .#muninn-static
 ```
 
 Binaries appear in `result/bin/`: `muninn`, `muninn-index`, `muninn-mcp`.
 
-## Install locally via Nix profile
+Do not copy the dynamically linked binary directly — its shared library dependencies are in the Nix store and will not be found outside it. Use `nix profile install` instead:
 
 ```bash
 nix profile install .
 claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
 ```
 
-The Nix profile is a GC root — the binaries' shared library dependencies in the Nix store will not be garbage-collected. Do **not** use `nix build` + manual copy for the dynamically linked build.
-
-## Formal specification
-
-The Agda specification in `spec/Muninn.agda` type-checks the core invariants. Run it without `--safe` (the Concurrency module has intentional postulates):
-
-```bash
-cd spec && agda Muninn.agda
-```
-
-Key invariants formalised in the spec that the Rust implementation must maintain:
-
-- **ValidChunk** — no empty-content chunks
-- **ValidStoredEmbedding** — embedding length must equal `repo.embedding_dim`
-- **BatchOutcome** — a fully-failed batch does not advance the repo to `Indexed`
-- **DimFrozen** — embedding dimension is fixed at `muninn add` time
-- **IsolatedGraph** — chunks written to DB before symbols can reference them
-- **UniqueRepoPaths** — enforced by `UNIQUE` constraint on `repos.path`
-- **Concurrency / heartbeat mutex** — one indexer per repo; stale lock threshold 120 s
-
-Use the `spec-reconcile` or `spec-audit` Claude Code skills to audit and fix spec/implementation discrepancies.
-
-## Embedding backends
-
-| Backend | Model | Dims | Notes |
-|---------|-------|------|-------|
-| `voyage` | `voyage-code-3` | 1024 | Best quality for code |
-| `openai` | `text-embedding-3-small` | 1536 | |
-| `local` | BGE-Base-EN-v1.5 | 768 | No API key; ONNX on CPU |
-
-The embedding dimension is frozen at `muninn add` time (**DimFrozen**). To switch backends:
-
-```bash
-muninn remove /path/to/repo
-muninn add    /path/to/repo
-```
-
-## Architecture
-
-Four-crate Rust workspace sharing a PostgreSQL database (pgvector + Apache AGE):
-
-```
-crates/
-  core/       — muninn_core library (shared by all binaries)
-  indexer/    — muninn-index daemon
-  mcp/        — muninn-mcp MCP server
-  cli/        — muninn CLI
-```
-
-### Indexer daemon
-
-DB-driven: discovers repos from the `repos` table, not by scanning the filesystem. Receives `NOTIFY muninn_repos_changed` when repos change, with a 60 s fallback poll. Uses a distributed lock (`indexing_heartbeat` column, pulsed every 60 s, stale after 120 s) so only one indexer operates on a repo at a time.
-
-### Configuration
-
-- Global: `~/.config/muninn/config.toml` — created by `muninn config`
-- Per-repo: `<repo-root>/.muninn.toml` — created by `muninn add`; all sections optional
-- `EffectiveConfig::merge(global, repo_cfg, dir_name)` is the single source of truth for runtime config
+The Nix profile is a GC root, so the Nix store entries for the binaries and their dependencies will not be garbage-collected.
