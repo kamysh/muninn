@@ -254,11 +254,7 @@ const CONFIG_TEMPLATE: &str = r#"# ~/.config/muninn/config.toml — muninn globa
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # muninn stores chunks, embeddings, and the symbol graph in PostgreSQL.
-# Make sure the database exists before running muninn:
-#
-#   createdb muninn
-#   psql muninn -c 'CREATE EXTENSION IF NOT EXISTS vector;'
-#   psql muninn -c 'CREATE EXTENSION IF NOT EXISTS age;'
+# See docs/get-started.md — Step 2 shows how to create the database and user.
 
 [database]
 host   = "localhost"

@@ -16,13 +16,12 @@ By the end you will have muninn's search tools available inside Claude Code, wat
 docker run -d \
   --name muninn-postgres \
   --restart always \
-  -e POSTGRES_PASSWORD=changeme \
   -p 127.0.0.1:5432:5432 \
   -v muninn_data:/var/lib/postgresql/data \
   kamysh/postgres-ai:latest
 ```
 
-This image is pre-configured for muninn — no extension setup required inside the container.
+This image has pgvector, Apache AGE, uuid-ossp, and pgcrypto pre-installed in every database. No extension setup required.
 
 If you prefer Docker Compose, create a `docker-compose.yml`:
 
@@ -32,8 +31,6 @@ services:
     image: kamysh/postgres-ai:latest
     container_name: muninn-postgres
     restart: always
-    environment:
-      POSTGRES_PASSWORD: changeme
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -45,69 +42,46 @@ volumes:
 
 Then run `docker compose up -d`.
 
-Verify the container is running:
+## Step 2: Create a database and user
 
-```bash
-docker ps
-```
-
-You should see `muninn-postgres` in the list with status `Up`.
-
-## Step 2: Create a database user
-
-The container's internal admin account is only accessible from inside the container — that is intentional. We create a separate account for muninn to use from outside.
-
-**First, set up `~/.pgpass`.** PostgreSQL reads passwords from a file called `~/.pgpass` rather than from application config — this keeps passwords out of config files that might get committed to git.
-
-Create (or append to) `~/.pgpass`:
+Add a line to `~/.pgpass` with the username, database name, and password you want — these can be anything:
 
 ```
-# ~/.pgpass
-# Format: hostname:port:database:username:password
+# ~/.pgpass — format: hostname:port:database:username:password
 localhost:5432:muninn:alice:yourpassword
 ```
 
-Replace `alice` and `yourpassword` with the username and password you want to create. Then lock down the file's permissions — PostgreSQL ignores `~/.pgpass` if it is world-readable:
+Lock down its permissions (PostgreSQL ignores the file if it is world-readable):
 
 ```bash
 chmod 600 ~/.pgpass
 ```
 
-**Next, create the user and database inside the container:**
+Create the user and database with a single command (the `postgres` superuser is only accessible from inside the container):
 
 ```bash
-docker exec -it muninn-postgres psql -U postgres
-```
-
-In the psql prompt that opens, run:
-
-```sql
+docker exec muninn-postgres psql -U postgres -d postgres <<'SQL'
 CREATE USER alice WITH PASSWORD 'yourpassword';
 CREATE DATABASE muninn OWNER alice;
 \c muninn
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS age;
+GRANT ALL PRIVILEGES ON DATABASE muninn TO alice;
+GRANT USAGE, CREATE ON SCHEMA public TO alice;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO alice;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO alice;
 GRANT USAGE ON SCHEMA ag_catalog TO alice;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO alice;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO alice;
-\q
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA ag_catalog TO alice;
+SQL
 ```
 
-Replace `alice` and `yourpassword` with the same values you put in `~/.pgpass`.
+Replace `alice`, `yourpassword`, and `muninn` with the same values you put in `~/.pgpass`.
 
 **Verify the connection works:**
 
 ```bash
 psql -h localhost -U alice -d muninn -c '\conninfo'
 ```
-
-Expected output:
-
-```
-You are connected to database "muninn" as user "alice" on host "localhost" at port "5432".
-```
-
-If that works, you are done with the database setup.
 
 ## Step 3: Download muninn
 
