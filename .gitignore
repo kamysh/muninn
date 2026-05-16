@@ -3,3 +3,4 @@
 /.muninn.toml
 config.toml
 result
+.claude/
