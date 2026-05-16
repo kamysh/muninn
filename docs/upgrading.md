@@ -9,7 +9,12 @@ Linux (systemd):
 systemctl --user stop muninn-index
 ```
 
-macOS / background process:
+macOS (launchd):
+```bash
+launchctl unload ~/Library/LaunchAgents/org.muninn.index.plist
+```
+
+macOS (background process):
 ```bash
 pkill muninn-index
 ```
@@ -45,7 +50,12 @@ Linux (systemd):
 systemctl --user start muninn-index
 ```
 
-macOS / background:
+macOS (launchd):
+```bash
+launchctl load ~/Library/LaunchAgents/org.muninn.index.plist
+```
+
+macOS (background process):
 ```bash
 muninn-index &
 ```

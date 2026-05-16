@@ -25,7 +25,13 @@ Linux (systemd):
 systemctl --user disable --now muninn-index
 ```
 
-macOS / background process:
+macOS (launchd):
+```bash
+launchctl unload ~/Library/LaunchAgents/org.muninn.index.plist
+rm ~/Library/LaunchAgents/org.muninn.index.plist
+```
+
+macOS (background process):
 ```bash
 pkill muninn-index
 ```

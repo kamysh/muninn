@@ -238,13 +238,59 @@ systemctl --user status muninn-index
 
 The status output should show `active (running)`.
 
-**macOS / quick background start:**
+**macOS — launchd agent (recommended, auto-starts on login):**
+
+Create the plist:
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+cat > ~/Library/LaunchAgents/org.muninn.index.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.muninn.index</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOUR_USERNAME/.local/bin/muninn-index</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RUST_LOG</key>
+    <string>info</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/muninn-index.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/muninn-index.log</string>
+</dict>
+</plist>
+EOF
+```
+
+Replace `YOUR_USERNAME` with your macOS username (`whoami`). Then load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/org.muninn.index.plist
+```
+
+Check it started:
+```bash
+launchctl list | grep muninn
+```
+A PID in the first column means it is running.
+
+**macOS — quick background start (no auto-restart):**
 
 ```bash
 muninn-index &
 ```
-
-Launchd agent setup for auto-start on login is not yet documented. Contributions welcome.
 
 ## Step 6: Connect Claude Code
 
