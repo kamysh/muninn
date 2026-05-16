@@ -179,12 +179,29 @@ impl GlobalConfig {
         std::path::PathBuf::from(home).join(".config/muninn/config.toml")
     }
 
+    pub fn template_content() -> &'static str {
+        CONFIG_TEMPLATE
+    }
+
+    pub fn from_str(content: &str) -> anyhow::Result<Self> {
+        toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.database.host.trim().is_empty(), "[database] host must not be empty");
+        anyhow::ensure!(!self.database.dbname.trim().is_empty(), "[database] dbname must not be empty");
+        anyhow::ensure!(!self.database.user.trim().is_empty(), "[database] user must not be empty");
+        anyhow::ensure!(self.embeddings.batch_size > 0, "[embeddings] batch_size must be greater than 0");
+        anyhow::ensure!(!self.embeddings.model.trim().is_empty(), "[embeddings] model must not be empty");
+        Ok(())
+    }
+
     pub fn load() -> anyhow::Result<Self> {
         let path = Self::config_path();
         if !path.exists() {
             anyhow::bail!(
                 "no config file found at {}\n\
-                 Run `muninn config init` to create one.",
+                 Run `muninn config` to create one.",
                 path.display()
             );
         }

@@ -99,8 +99,9 @@ Repo resolution: tools accept `repo` (explicit path) or `cwd` (walks up to neare
 
 ### CLI (`muninn`)
 
-`add`, `configure`, `remove`, `list`, `reindex`, `status`, `stats`. Does not perform background indexing — that is the daemon's job.
+`config`, `add`, `configure`, `remove`, `list`, `reindex`, `status`, `stats`. Does not perform background indexing — that is the daemon's job.
 
+- `config` — creates `~/.config/muninn/config.toml` if absent (opens template), or edits the existing one; validates with the same edit-loop pattern as per-repo config; runs DB migrations on success; sets file permissions to 0600
 - `add <path>` — creates `.muninn.toml` (via `$EDITOR` in a temp file), registers the repo in the DB, and runs a foreground index in one step; fails if the repo is already registered
 - `configure <path>` — opens existing `.muninn.toml` in a temp file, validates (including DimFrozen check), writes the real file only on success, and runs a foreground reindex if the content changed; prints "No changes." otherwise
 - `remove <path>` — deletes `.muninn.toml` and all index data (refuses if a live indexing lock is held)
@@ -132,7 +133,7 @@ When the spec and implementation diverge, use the `spec-reconcile` or `spec-audi
 
 ## Configuration
 
-- Global config: `~/.config/muninn/config.toml` — created with defaults on first run
+- Global config: `~/.config/muninn/config.toml` — created by `muninn config`
 - Per-repo marker: `<repo-root>/.muninn.toml` — all sections optional; absent fields inherit from global
 - Password: read from `~/.pgpass`; never stored in config files
 

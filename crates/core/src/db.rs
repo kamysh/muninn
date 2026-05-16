@@ -69,6 +69,13 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
     Ok(pool_opts.connect_with(opts).await?)
 }
 
+/// Apply all pending migrations embedded at compile time.
+/// Safe to call repeatedly — sqlx tracks applied migrations in `_sqlx_migrations`.
+pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::migrate!("../../migrations").run(pool).await?;
+    Ok(())
+}
+
 /// Create a `PgListener` connected to the given database.
 /// Uses a dedicated internal pool (max 2 connections) so the caller does not need to
 /// manage a separate pool — PgListener clones the pool Arc internally.

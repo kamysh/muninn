@@ -11,18 +11,9 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum ConfigCommands {
-    /// Create ~/.config/muninn/config.toml and open it for editing
-    Init,
-}
-
-#[derive(Subcommand)]
 enum Commands {
-    /// Manage global configuration
-    Config {
-        #[command(subcommand)]
-        cmd: ConfigCommands,
-    },
+    /// Create or edit ~/.config/muninn/config.toml and apply DB migrations
+    Config,
     /// Register a repository, configure it, and run the initial index
     Add {
         path: String,
@@ -205,19 +196,44 @@ async fn run_foreground_index(
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Config subcommand runs before loading global config (it is the bootstrap command).
-    if let Commands::Config { cmd } = &cli.command {
-        match cmd {
-            ConfigCommands::Init => {
-                let path = muninn_core::config::GlobalConfig::create_template()?;
-                println!("Created: {}", path.display());
-                println!("Opening in $EDITOR… (save and close to finish)");
-                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                std::process::Command::new(&editor).arg(&path).status()?;
-                println!("Done. Run `muninn add <repo-path>` to add a repository.");
-                return Ok(());
-            }
+    // `muninn config` runs before loading global config — it is the bootstrap command.
+    if let Commands::Config = &cli.command {
+        let config_path = GlobalConfig::config_path();
+        let is_new = !config_path.exists();
+
+        let initial_content = if is_new {
+            GlobalConfig::template_content().to_string()
+        } else {
+            std::fs::read_to_string(&config_path)?
+        };
+
+        if is_new {
+            println!("Creating: {}", config_path.display());
         }
+        println!("Opening in $EDITOR… (save and close to finish)");
+
+        let validated = edit_toml_in_temp(&initial_content, |content| {
+            GlobalConfig::from_str(content)?.validate()
+        })?;
+
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&config_path, &validated)?;
+
+        // Restrict permissions to owner-only (config may contain API keys).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        let cfg = GlobalConfig::from_str(&validated)?;
+        let pool = db::connect(&cfg.database).await?;
+        println!("Applying database migrations…");
+        db::run_migrations(&pool).await?;
+        println!("Done. Run `muninn add <repo-path>` to add a repository.");
+        return Ok(());
     }
 
     let cfg = GlobalConfig::load()?;
@@ -503,7 +519,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Config { .. } => unreachable!("handled before loading config"),
+        Commands::Config => unreachable!("handled before loading config"),
     }
 
     Ok(())

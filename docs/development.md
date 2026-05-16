@@ -127,6 +127,6 @@ DB-driven: discovers repos from the `repos` table, not by scanning the filesyste
 
 ### Configuration
 
-- Global: `~/.config/muninn/config.toml` — created by `muninn config init`
+- Global: `~/.config/muninn/config.toml` — created by `muninn config`
 - Per-repo: `<repo-root>/.muninn.toml` — created by `muninn add`; all sections optional
 - `EffectiveConfig::merge(global, repo_cfg, dir_name)` is the single source of truth for runtime config

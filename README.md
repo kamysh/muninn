@@ -54,10 +54,10 @@ chmod +x ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
 ### 3. Configure
 
 ```bash
-muninn config init
+muninn config
 ```
 
-This creates `~/.config/muninn/config.toml` and opens it in `$EDITOR`. Fill in your database credentials and embedding API key (see below), then save.
+This creates `~/.config/muninn/config.toml` (or opens the existing one) in `$EDITOR`. Fill in your database credentials and embedding API key (see below), then save. When you close the editor, muninn validates the config, connects to the database, and applies all schema migrations automatically — no `sqlx-cli` or separate migration step required.
 
 **Embedding backends** — pick one:
 
@@ -104,7 +104,7 @@ muninn list                 List registered repos and their index status
 muninn reindex [<path>]     Signal the daemon to reindex (--all for all repos)
 muninn status               Show registered repos and index state
 muninn stats [--days N]     Show MCP tool usage statistics
-muninn config init          Create ~/.config/muninn/config.toml
+muninn config               Create or edit ~/.config/muninn/config.toml; applies DB migrations
 ```
 
 ## MCP search tools
