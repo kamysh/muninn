@@ -16,8 +16,6 @@ jobs:
             target: linux-arm64
           - runner: macos-latest
             target: darwin-arm64
-          - runner: macos-13
-            target: darwin-amd64
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -55,4 +53,3 @@ jobs:
             muninn-linux-amd64/muninn-linux-amd64.tar.gz
             muninn-linux-arm64/muninn-linux-arm64.tar.gz
             muninn-darwin-arm64/muninn-darwin-arm64.tar.gz
-            muninn-darwin-amd64/muninn-darwin-amd64.tar.gz
