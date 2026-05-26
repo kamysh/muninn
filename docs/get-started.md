@@ -14,7 +14,7 @@ By the end you will have muninn's search tools available inside Claude Code, wat
 
 ```bash
 docker run -d \
-  --name muninn-postgres \
+  --name postgres-ai \
   --restart always \
   -p 127.0.0.1:5432:5432 \
   -v muninn_data:/var/lib/postgresql/data \
@@ -29,7 +29,7 @@ If you prefer Docker Compose, create a `docker-compose.yml`:
 services:
   postgres:
     image: kamysh/postgres-ai:latest
-    container_name: muninn-postgres
+    container_name: postgres-ai
     restart: always
     ports:
       - "127.0.0.1:5432:5432"
@@ -44,11 +44,11 @@ Then run `docker compose up -d`.
 
 ## Step 2: Create a database and user
 
-Add a line to `~/.pgpass` with the username, database name, and password you want — these can be anything:
+Add a line to `~/.pgpass` with your chosen password:
 
 ```
 # ~/.pgpass — format: hostname:port:database:username:password
-localhost:5432:muninn:alice:yourpassword
+localhost:5432:muninn:muninn:yourpassword
 ```
 
 Lock down its permissions (PostgreSQL ignores the file if it is world-readable):
@@ -57,30 +57,38 @@ Lock down its permissions (PostgreSQL ignores the file if it is world-readable):
 chmod 600 ~/.pgpass
 ```
 
-Create the user and database with a single command (the `postgres` superuser is only accessible from inside the container):
+Create the user and database. You can run the [setup script](https://github.com/kamysh/muninn/blob/main/muninn-setup/create-db-user.sh) or paste the following directly (the `postgres` superuser is only accessible from inside the container):
 
 ```bash
-docker exec muninn-postgres psql -U postgres -d postgres <<'SQL'
-CREATE USER alice WITH PASSWORD 'yourpassword';
-CREATE DATABASE muninn OWNER alice;
+docker exec -i postgres-ai psql -U postgres -d postgres <<'SQL'
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'muninn') THEN
+        CREATE ROLE muninn WITH LOGIN;
+    END IF;
+END
+$$;
+ALTER ROLE muninn PASSWORD 'yourpassword';
+SELECT 'CREATE DATABASE muninn OWNER muninn'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'muninn')\gexec
+GRANT ALL PRIVILEGES ON DATABASE muninn TO muninn;
 \c muninn
-GRANT ALL PRIVILEGES ON DATABASE muninn TO alice;
-GRANT USAGE, CREATE ON SCHEMA public TO alice;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO alice;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO alice;
-GRANT USAGE ON SCHEMA ag_catalog TO alice;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO alice;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO alice;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA ag_catalog TO alice;
+GRANT USAGE, CREATE ON SCHEMA public TO muninn;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO muninn;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO muninn;
+GRANT USAGE ON SCHEMA ag_catalog TO muninn;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO muninn;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO muninn;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA ag_catalog TO muninn;
 SQL
 ```
 
-Replace `alice`, `yourpassword`, and `muninn` with the same values you put in `~/.pgpass`.
+Replace `yourpassword` with the password you put in `~/.pgpass`. Replace `muninn` with a different username or database name if you prefer.
 
 **Verify the connection works:**
 
 ```bash
-psql -h localhost -U alice -d muninn -c '\conninfo'
+psql -h localhost -U muninn -d muninn -c '\conninfo'
 ```
 
 ## Step 3: Download muninn
@@ -117,6 +125,14 @@ Make the binaries executable:
 ```bash
 chmod +x ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
 ```
+
+**macOS only — remove the quarantine flag** that macOS adds to files downloaded via a browser:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
+```
+
+This is not needed when downloading with `curl`.
 
 Make sure `~/.local/bin` is on your `PATH`. If `muninn --help` does not work after this, add `export PATH="$HOME/.local/bin:$PATH"` to your shell's rc file and reload it.
 
