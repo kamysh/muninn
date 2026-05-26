@@ -125,6 +125,12 @@
               long long __isoc23_strtoll(const char *s,char **e,int b){return strtoll(s,e,b);}
               unsigned long long __isoc23_strtoull(const char *s,char **e,int b){return strtoull(s,e,b);}
 
+              /* glibc large-file aliases (musl uses 64-bit stat unconditionally) */
+              #include <sys/stat.h>
+              int stat64(const char *p,struct stat *b){return stat(p,b);}
+              int fstat64(int fd,struct stat *b){return fstat(fd,b);}
+              int lstat64(const char *p,struct stat *b){return lstat(p,b);}
+
               /* GCC aarch64 outline-atomics: compiled with -mno-outline-atomics
                  so __atomic builtins below expand to LDXR/STLXR, not recursive calls. */
               #ifdef __aarch64__
@@ -188,7 +194,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.4";
+          version = "0.1.5";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
@@ -236,7 +242,7 @@
             OPENSSL_NO_VENDOR = "1";
             ORT_LIB_LOCATION = "${ortStaticLib}";
             RUSTFLAGS = if glibcStubs != null
-              then "-C link-arg=-Wl,--push-state,--whole-archive -C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-Wl,--pop-state"
+              then "-C link-arg=-Wl,--push-state,--whole-archive -C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-Wl,--pop-state -C link-arg=-lc"
               else "";
           });
 
