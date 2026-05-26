@@ -73,16 +73,16 @@
         #   • glibc 2.38+ C23 aliases: __isoc23_strtol and family
         #   • glibc large-file aliases: stat64, fstat64, lstat64
         #
-        # We provide pass-through stubs for all of these. For outline-atomics,
-        # compiler_builtins (Rust 1.94+) provides acq/rel/acq_rel/relax CAS and
-        # all ldadd/swp/ldclr/ldset/ldeor variants, but NOT the sync CAS family.
-        # XNNPack init.c references __aarch64_cas8_sync; we stub all four widths
-        # of _sync in a separate object so it is pulled in independently of the
-        # fortify stubs (avoids multiple-definition conflicts with compiler_builtins).
+        # We provide pass-through stubs for all of these on both aarch64-linux and
+        # x86_64-linux (both Pyke targets use glibc GCC). On aarch64 we additionally
+        # stub __aarch64_cas*_sync in a separate archive member: compiler_builtins
+        # (Rust 1.94+) provides acq/rel/acq_rel/relax CAS and all ldadd/swp/ldclr/
+        # ldset/ldeor variants but NOT sync; XNNPack init.c references cas8_sync.
+        # The separate object avoids multiple-definition conflicts with compiler_builtins.
         #
         # -lc is appended after the stubs so musl is re-scanned and resolves
         # vprintf/strncat/stat referenced from our printf and stat stubs.
-        glibcStubs = if system != "aarch64-linux" then null else
+        glibcStubs = if system != "aarch64-linux" && system != "x86_64-linux" then null else
           pkgs.pkgsStatic.stdenv.mkDerivation {
             name = "glibc-musl-stubs";
             unpackPhase = ":";
@@ -130,24 +130,27 @@
               EOF
               $CC -c stubs.c -o stubs.o
 
-              # __aarch64_cas*_sync — in a separate object so the linker can pull
-              # it in independently of stubs.o. compiler_builtins (Rust 1.94+)
-              # provides acq/rel/acq_rel/relax CAS variants but NOT sync.
-              # XNNPack init.c references __aarch64_cas8_sync; we stub all four
-              # widths defensively. -mno-outline-atomics prevents recursion.
-              cat > cas_sync.c << 'EOF'
-              #include <stdint.h>
-              #define CAS_SYNC(W,T) \
-              T __aarch64_cas##W##_sync(T o,T n,volatile T*p){\
-                __atomic_compare_exchange_n(p,&o,n,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);\
-                return o;}
-              CAS_SYNC(1,uint8_t)
-              CAS_SYNC(2,uint16_t)
-              CAS_SYNC(4,uint32_t)
-              CAS_SYNC(8,uint64_t)
-              EOF
-              $CC -c cas_sync.c -o cas_sync.o -mno-outline-atomics
-              $AR rcs libglibc_stubs.a stubs.o cas_sync.o
+              ${if system == "aarch64-linux" then ''
+                # __aarch64_cas*_sync — separate object, pulled in independently of
+                # stubs.o. compiler_builtins provides acq/rel/acq_rel/relax CAS but
+                # NOT sync. XNNPack init.c references __aarch64_cas8_sync.
+                # -mno-outline-atomics prevents recursive __atomic_compare_exchange_n.
+                cat > cas_sync.c << 'EOF'
+                #include <stdint.h>
+                #define CAS_SYNC(W,T) \
+                T __aarch64_cas##W##_sync(T o,T n,volatile T*p){\
+                  __atomic_compare_exchange_n(p,&o,n,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);\
+                  return o;}
+                CAS_SYNC(1,uint8_t)
+                CAS_SYNC(2,uint16_t)
+                CAS_SYNC(4,uint32_t)
+                CAS_SYNC(8,uint64_t)
+                EOF
+                $CC -c cas_sync.c -o cas_sync.o -mno-outline-atomics
+                $AR rcs libglibc_stubs.a stubs.o cas_sync.o
+              '' else ''
+                $AR rcs libglibc_stubs.a stubs.o
+              ''}
             '';
             installPhase = ''
               mkdir -p $out/lib
@@ -157,7 +160,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.9";
+          version = "0.1.10";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
