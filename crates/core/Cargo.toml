@@ -24,7 +24,7 @@ tracing = { workspace = true }
 fastembed = { version = "5.13", default-features = false, features = [
   "hf-hub",
   "hf-hub-native-tls",
-  "ort-load-dynamic",
+  "ort-download-binaries-native-tls",
 ] }
 
 [dev-dependencies]

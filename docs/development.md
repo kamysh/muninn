@@ -16,7 +16,8 @@ nix develop
 The shell sets:
 - `DATABASE_URL=postgresql://localhost/muninn_dev`
 - `TEST_DATABASE_URL=postgresql://localhost/muninn_test`
-- `ORT_DYLIB_PATH` — path to the ONNX runtime shared library, needed by the local embedding backend
+
+ONNX Runtime is statically linked into the binary at build time (via `cargo build`'s `ort-download-binaries-native-tls` feature), so no `ORT_DYLIB_PATH` is required at runtime.
 
 ## Database setup
 
@@ -42,8 +43,8 @@ sqlx migrate run
 | Apply pending migrations | `sqlx migrate run` |
 | Roll back one migration | `sqlx migrate revert` |
 | Type-check Agda spec | `cd spec && agda Muninn.agda` |
-| Build (dynamically linked) | `nix build` |
-| Build (fully static) | `nix build .#muninn-static` |
+| Build (Nix-managed install) | `nix build` |
+| Build a portable release binary | `cargo build --release --target=<triple>` |
 
 After changing any `sqlx::query!` macro, run `cargo sqlx prepare --workspace` to update the offline query cache (`.sqlx/` directory). This cache lets CI compile without a live database. The CI build will fail if the cache is stale — commit the updated `.sqlx/` files along with your SQL changes.
 
@@ -192,22 +193,34 @@ This regenerates `.sqlx/` — the offline query cache that allows CI to compile 
 
 ## Building distributable binaries
 
-```bash
-# Dynamically linked — requires nix profile install to run
-nix build
+There are two paths depending on whether you want a Nix-managed install on this
+machine, or a portable binary that can be copied elsewhere.
 
-# Fully static (musl on Linux)
-# Safe to copy anywhere, no Nix store dependencies
-nix build .#muninn-static
-```
-
-Binaries appear in `result/bin/`: `muninn`, `muninn-index`, `muninn-mcp`.
-
-Do not copy the dynamically linked binary directly — its shared library dependencies are in the Nix store and will not be found outside it. Use `nix profile install` instead:
+### Nix-managed install (this machine only)
 
 ```bash
 nix profile install .
 claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
 ```
 
-The Nix profile is a GC root, so the Nix store entries for the binaries and their dependencies will not be garbage-collected.
+The `muninn` derivation links onnxruntime dynamically against the copy in the
+Nix store (the `ORT_LIB_LOCATION` env var bypasses ort-sys's pyke download —
+the sandbox has no network). The resulting binary embeds Nix-store paths, so
+it only works on a machine where those exact paths exist. The profile install
+keeps them as a GC root.
+
+### Portable release binary (copy anywhere)
+
+```bash
+# inside `nix develop` is fine, but cargo will work from any environment with
+# a Rust toolchain
+cargo build --release --target=aarch64-apple-darwin
+```
+
+ort-sys downloads pyke's prebuilt static onnxruntime archive at build time and
+links it into the binary, so the result has no runtime `libonnxruntime`
+dependency. Network access is required during the build.
+
+Binaries land in `target/<triple>/release/`: `muninn`, `muninn-index`,
+`muninn-mcp`. The GitHub release workflow (`.github/workflows/release.yml`)
+does this for `linux-amd64`, `linux-arm64`, and `darwin-arm64`.

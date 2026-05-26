@@ -15,7 +15,7 @@ All commands assume you are inside the Nix dev shell:
 nix develop
 ```
 
-The shell sets `DATABASE_URL` (default: `postgresql://localhost/muninn_dev`), `TEST_DATABASE_URL`, and `ORT_DYLIB_PATH` for ONNX runtime.
+The shell sets `DATABASE_URL` (default: `postgresql://localhost/muninn_dev`) and `TEST_DATABASE_URL`. ONNX Runtime is statically linked into the binary at build time, so no `ORT_DYLIB_PATH` is needed.
 
 ## Common Commands
 
@@ -47,8 +47,8 @@ cargo sqlx prepare --workspace
 cd spec && agda Muninn.agda
 
 # Nix builds
-nix build                         # dynamically linked (requires nix profile install to run)
-nix build .#muninn-static         # fully static musl binary, safe to copy
+nix build                         # nix-managed install (embeds /nix/store paths; install with `nix profile install`)
+cargo build --release --target=<triple>  # portable static binary (downloads onnxruntime at build time)
 ```
 
 ## Architecture
