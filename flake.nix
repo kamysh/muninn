@@ -157,7 +157,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.8";
+          version = "0.1.9";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
@@ -204,9 +204,15 @@
             OPENSSL_STATIC = "1";
             OPENSSL_NO_VENDOR = "1";
             ORT_LIB_LOCATION = "${ortStaticLib}";
-            RUSTFLAGS = if glibcStubs != null
-              then "-C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-lc"
-              else "";
+            RUSTFLAGS =
+              # aarch64-linux: glibc-stub archive for symbols absent from musl
+              (if glibcStubs != null
+                then "-C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-lc"
+                else "") +
+              # x86_64-linux: pkgsStatic defaults to -static-pie, but libstdc++.a
+              # (pulled in by ORT's C++ runtime) is not compiled -fPIC.
+              # -C relocation-model=static disables PIE for this target.
+              (if system == "x86_64-linux" then " -C relocation-model=static" else "");
           });
 
       in
