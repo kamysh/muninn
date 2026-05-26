@@ -67,7 +67,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.1";
+          version = "0.1.2";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
