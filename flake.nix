@@ -67,25 +67,19 @@
 
         # ── glibc stubs for aarch64-linux musl builds ────────────────────────
         #
-        # The Pyke aarch64-unknown-linux-gnu archive contains:
-        #   • KleidiAI / cpuinfo / XNNPack built with -D_FORTIFY_SOURCE=2
-        #     → references __memset_chk, __read_chk, __vsnprintf_chk, etc.
-        #   • XNNPack init.c and re2 built with newer glibc headers
-        #     → reference __isoc23_strtol (glibc 2.38+ C23 compat alias)
-        #   • XNNPack init.c compiled with -moutline-atomics (glibc GCC default)
-        #     → references __aarch64_cas8_sync and friends; glibc provides these
-        #       via libgcc_s.so using getauxval for LSE dispatch — musl has no
-        #       getauxval, so libgcc's version cannot be used here.
+        # The Pyke aarch64-unknown-linux-gnu archive contains objects compiled
+        # with glibc GCC that reference symbols absent from musl:
+        #   • _FORTIFY_SOURCE=2 wrappers: __memset_chk, __read_chk, __vsnprintf_chk, etc.
+        #   • glibc 2.38+ C23 aliases: __isoc23_strtol and family
+        #   • glibc large-file aliases: stat64, fstat64, lstat64
         #
-        # We provide pass-through stubs for the _FORTIFY_SOURCE wrappers and
-        # correct __atomic-based implementations for the outline-atomic family.
-        # Compile with -mno-outline-atomics so the __atomic builtins in the stubs
-        # are inlined (LDXR/STLXR loops) rather than generating recursive calls.
+        # We provide pass-through stubs for all of these. The outline-atomic
+        # functions (__aarch64_cas*, __aarch64_swp*, __aarch64_ldadd*) are NOT
+        # stubbed here — Rust's compiler_builtins (1.94+) already provides them
+        # for aarch64-unknown-linux-musl via inline LDXR/STLXR, without getauxval.
         #
-        # Linked with --push-state,--whole-archive so stubs are force-included
-        # before libgcc (preventing libgcc's broken getauxval version from being
-        # used for __aarch64_cas8_sync), and musl's -lc arrives after the stubs
-        # in the link order to resolve the vprintf references in our printf stubs.
+        # -lc is appended after the stubs so musl is re-scanned and resolves
+        # vprintf/strncat/stat referenced from our printf and stat stubs.
         glibcStubs = if system != "aarch64-linux" then null else
           pkgs.pkgsStatic.stdenv.mkDerivation {
             name = "glibc-musl-stubs";
@@ -131,59 +125,8 @@
               int fstat64(int fd,struct stat *b){return fstat(fd,b);}
               int lstat64(const char *p,struct stat *b){return lstat(p,b);}
 
-              /* GCC aarch64 outline-atomics: compiled with -mno-outline-atomics
-                 so __atomic builtins below expand to LDXR/STLXR, not recursive calls. */
-              #ifdef __aarch64__
-              #define CAS(W,T,SFX,SUC,FAIL) \
-              T __aarch64_cas##W##_##SFX(T o,T n,volatile T*p){\
-                __atomic_compare_exchange_n(p,&o,n,0,SUC,FAIL);return o;}
-              CAS(1,uint8_t,relax,__ATOMIC_RELAXED,__ATOMIC_RELAXED)
-              CAS(2,uint16_t,relax,__ATOMIC_RELAXED,__ATOMIC_RELAXED)
-              CAS(4,uint32_t,relax,__ATOMIC_RELAXED,__ATOMIC_RELAXED)
-              CAS(8,uint64_t,relax,__ATOMIC_RELAXED,__ATOMIC_RELAXED)
-              CAS(1,uint8_t,acq,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)
-              CAS(2,uint16_t,acq,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)
-              CAS(4,uint32_t,acq,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)
-              CAS(8,uint64_t,acq,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)
-              CAS(1,uint8_t,rel,__ATOMIC_RELEASE,__ATOMIC_RELAXED)
-              CAS(2,uint16_t,rel,__ATOMIC_RELEASE,__ATOMIC_RELAXED)
-              CAS(4,uint32_t,rel,__ATOMIC_RELEASE,__ATOMIC_RELAXED)
-              CAS(8,uint64_t,rel,__ATOMIC_RELEASE,__ATOMIC_RELAXED)
-              CAS(1,uint8_t,acq_rel,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)
-              CAS(2,uint16_t,acq_rel,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)
-              CAS(4,uint32_t,acq_rel,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)
-              CAS(8,uint64_t,acq_rel,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)
-              CAS(1,uint8_t,sync,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST)
-              CAS(2,uint16_t,sync,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST)
-              CAS(4,uint32_t,sync,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST)
-              CAS(8,uint64_t,sync,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST)
-              #define SWP(W,T,SFX,MO) \
-              T __aarch64_swp##W##_##SFX(T v,volatile T*p){return __atomic_exchange_n(p,v,MO);}
-              SWP(1,uint8_t,relax,__ATOMIC_RELAXED) SWP(2,uint16_t,relax,__ATOMIC_RELAXED)
-              SWP(4,uint32_t,relax,__ATOMIC_RELAXED) SWP(8,uint64_t,relax,__ATOMIC_RELAXED)
-              SWP(1,uint8_t,acq,__ATOMIC_ACQUIRE)   SWP(2,uint16_t,acq,__ATOMIC_ACQUIRE)
-              SWP(4,uint32_t,acq,__ATOMIC_ACQUIRE)  SWP(8,uint64_t,acq,__ATOMIC_ACQUIRE)
-              SWP(1,uint8_t,rel,__ATOMIC_RELEASE)   SWP(2,uint16_t,rel,__ATOMIC_RELEASE)
-              SWP(4,uint32_t,rel,__ATOMIC_RELEASE)  SWP(8,uint64_t,rel,__ATOMIC_RELEASE)
-              SWP(1,uint8_t,acq_rel,__ATOMIC_ACQ_REL) SWP(2,uint16_t,acq_rel,__ATOMIC_ACQ_REL)
-              SWP(4,uint32_t,acq_rel,__ATOMIC_ACQ_REL) SWP(8,uint64_t,acq_rel,__ATOMIC_ACQ_REL)
-              SWP(1,uint8_t,sync,__ATOMIC_SEQ_CST)  SWP(2,uint16_t,sync,__ATOMIC_SEQ_CST)
-              SWP(4,uint32_t,sync,__ATOMIC_SEQ_CST) SWP(8,uint64_t,sync,__ATOMIC_SEQ_CST)
-              #define LDADD(W,T,SFX,MO) \
-              T __aarch64_ldadd##W##_##SFX(T v,volatile T*p){return __atomic_fetch_add(p,v,MO);}
-              LDADD(1,uint8_t,relax,__ATOMIC_RELAXED) LDADD(2,uint16_t,relax,__ATOMIC_RELAXED)
-              LDADD(4,uint32_t,relax,__ATOMIC_RELAXED) LDADD(8,uint64_t,relax,__ATOMIC_RELAXED)
-              LDADD(1,uint8_t,acq,__ATOMIC_ACQUIRE)   LDADD(2,uint16_t,acq,__ATOMIC_ACQUIRE)
-              LDADD(4,uint32_t,acq,__ATOMIC_ACQUIRE)  LDADD(8,uint64_t,acq,__ATOMIC_ACQUIRE)
-              LDADD(1,uint8_t,rel,__ATOMIC_RELEASE)   LDADD(2,uint16_t,rel,__ATOMIC_RELEASE)
-              LDADD(4,uint32_t,rel,__ATOMIC_RELEASE)  LDADD(8,uint64_t,rel,__ATOMIC_RELEASE)
-              LDADD(1,uint8_t,acq_rel,__ATOMIC_ACQ_REL) LDADD(2,uint16_t,acq_rel,__ATOMIC_ACQ_REL)
-              LDADD(4,uint32_t,acq_rel,__ATOMIC_ACQ_REL) LDADD(8,uint64_t,acq_rel,__ATOMIC_ACQ_REL)
-              LDADD(1,uint8_t,sync,__ATOMIC_SEQ_CST)  LDADD(2,uint16_t,sync,__ATOMIC_SEQ_CST)
-              LDADD(4,uint32_t,sync,__ATOMIC_SEQ_CST) LDADD(8,uint64_t,sync,__ATOMIC_SEQ_CST)
-              #endif
               EOF
-              $CC -c stubs.c -o stubs.o -mno-outline-atomics
+              $CC -c stubs.c -o stubs.o
               $AR rcs libglibc_stubs.a stubs.o
             '';
             installPhase = ''
@@ -194,7 +137,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.5";
+          version = "0.1.6";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
@@ -242,7 +185,7 @@
             OPENSSL_NO_VENDOR = "1";
             ORT_LIB_LOCATION = "${ortStaticLib}";
             RUSTFLAGS = if glibcStubs != null
-              then "-C link-arg=-Wl,--push-state,--whole-archive -C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-Wl,--pop-state -C link-arg=-lc"
+              then "-C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs -C link-arg=-lc"
               else "";
           });
 

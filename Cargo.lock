@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "muninn"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-index"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "futures",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-mcp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "muninn-core",
