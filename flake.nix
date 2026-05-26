@@ -65,6 +65,56 @@
             xz --format=raw --lzma2=dict=64MiB -d < ${archive} | tar -x -C $out
           '';
 
+        # ── glibc stubs for aarch64-linux musl builds ────────────────────────
+        #
+        # The Pyke aarch64-unknown-linux-gnu archive includes KleidiAI kernels
+        # compiled with glibc _FORTIFY_SOURCE. Those object files reference
+        # __libc_single_threaded, __memcpy_chk, __snprintf_chk, etc., which
+        # musl does not provide. We compile thin stub implementations into a
+        # static archive and append it to the linker command line so the musl
+        # linker can resolve these symbols.
+        #
+        # Only needed on aarch64-linux (KleidiAI is ARM-only; x86_64 is fine).
+        glibcStubs = if system != "aarch64-linux" then null else
+          pkgs.pkgsStatic.stdenv.mkDerivation {
+            name = "glibc-musl-stubs";
+            unpackPhase = ":";
+            buildPhase = ''
+              cat > stubs.c << 'EOF'
+              #include <string.h>
+              #include <stdio.h>
+              #include <stdarg.h>
+
+              char __libc_single_threaded = 0;
+
+              void *__memcpy_chk(void *dst, const void *src, size_t n, size_t dstlen) {
+                  return memcpy(dst, src, n);
+              }
+              void *__memmove_chk(void *dst, const void *src, size_t n, size_t dstlen) {
+                  return memmove(dst, src, n);
+              }
+              char *__strncpy_chk(char *dst, const char *src, size_t n, size_t dstlen) {
+                  return strncpy(dst, src, n);
+              }
+              int __snprintf_chk(char *s, size_t n, int flag, size_t slen, const char *fmt, ...) {
+                  va_list ap; va_start(ap, fmt); int r = vsnprintf(s, n, fmt, ap); va_end(ap); return r;
+              }
+              int __fprintf_chk(FILE *f, int flag, const char *fmt, ...) {
+                  va_list ap; va_start(ap, fmt); int r = vfprintf(f, fmt, ap); va_end(ap); return r;
+              }
+              int __printf_chk(int flag, const char *fmt, ...) {
+                  va_list ap; va_start(ap, fmt); int r = vprintf(fmt, ap); va_end(ap); return r;
+              }
+              EOF
+              $CC -c stubs.c -o stubs.o
+              $AR rcs libglibc_stubs.a stubs.o
+            '';
+            installPhase = ''
+              mkdir -p $out/lib
+              cp libglibc_stubs.a $out/lib/
+            '';
+          };
+
         # Shared between both packages.
         commonAttrs = {
           version = "0.1.2";
@@ -109,10 +159,14 @@
           else pkgs.pkgsStatic.rustPlatform.buildRustPackage (commonAttrs // {
             pname = "muninn-static";
             nativeBuildInputs = [ pkgs.pkgsStatic.pkg-config ];
-            buildInputs = [ pkgs.pkgsStatic.openssl ];
+            buildInputs = [ pkgs.pkgsStatic.openssl ]
+              ++ (if glibcStubs != null then [ glibcStubs ] else []);
             OPENSSL_STATIC = "1";
             OPENSSL_NO_VENDOR = "1";
             ORT_LIB_LOCATION = "${ortStaticLib}";
+            RUSTFLAGS = if glibcStubs != null
+              then "-C link-arg=-L${glibcStubs}/lib -C link-arg=-lglibc_stubs"
+              else "";
           });
 
       in
