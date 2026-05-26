@@ -73,10 +73,12 @@
         #   • glibc 2.38+ C23 aliases: __isoc23_strtol and family
         #   • glibc large-file aliases: stat64, fstat64, lstat64
         #
-        # We provide pass-through stubs for all of these. The outline-atomic
-        # functions (__aarch64_cas*, __aarch64_swp*, __aarch64_ldadd*) are NOT
-        # stubbed here — Rust's compiler_builtins (1.94+) already provides them
-        # for aarch64-unknown-linux-musl via inline LDXR/STLXR, without getauxval.
+        # We provide pass-through stubs for all of these. For outline-atomics,
+        # compiler_builtins (Rust 1.94+) provides acq/rel/acq_rel/relax CAS and
+        # all ldadd/swp/ldclr/ldset/ldeor variants, but NOT the sync CAS family.
+        # XNNPack init.c references __aarch64_cas8_sync; we stub all four widths
+        # of _sync in a separate object so it is pulled in independently of the
+        # fortify stubs (avoids multiple-definition conflicts with compiler_builtins).
         #
         # -lc is appended after the stubs so musl is re-scanned and resolves
         # vprintf/strncat/stat referenced from our printf and stat stubs.
@@ -125,39 +127,27 @@
               int fstat64(int fd,struct stat *b){return fstat(fd,b);}
               int lstat64(const char *p,struct stat *b){return lstat(p,b);}
 
-              /* GCC aarch64 outline-atomics — CAS only.
-                 compiler_builtins (Rust 1.94+) provides ldadd/swp/ldclr/ldset/ldeor
-                 but NOT cas. Compiled with -mno-outline-atomics so the
-                 __atomic_compare_exchange_n calls below expand to LDXR/STLXR
-                 rather than recursing back into __aarch64_cas*. */
-              #ifdef __aarch64__
-              #define CAS(W,T,SUC,FAIL,SFX) \
-              T __aarch64_cas##W##_##SFX(T o,T n,volatile T*p){\
-                __atomic_compare_exchange_n(p,&o,n,0,SUC,FAIL);return o;}
-              CAS(1,uint8_t,__ATOMIC_RELAXED,__ATOMIC_RELAXED,relax)
-              CAS(2,uint16_t,__ATOMIC_RELAXED,__ATOMIC_RELAXED,relax)
-              CAS(4,uint32_t,__ATOMIC_RELAXED,__ATOMIC_RELAXED,relax)
-              CAS(8,uint64_t,__ATOMIC_RELAXED,__ATOMIC_RELAXED,relax)
-              CAS(1,uint8_t,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED,acq)
-              CAS(2,uint16_t,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED,acq)
-              CAS(4,uint32_t,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED,acq)
-              CAS(8,uint64_t,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED,acq)
-              CAS(1,uint8_t,__ATOMIC_RELEASE,__ATOMIC_RELAXED,rel)
-              CAS(2,uint16_t,__ATOMIC_RELEASE,__ATOMIC_RELAXED,rel)
-              CAS(4,uint32_t,__ATOMIC_RELEASE,__ATOMIC_RELAXED,rel)
-              CAS(8,uint64_t,__ATOMIC_RELEASE,__ATOMIC_RELAXED,rel)
-              CAS(1,uint8_t,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED,acq_rel)
-              CAS(2,uint16_t,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED,acq_rel)
-              CAS(4,uint32_t,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED,acq_rel)
-              CAS(8,uint64_t,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED,acq_rel)
-              CAS(1,uint8_t,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST,sync)
-              CAS(2,uint16_t,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST,sync)
-              CAS(4,uint32_t,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST,sync)
-              CAS(8,uint64_t,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST,sync)
-              #endif
               EOF
-              $CC -c stubs.c -o stubs.o -mno-outline-atomics
-              $AR rcs libglibc_stubs.a stubs.o
+              $CC -c stubs.c -o stubs.o
+
+              # __aarch64_cas*_sync — in a separate object so the linker can pull
+              # it in independently of stubs.o. compiler_builtins (Rust 1.94+)
+              # provides acq/rel/acq_rel/relax CAS variants but NOT sync.
+              # XNNPack init.c references __aarch64_cas8_sync; we stub all four
+              # widths defensively. -mno-outline-atomics prevents recursion.
+              cat > cas_sync.c << 'EOF'
+              #include <stdint.h>
+              #define CAS_SYNC(W,T) \
+              T __aarch64_cas##W##_sync(T o,T n,volatile T*p){\
+                __atomic_compare_exchange_n(p,&o,n,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);\
+                return o;}
+              CAS_SYNC(1,uint8_t)
+              CAS_SYNC(2,uint16_t)
+              CAS_SYNC(4,uint32_t)
+              CAS_SYNC(8,uint64_t)
+              EOF
+              $CC -c cas_sync.c -o cas_sync.o -mno-outline-atomics
+              $AR rcs libglibc_stubs.a stubs.o cas_sync.o
             '';
             installPhase = ''
               mkdir -p $out/lib
@@ -167,7 +157,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.7";
+          version = "0.1.8";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
