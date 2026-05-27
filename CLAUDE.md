@@ -15,7 +15,7 @@ All commands assume you are inside the Nix dev shell:
 nix develop
 ```
 
-The shell sets `DATABASE_URL` (default: `postgresql://localhost/muninn_dev`) and `TEST_DATABASE_URL`. ONNX Runtime is statically linked into the binary at build time, so no `ORT_DYLIB_PATH` is needed.
+The shell sets `DATABASE_URL` (default: `postgresql://localhost/muninn_dev`) and `TEST_DATABASE_URL`. The local embedding backend is pure-Rust (tessera-embeddings + candle), so the binary has no runtime native ML dependency.
 
 ## Common Commands
 
@@ -48,7 +48,7 @@ cd spec && agda Muninn.agda
 
 # Nix builds
 nix build                         # nix-managed install (embeds /nix/store paths; install with `nix profile install`)
-cargo build --release --target=<triple>  # portable static binary (downloads onnxruntime at build time)
+nix build .#muninn-static         # portable static binary (pure-Rust, no native ML deps)
 ```
 
 ## Architecture
@@ -73,7 +73,7 @@ crates/
 | `store` | DB read/write for `repos` and `chunks`; `notify_repos_changed` sends `LISTEN/NOTIFY` |
 | `pipeline` | `index_file` and `index_repo` — parse → embed → store chunks → store graph |
 | `parser` | tree-sitter parsing (Rust, Python, JS, TS); `detect_language`, `parse_file`, `chunk_file`, `extract_edges` |
-| `embeddings` | `EmbeddingBackend` trait; Voyage AI / OpenAI / local ONNX backends; `expected_dimension` |
+| `embeddings` | `EmbeddingBackend` trait; Voyage AI / OpenAI / local tessera-embeddings (candle) backends; `expected_dimension` |
 | `graph` | AGE graph writes (`upsert_symbol_node`, `upsert_edge`) and structural queries (`query_related`) |
 | `search` | `semantic_search`, `fulltext_search`, `rrf_merge` (Reciprocal Rank Fusion) |
 | `knowledge` | `KnowledgeItem` CRUD + hybrid search (separate from code chunks) |
