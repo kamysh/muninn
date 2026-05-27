@@ -44,7 +44,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.12";
+          version = "0.1.13";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need a Postgres + downloaded model; run them in the dev
@@ -85,6 +85,12 @@
           buildInputs = [ pkgs.pkgsStatic.openssl ];
           OPENSSL_STATIC = "1";
           OPENSSL_NO_VENDOR = "1";
+          # pkgsStatic defaults to -static-pie, but pkgsStatic's libstdc++.a
+          # (pulled in by C++ deps) is built without -fPIC, so the linker
+          # rejects R_X86_64_32S relocations against it. Drop PIE on
+          # x86_64-linux. aarch64-linux happens not to hit this; darwin
+          # uses libc++ which links cleanly.
+          RUSTFLAGS = if system == "x86_64-linux" then "-C relocation-model=static" else "";
         });
 
       in
