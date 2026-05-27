@@ -105,7 +105,10 @@ pub async fn index_file(
         std::collections::HashMap::new();
 
     for chunk in &chunks {
-        if let Some(sym) = symbols.iter().find(|s| s.range == chunk.range) {
+        // chunk_file may split an oversized symbol body into multiple
+        // sub-chunks; only the FIRST sub-chunk inherits the symbol's start
+        // line, so match by start (not strict range equality).
+        if let Some(sym) = symbols.iter().find(|s| s.range.start == chunk.range.start) {
             let kind_str = match sym.kind {
                 SymbolKind::Function => "Function",
                 SymbolKind::Class    => "Class",
@@ -115,11 +118,14 @@ pub async fn index_file(
             if let Err(e) = graph::upsert_symbol_node(
                 pool, repo_id, chunk.id,
                 &sym.name, kind_str, &file_path,
-                chunk.range.start, chunk.range.end,
+                sym.range.start, sym.range.end,
             ).await {
                 tracing::warn!("failed to store symbol '{}' in graph: {}", sym.name, e);
             } else {
-                range_to_chunk.insert((chunk.range.start, chunk.range.end), chunk.id);
+                // Key by the symbol's full range, not the (possibly truncated)
+                // first sub-chunk's range — edge resolution looks up by
+                // symbol range and would otherwise miss split symbols.
+                range_to_chunk.insert((sym.range.start, sym.range.end), chunk.id);
                 // first occurrence wins for name lookup
                 name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
             }
@@ -147,9 +153,23 @@ pub async fn index_file(
     Ok(())
 }
 
+/// A file that failed to index, along with the reason. The reason string is
+/// the full anyhow-style cause chain rendered once at skip-time so the CLI
+/// can print it later without holding the underlying error.
+#[derive(Debug, Clone)]
+pub struct SkipRecord {
+    pub path: std::path::PathBuf,
+    pub reason: String,
+}
+
 /// Index all files in a repo.
 ///
-/// Returns `BatchOutcome` indicating whether all or only some files succeeded.
+/// Returns the overall `BatchOutcome` plus a list of files that were skipped
+/// (with reasons). The CLI prints this list after its progress bar finishes,
+/// since the progress bar's `\r`-redraw would otherwise overwrite any
+/// in-flight `tracing::warn!` output. The daemon ignores the list (it relies
+/// on the tracing warning that also fires).
+///
 /// `on_progress` is called after each file with `(files_done, total_files, path)`.
 /// Pass `|_, _, _| {}` for no-op (daemon background use).
 pub async fn index_repo(
@@ -160,7 +180,7 @@ pub async fn index_repo(
     embed_batch_size: usize,
     expected_dim: usize,
     on_progress: impl Fn(usize, usize, &Path),
-) -> Result<BatchOutcome> {
+) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     use ignore::WalkBuilder;
 
     let walker = WalkBuilder::new(repo_path)
@@ -178,15 +198,19 @@ pub async fn index_repo(
     let total = files.len();
     let mut done = 0usize;
     let mut any_succeeded = false;
-    let mut any_failed = false;
+    let mut skips: Vec<SkipRecord> = Vec::new();
 
     for file in &files {
+        // 1500 chars ≈ 500 tokens of code (denser tokenisation than English
+        // text). Stays safely under BGE-Base's 512-token context window;
+        // larger values silently dropped chunks under fastembed and
+        // hard-failed under tessera/candle.
         match index_file(
             pool,
             repo_id,
             file,
             embedder.as_ref(),
-            4096,
+            1500,
             embed_batch_size,
             expected_dim,
         )
@@ -194,8 +218,11 @@ pub async fn index_repo(
         {
             Ok(()) => any_succeeded = true,
             Err(e) => {
-                any_failed = true;
-                tracing::warn!("skipping {}: {}", file.display(), e);
+                // Render the full cause chain once, both for the tracing
+                // warning (daemon log) and for the structured record (CLI).
+                let reason = format!("{:#}", e);
+                tracing::warn!("skipping {}: {}", file.display(), reason);
+                skips.push(SkipRecord { path: file.clone(), reason });
             }
         }
         done += 1;
@@ -204,13 +231,15 @@ pub async fn index_repo(
 
     // finishIndex (Indexing → Indexed) requires BatchOutcome ≠ NoneSucceeded.
     // A totally-failed non-empty batch must NOT mark the repo as indexed.
+    let any_failed = !skips.is_empty();
     if any_succeeded {
         crate::store::mark_indexed(pool, repo_id).await?;
-        Ok(if any_failed { BatchOutcome::SomeSucceeded } else { BatchOutcome::AllSucceeded })
+        let outcome = if any_failed { BatchOutcome::SomeSucceeded } else { BatchOutcome::AllSucceeded };
+        Ok((outcome, skips))
     } else if files.is_empty() {
         // Vacuously: no files to index — mark as indexed (AllSucceeded over empty set).
         crate::store::mark_indexed(pool, repo_id).await?;
-        Ok(BatchOutcome::AllSucceeded)
+        Ok((BatchOutcome::AllSucceeded, skips))
     } else {
         tracing::error!(
             "repo {}: all {} files failed to index — not marking as indexed",

@@ -17,7 +17,7 @@ The shell sets:
 - `DATABASE_URL=postgresql://localhost/muninn_dev`
 - `TEST_DATABASE_URL=postgresql://localhost/muninn_test`
 
-The local embedding backend is pure-Rust (tessera-embeddings + candle), so the binary has no runtime native dependency on ONNX Runtime or any other inference engine.
+ONNX Runtime is statically linked into the binary at build time (via `cargo build`'s `ort-download-binaries-native-tls` feature), so no `ORT_DYLIB_PATH` is required at runtime.
 
 ## Database setup
 
@@ -203,23 +203,24 @@ nix profile install .
 claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
 ```
 
-The `muninn` derivation produces a binary that references a small number of
-Nix-store paths (notably `libiconv` on darwin). The profile install keeps
-those paths alive as a GC root. The binary will not run on a machine without
-the same Nix-store entries — use `muninn-static` if you need that.
+The `muninn` derivation links onnxruntime dynamically against the copy in the
+Nix store (the `ORT_LIB_LOCATION` env var bypasses ort-sys's pyke download —
+the sandbox has no network). The resulting binary embeds Nix-store paths, so
+it only works on a machine where those exact paths exist. The profile install
+keeps them as a GC root.
 
 ### Portable release binary (copy anywhere)
 
 ```bash
-nix build .#muninn-static
+# inside `nix develop` is fine, but cargo will work from any environment with
+# a Rust toolchain
+cargo build --release --target=aarch64-apple-darwin
 ```
 
-`pkgsStatic.rustPlatform` links everything reachable statically, so the
-result has no `/nix/store` references — only Apple system frameworks (darwin)
-or no shared libraries at all (Linux musl). The local embedding backend is
-pure-Rust (tessera-embeddings + candle), so there is no `libonnxruntime` to
-ship or load.
+ort-sys downloads pyke's prebuilt static onnxruntime archive at build time and
+links it into the binary, so the result has no runtime `libonnxruntime`
+dependency. Network access is required during the build.
 
-Binaries land in `result/bin/`: `muninn`, `muninn-index`, `muninn-mcp`. The
-GitHub release workflow (`.github/workflows/release.yml`) builds this target
-for `linux-amd64`, `linux-arm64`, and `darwin-arm64`.
+Binaries land in `target/<triple>/release/`: `muninn`, `muninn-index`,
+`muninn-mcp`. The GitHub release workflow (`.github/workflows/release.yml`)
+does this for `linux-amd64`, `linux-arm64`, and `darwin-arm64`.

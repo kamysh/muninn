@@ -1,6 +1,6 @@
 [package]
 name = "muninn-core"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 
 [dependencies]
@@ -21,7 +21,15 @@ tokio = { workspace = true }
 ignore = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }
-tessera-embeddings = { version = "0.1", default-features = false }
+fastembed = { version = "5.13", default-features = false, features = [
+  "hf-hub",
+  "hf-hub-native-tls",
+  "ort-download-binaries-native-tls",
+] }
+# Direct pin on fastembed's transitive ort-sys dep — see workspace Cargo.toml
+# for the rationale. The crate itself isn't used in muninn-core code; the
+# direct dep is solely to force the resolver to pick the pinned version.
+ort-sys = { workspace = true }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

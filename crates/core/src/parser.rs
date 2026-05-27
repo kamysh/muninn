@@ -348,18 +348,52 @@ pub fn chunk_file(
     for sym in symbols {
         let s = (sym.range.start as usize).saturating_sub(1);
         let e = sym.range.end as usize;
-        let content: String = lines.get(s..e.min(lines.len()))
-            .unwrap_or(&[])
-            .join("\n");
-        if content.is_empty() { continue; }
-        chunks.push(crate::types::Chunk {
-            id: Uuid::new_v4(),
-            repo_id: Uuid::nil(),
-            file_path: String::new(),
-            range: sym.range.clone(),
-            content,
-            embedding: None,
-        });
+        let span = lines.get(s..e.min(lines.len())).unwrap_or(&[]);
+        if span.is_empty() { continue; }
+
+        let full_content: String = span.join("\n");
+        if full_content.len() <= max_chars {
+            chunks.push(crate::types::Chunk {
+                id: Uuid::new_v4(),
+                repo_id: Uuid::nil(),
+                file_path: String::new(),
+                range: sym.range.clone(),
+                content: full_content,
+                embedding: None,
+            });
+            continue;
+        }
+
+        // Symbol body exceeds the embedder's budget — split into line-aligned
+        // sub-chunks. The first sub-chunk inherits the symbol's start line
+        // (so pipeline.rs can still match symbol→chunk for the graph node);
+        // subsequent sub-chunks are unlinked but still embedded and searchable.
+        let mut local_start = 0usize;
+        while local_start < span.len() {
+            let mut acc = String::new();
+            let mut local_end = local_start;
+            while local_end < span.len() && acc.len() + span[local_end].len() < max_chars {
+                acc.push_str(span[local_end]);
+                acc.push('\n');
+                local_end += 1;
+            }
+            if local_end == local_start {
+                acc = span[local_start].to_string();
+                local_end += 1;
+            }
+            chunks.push(crate::types::Chunk {
+                id: Uuid::new_v4(),
+                repo_id: Uuid::nil(),
+                file_path: String::new(),
+                range: LineRange {
+                    start: sym.range.start + local_start as u32,
+                    end: sym.range.start + local_end as u32 - 1,
+                },
+                content: acc,
+                embedding: None,
+            });
+            local_start = local_end;
+        }
     }
     chunks
 }

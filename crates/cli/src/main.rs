@@ -177,14 +177,24 @@ async fn run_foreground_index(
     if let Err(e) = store::release_lock(pool, repo.id).await {
         eprintln!("warning: release_lock failed: {e}");
     }
-    let outcome = index_result?;
+    let (outcome, skips) = index_result?;
 
     println!();
+
+    // Print skipped files after the progress bar (which would otherwise
+    // overwrite them via \r-redraw). Each line has the path relative to the
+    // repo root and the full cause chain.
+    if !skips.is_empty() {
+        eprintln!("Skipped {} file(s):", skips.len());
+        for s in &skips {
+            let rel = s.path.strip_prefix(&repo.path).unwrap_or(&s.path);
+            eprintln!("  {}: {}", rel.display(), s.reason);
+        }
+    }
+
     let note = match outcome {
         muninn_core::types::BatchOutcome::AllSucceeded => "",
-        muninn_core::types::BatchOutcome::SomeSucceeded => {
-            " (some files skipped — see warnings above)"
-        }
+        muninn_core::types::BatchOutcome::SomeSucceeded => " (see skipped files above)",
     };
     println!("Done in {:.1}s.{note}", started.elapsed().as_secs_f64());
     store::notify_repos_changed(pool).await?;

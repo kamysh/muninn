@@ -210,7 +210,7 @@ async fn scan_and_dispatch(
                 }
 
                 match result {
-                    Ok(outcome) => {
+                    Ok((outcome, skips)) => {
                         {
                             let mut s = state.lock().await;
                             debug_assert_eq!(*s, IndexState::Indexing);
@@ -218,8 +218,9 @@ async fn scan_and_dispatch(
                         }
                         if outcome == BatchOutcome::SomeSucceeded {
                             tracing::warn!(
-                                "reindex of {} completed with some files skipped",
-                                repo_path_str
+                                "reindex of {} completed with {} files skipped",
+                                repo_path_str,
+                                skips.len()
                             );
                         } else {
                             tracing::info!("reindex of {} complete", repo_path_str);

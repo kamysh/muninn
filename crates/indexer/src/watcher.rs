@@ -126,7 +126,7 @@ pub async fn watch_repo(
                     repo_id,
                     &path,
                     embedder.as_ref(),
-                    4096,
+                    1500,
                     embed_batch_size,
                     expected_dim,
                 )

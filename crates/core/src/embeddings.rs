@@ -1,9 +1,9 @@
 use anyhow::Result;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::future::Future;
 use std::pin::Pin;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tessera::TesseraDense;
 
 pub trait EmbeddingBackend: Send + Sync {
     fn embed<'a>(
@@ -89,23 +89,23 @@ impl EmbeddingBackend for OpenAIBackend {
     }
 }
 
-// ── Local (tessera-embeddings + candle) ──────────────────────────────────────
+// ── Local (fastembed + ONNX) ──────────────────────────────────────────────────
 
-const LOCAL_MODEL: &str = "bge-base-en-v1.5";
+const LOCAL_MODEL: EmbeddingModel = EmbeddingModel::BGEBaseENV15;
 const LOCAL_DIM: usize = 768;
 
 pub struct LocalBackend {
     // Outer Mutex serialises first-time initialisation: only one thread ever
-    // calls TesseraDense::new (which may download model files). After init
-    // TesseraDense's encode_batch takes &self, so no per-call lock is needed.
-    model: Mutex<Option<Arc<TesseraDense>>>,
+    // calls TextEmbedding::try_new (which may download model files).  The
+    // inner Arc<Mutex<TextEmbedding>> guards embed() calls after init.
+    model: Mutex<Option<Arc<Mutex<TextEmbedding>>>>,
+    batch_size: Option<usize>,
     cache_dir: Option<PathBuf>,
 }
 
 impl LocalBackend {
-    pub fn new(_batch_size: usize, cache_dir: Option<String>) -> Self {
-        // batch_size kept for trait/config compatibility; tessera batches
-        // internally and doesn't accept a hint.
+    pub fn new(batch_size: usize, cache_dir: Option<String>) -> Self {
+        let batch_size = if batch_size == 0 { None } else { Some(batch_size) };
         let cache_dir = cache_dir.and_then(|path| {
             let trimmed = path.trim().to_string();
             if trimmed.is_empty() {
@@ -114,32 +114,33 @@ impl LocalBackend {
                 Some(PathBuf::from(trimmed))
             }
         });
-        Self { model: Mutex::new(None), cache_dir }
+        Self { model: Mutex::new(None), batch_size, cache_dir }
     }
 
-    fn init_model(&self) -> Result<Arc<TesseraDense>> {
+    fn init_model(&self) -> Result<Arc<Mutex<TextEmbedding>>> {
         let mut guard = self.model
             .lock()
             .map_err(|_| anyhow::anyhow!("local model init mutex poisoned"))?;
         if let Some(ref m) = *guard {
             return Ok(Arc::clone(m));
         }
-        // tessera (via hf-hub) honours HF_HUB_CACHE; route our config's
-        // cache_dir through that. Set before constructing the embedder.
-        if let Some(ref dir) = self.cache_dir {
-            // SAFETY: env-var writes are only safe during single-threaded
-            // setup. init_model holds the outer Mutex, so no concurrent
-            // env reader exists in our code path.
-            unsafe { std::env::set_var("HF_HUB_CACHE", dir); }
-        }
+        // Show download progress by default — the first-time model download
+        // (~200 MB for BGE-Base) causes a noticeable delay and silently hanging
+        // is confusing.  Set MUNINN_LOCAL_SHOW_PROGRESS=false to suppress in CI
+        // or other non-interactive contexts.
+        let show_progress = std::env::var("MUNINN_LOCAL_SHOW_PROGRESS")
+            .map(|v| !v.eq_ignore_ascii_case("false") && v != "0")
+            .unwrap_or(true);
         tracing::info!(
-            "initialising local embedding model (BGE-Base-EN-v1.5, 768 dims) — \
-             downloading on first use, please wait"
+            "initialising local embedding model (BGE-Base-EN-v1.5, 768 dims){}",
+            if show_progress { " — downloading on first use, please wait" } else { "" }
         );
-        let model = Arc::new(
-            TesseraDense::new(LOCAL_MODEL)
-                .map_err(|e| anyhow::anyhow!("tessera init failed: {}", e))?
-        );
+        let mut options = InitOptions::new(LOCAL_MODEL)
+            .with_show_download_progress(show_progress);
+        if let Some(ref dir) = self.cache_dir {
+            options = options.with_cache_dir(dir.clone());
+        }
+        let model = Arc::new(Mutex::new(TextEmbedding::try_new(options)?));
         *guard = Some(Arc::clone(&model));
         Ok(model)
     }
@@ -151,20 +152,18 @@ impl EmbeddingBackend for LocalBackend {
         texts: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>> {
         let texts = texts.to_vec();
+        let batch_size = self.batch_size;
         Box::pin(async move {
             if texts.is_empty() {
                 return Ok(vec![]);
             }
             let model = self.init_model()?;
             let embeddings = tokio::task::spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
-                let inputs: Vec<&str> = texts.iter().map(String::as_str).collect();
-                let dense = model
-                    .encode_batch(&inputs)
-                    .map_err(|e| anyhow::anyhow!("tessera encode_batch failed: {}", e))?;
-                Ok(dense
-                    .into_iter()
-                    .map(|d| d.embedding.to_vec())
-                    .collect())
+                let mut guard = model
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("local embedder mutex poisoned"))?;
+                let embeddings = guard.embed(&texts, batch_size)?;
+                Ok(embeddings)
             })
             .await
             .map_err(|e| anyhow::anyhow!("local embeddings task failed: {}", e))??;
