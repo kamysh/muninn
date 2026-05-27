@@ -44,7 +44,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.11";
+          version = "0.1.12";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need a Postgres + downloaded model; run them in the dev
@@ -52,16 +52,24 @@
           doCheck = false;
         };
 
+        # OpenSSL note: muninn itself uses rustls for all TLS (reqwest +
+        # sqlx). But tessera-embeddings → hf-hub pulls native-tls via its
+        # default features (Cargo feature unification is additive, so we
+        # can't disable it from below without vendoring/patching hf-hub).
+        # native-tls is dead code at runtime — our code paths never reach
+        # it — but `openssl-sys`'s build script still requires a system
+        # OpenSSL to link against on non-darwin targets. So we keep openssl
+        # in buildInputs; the link unit is present but unused.
+
         # ── muninn (default Nix install) ────────────────────────────────────
         #
         # Plain rustPlatform build. The local embedding backend is pure-Rust
         # (tessera-embeddings + candle), so there is no libonnxruntime or
-        # other native runtime dep to wire up — the only Nix-store reference
-        # that leaks into the binary is libiconv (system C dep on darwin).
-        # `nix profile install .` keeps that as a GC root.
+        # other native runtime dep to wire up.
         muninn = pkgs.rustPlatform.buildRustPackage (commonAttrs // {
           pname = "muninn";
           nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
         });
 
         # ── muninn-static ───────────────────────────────────────────────────
@@ -69,10 +77,14 @@
         # Same code, built under `pkgsStatic.rustPlatform` so the linker
         # prefers static archives — drops the /nix/store/.../libiconv.dylib
         # reference plain `rustPlatform` leaves on darwin. Result is portable
-        # (only Apple system frameworks remain).
+        # (only Apple system frameworks remain on darwin; nothing dynamic
+        # on Linux musl).
         muninnStatic = pkgs.pkgsStatic.rustPlatform.buildRustPackage (commonAttrs // {
           pname = "muninn-static";
           nativeBuildInputs = [ pkgs.pkgsStatic.pkg-config ];
+          buildInputs = [ pkgs.pkgsStatic.openssl ];
+          OPENSSL_STATIC = "1";
+          OPENSSL_NO_VENDOR = "1";
         });
 
       in
