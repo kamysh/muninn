@@ -21,6 +21,7 @@ Everything runs locally. No source code, no file tree structure, no graph data e
 | Get up and running with Docker (easiest path) | [docs/get-started.md](docs/get-started.md) |
 | Use my own existing PostgreSQL instance | [docs/own-database.md](docs/own-database.md) |
 | Build from source or contribute | [docs/development.md](docs/development.md) |
+| Install muninn as an AI coding agent (Claude Code, Cursor, etc.) | [AGENTS.md](AGENTS.md) |
 
 ## CLI reference
 
