@@ -43,12 +43,12 @@
 
         agdaWithStdlib = pkgs.agda.withPackages (ps: [ ps.standard-library ]);
 
-        # The local embedding backend is model2vec (static embeddings) —
-        # pure-Rust (safetensors + tokenizers/fancy-regex + ndarray). No ONNX
-        # runtime, no Pyke archive, no openssl, no C/C++ deps. So both packages
-        # are plain rustPlatform builds with nothing to wire up.
+        # The local embedding backend is model2vec (static embeddings) — no ONNX
+        # runtime, no Pyke archive, no openssl. It is almost pure-Rust; the one
+        # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
+        # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "0.1.16";
+          version = "0.1.17";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
@@ -65,11 +65,18 @@
 
         # Portable static build: pkgsStatic links everything reachable
         # statically — no /nix/store refs (only Apple system frameworks on
-        # darwin; fully static on linux musl). Pure-Rust deps mean no openssl,
-        # no libstdc++, hence no PIE workaround or glibc stubs needed.
+        # darwin; fully static on linux musl).
+        #
+        # model2vec-rs pulls in `tokenizers → esaxx-rs`, which is C++, so the
+        # binary links libstdc++.a. On x86_64 musl, libstdc++.a's eh_personality.o
+        # has R_X86_64_32S relocations that can't appear in a PIE, and pkgsStatic
+        # defaults to -static-pie — so disable PIE for that one target. (darwin
+        # and aarch64-linux link fine without this.)
         muninnStatic = pkgs.pkgsStatic.rustPlatform.buildRustPackage (commonAttrs // {
           pname = "muninn-static";
           nativeBuildInputs = [ pkgs.pkgsStatic.pkg-config ];
+        } // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          RUSTFLAGS = "-C relocation-model=static";
         });
 
       in
