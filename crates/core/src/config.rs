@@ -14,7 +14,10 @@ pub enum EmbeddingBackend {
 #[serde(deny_unknown_fields)]
 pub struct EmbeddingConfig {
     pub backend: EmbeddingBackend,
-    pub model: String,
+    /// Required for `voyage` and `openai`; ignored (and not required) for `local`,
+    /// which uses a hardcoded bundled model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_dir: Option<String>,
@@ -25,7 +28,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             backend: EmbeddingBackend::Voyage,
-            model: "voyage-code-3".to_string(),
+            model: Some("voyage-code-3".to_string()),
             api_key: None,
             cache_dir: None,
             batch_size: 64,
@@ -208,7 +211,12 @@ impl GlobalConfig {
         anyhow::ensure!(!self.database.dbname.trim().is_empty(), "[database] dbname must not be empty");
         anyhow::ensure!(!self.database.user.trim().is_empty(), "[database] user must not be empty");
         anyhow::ensure!(self.embeddings.batch_size > 0, "[embeddings] batch_size must be greater than 0");
-        anyhow::ensure!(!self.embeddings.model.trim().is_empty(), "[embeddings] model must not be empty");
+        if self.embeddings.backend != EmbeddingBackend::Local {
+            anyhow::ensure!(
+                self.embeddings.model.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                "[embeddings] model is required for voyage and openai backends"
+            );
+        }
         Ok(())
     }
 
@@ -318,7 +326,7 @@ user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username 
 
 [embeddings]
 backend    = "voyage"           # voyage | openai | local
-model      = "voyage-code-3"
+model      = "voyage-code-3"    # REQUIRED for voyage/openai; omit for local (model is bundled)
 api_key    = "YOUR_API_KEY"     # REQUIRED for voyage/openai — paste your key here
 cache_dir  = "/path/to/cache"   # optional: local model cache directory
 batch_size = 64                 # texts sent to the API in one request; reduce if you hit rate limits
@@ -402,10 +410,12 @@ impl RepoConfig {
                 emb.batch_size > 0,
                 "[embeddings] batch_size must be greater than 0"
             );
-            anyhow::ensure!(
-                !emb.model.trim().is_empty(),
-                "[embeddings] model must not be empty"
-            );
+            if emb.backend != EmbeddingBackend::Local {
+                anyhow::ensure!(
+                    emb.model.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                    "[embeddings] model is required for voyage and openai backends"
+                );
+            }
         }
         if let Some(ref w) = self.watcher {
             anyhow::ensure!(
@@ -530,7 +540,7 @@ mod tests {
     fn config_default_embedding_is_voyage() {
         let cfg = EmbeddingConfig::default();
         assert_eq!(cfg.backend, EmbeddingBackend::Voyage);
-        assert_eq!(cfg.model, "voyage-code-3");
+        assert_eq!(cfg.model, Some("voyage-code-3".to_string()));
         assert_eq!(cfg.batch_size, 64);
     }
 
@@ -558,7 +568,7 @@ mod tests {
             database: None,
             embeddings: Some(EmbeddingConfig {
                 backend: EmbeddingBackend::Local,
-                model: "all-minilm".to_string(),
+                model: None,
                 api_key: None,
                 cache_dir: None,
                 batch_size: 32,

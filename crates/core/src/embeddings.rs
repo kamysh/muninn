@@ -185,11 +185,11 @@ pub fn make_backend(cfg: &crate::config::EmbeddingConfig) -> Box<dyn EmbeddingBa
     match cfg.backend {
         B::Voyage => Box::new(VoyageBackend::new(
             cfg.api_key.clone().unwrap_or_default(),
-            cfg.model.clone(),
+            cfg.model.clone().unwrap_or_default(),
         )),
         B::OpenAI => Box::new(OpenAIBackend::new(
             cfg.api_key.clone().unwrap_or_default(),
-            cfg.model.clone(),
+            cfg.model.clone().unwrap_or_default(),
         )),
         B::Local => Box::new(LocalBackend::new(cfg.batch_size, cfg.cache_dir.clone())),
     }

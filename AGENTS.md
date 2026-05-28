@@ -23,16 +23,29 @@ rely on. Follow this file instead.
 
 ## Variables
 
-Bind these once at the start. Re-use them in every command.
+**Before doing anything else, ask the user for these values:**
 
-| Variable | Default | Notes |
-|---|---|---|
-| `PORT` | `5432` | Pick another if 5432 is in use. On macOS, also check 5000 (AirPlay) and 6000 (X11). |
-| `CONTAINER` | `postgres-ai` | Must not collide with an existing container. |
-| `VOLUME` | `muninn_data` | Docker volume for the postgres data dir. |
-| `DB_USER` | `muninn` | |
-| `DB_NAME` | `muninn` | |
-| `EMBEDDING_BACKEND` | `local` | `local` (no API key, offline) \| `voyage` \| `openai` |
+1. **Docker container name** — the local name for the postgres-ai container
+   (e.g. `local-postgres-ai`). Check `docker ps -a` and suggest a name that
+   doesn't collide. The Docker image is always `kamysh/postgres-ai`.
+2. **Port** — the host port to expose PostgreSQL on (default `5432`; check
+   `lsof -nP -iTCP -sTCP:LISTEN` for conflicts).
+3. **DB user** — the PostgreSQL role to create for muninn (default `muninn`).
+4. **DB name** — the database to create (default `muninn`; usually matches the user).
+
+If muninn is being installed alongside mimir (see "Companion tool" at the end),
+also confirm whether they share one container or use separate ones.
+
+Bind the answers as shell variables once, then re-use in every command below:
+
+| Variable | Notes |
+|---|---|
+| `PORT` | Host port. Avoid 5000 (AirPlay on macOS), 6000 (X11), and anything in use. |
+| `CONTAINER` | Local container name. Must not collide with an existing container. Image: `kamysh/postgres-ai`. |
+| `VOLUME` | Docker volume for the postgres data dir (e.g. `muninn_data`). If sharing a container with mimir, use the same volume. |
+| `DB_USER` | PostgreSQL role for muninn. |
+| `DB_NAME` | Database for muninn. |
+| `EMBEDDING_BACKEND` | `local` (no API key, offline) \| `voyage` \| `openai` |
 
 Check assumptions before starting:
 
@@ -45,7 +58,7 @@ echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"               # PATH in
 
 If any check fails, stop and report the specific failure to the user.
 Do not try to recover automatically (e.g. do not kill an existing
-postgres-ai container — it may hold data the user cares about).
+container — it may hold data the user cares about).
 
 ## State detection — skip steps already complete
 
