@@ -53,7 +53,7 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
     let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.pool, &params).await?;
 
-    let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
+    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -79,7 +79,7 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
     let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.pool, &params).await?;
 
-    let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
+    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -260,7 +260,7 @@ pub async fn search_knowledge(
 ) -> Result<KnowledgeSearchResponse> {
     let limit = normalize_limit(params.limit)?;
 
-    let embedding = ctx.embedder.embed(&[params.query.clone()]).await?;
+    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
     let emb = embedding.into_iter().next().unwrap_or_default();
 
     let results = knowledge::search_hybrid(

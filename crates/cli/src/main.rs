@@ -150,6 +150,7 @@ async fn run_foreground_index(
         embedder,
         eff.embeddings.batch_size,
         repo_dim,
+        &eff.exclude,
         |done, total, file| {
             let rel = file
                 .strip_prefix(&repo_path_for_progress)
@@ -223,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Opening in $EDITOR… (save and close to finish)");
 
         let validated = edit_toml_in_temp(&initial_content, |content| {
-            GlobalConfig::from_str(content)?.validate()
+            GlobalConfig::from_toml_str(content)?.validate()
         })?;
 
         if let Some(parent) = config_path.parent() {
@@ -238,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
             std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))?;
         }
 
-        let cfg = GlobalConfig::from_str(&validated)?;
+        let cfg = GlobalConfig::from_toml_str(&validated)?;
         let pool = db::connect(&cfg.database).await?;
         println!("Applying database migrations…");
         db::run_migrations(&pool).await?;
@@ -285,7 +286,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Opening in $EDITOR… (save and close to finish)");
 
             let validated_content = edit_toml_in_temp(&template, |content| {
-                muninn_core::config::RepoConfig::from_str(content)?.validate()
+                muninn_core::config::RepoConfig::from_toml_str(content)?.validate()
             })
             .map_err(|e| {
                 anyhow::anyhow!("{} — {} not registered.", e, repo_path.display())
@@ -294,7 +295,7 @@ async fn main() -> anyhow::Result<()> {
             std::fs::write(&toml_path, &validated_content)?;
             println!("Created: {}", toml_path.display());
 
-            let repo_cfg = muninn_core::config::RepoConfig::from_str(&validated_content)?;
+            let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
             let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
 
@@ -341,7 +342,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Opening in $EDITOR… (save and close to finish)");
 
             let validated_content = edit_toml_in_temp(&existing_content, |content| {
-                let rc = muninn_core::config::RepoConfig::from_str(content)?;
+                let rc = muninn_core::config::RepoConfig::from_toml_str(content)?;
                 rc.validate()?;
                 let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
                 let new_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
@@ -364,7 +365,7 @@ async fn main() -> anyhow::Result<()> {
 
             std::fs::write(&toml_path, &validated_content)?;
 
-            let repo_cfg = muninn_core::config::RepoConfig::from_str(&validated_content)?;
+            let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
             let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
 
             if eff.repo_name != repo.name {

@@ -3,13 +3,16 @@ use crate::{
     graph,
     parser::{detect_language, extract_edges, parse_file, chunk_file},
     store::{upsert_chunk, delete_file_chunks},
-    types::{BatchOutcome, StructuralEdge, SymbolKind},
+    types::{BatchOutcome, StructuralEdge},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
 use std::sync::Arc;
 use std::path::Path;
+
+/// Files larger than this are skipped during indexing (see `index_file`).
+const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
 
 pub async fn index_file(
     pool: &PgPool,
@@ -21,6 +24,14 @@ pub async fn index_file(
     expected_dim: usize,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
+    // Skip files larger than the cap before reading them into memory. Huge text
+    // files (generated bundles, data dumps, vendored blobs) would otherwise
+    // explode into thousands of low-value chunks and dominate the index.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > MAX_FILE_BYTES {
+            return Ok(());
+        }
+    }
     let bytes = std::fs::read(path)?;
     // Skip binary files (null byte is a reliable binary indicator)
     if bytes.contains(&0u8) {
@@ -92,6 +103,12 @@ pub async fn index_file(
     }
 
     delete_file_chunks(pool, repo_id, &file_path).await?;
+    // Clear this file's old symbol nodes too: chunk_ids are regenerated on each
+    // index, so MERGE-by-chunk_id below would leave the previous nodes dangling.
+    // Best-effort, matching the graph-write calls further down.
+    if let Err(e) = graph::delete_file_symbols(pool, repo_id, &file_path).await {
+        tracing::warn!("failed to clear old graph nodes for {}: {}", file_path, e);
+    }
     for chunk in &chunks {
         upsert_chunk(pool, chunk).await?;
     }
@@ -104,49 +121,47 @@ pub async fn index_file(
     let mut name_to_chunk: std::collections::HashMap<String, uuid::Uuid> =
         std::collections::HashMap::new();
 
+    let mut node_inputs: Vec<graph::SymbolNodeInput> = Vec::new();
     for chunk in &chunks {
         // chunk_file may split an oversized symbol body into multiple
         // sub-chunks; only the FIRST sub-chunk inherits the symbol's start
         // line, so match by start (not strict range equality).
         if let Some(sym) = symbols.iter().find(|s| s.range.start == chunk.range.start) {
-            let kind_str = match sym.kind {
-                SymbolKind::Function => "Function",
-                SymbolKind::Class    => "Class",
-                SymbolKind::Module   => "Module",
-                SymbolKind::Import   => "Import",
-            };
-            if let Err(e) = graph::upsert_symbol_node(
-                pool, repo_id, chunk.id,
-                &sym.name, kind_str, &file_path,
-                sym.range.start, sym.range.end,
-            ).await {
-                tracing::warn!("failed to store symbol '{}' in graph: {}", sym.name, e);
-            } else {
-                // Key by the symbol's full range, not the (possibly truncated)
-                // first sub-chunk's range — edge resolution looks up by
-                // symbol range and would otherwise miss split symbols.
-                range_to_chunk.insert((sym.range.start, sym.range.end), chunk.id);
-                // first occurrence wins for name lookup
-                name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
-            }
+            node_inputs.push(graph::SymbolNodeInput {
+                chunk_id: chunk.id,
+                name: sym.name.clone(),
+                kind: sym.kind.clone(),
+                file_path: file_path.clone(),
+                start_line: sym.range.start,
+                end_line: sym.range.end,
+            });
+            // Key by the symbol's full range, not the (possibly truncated)
+            // first sub-chunk's range — edge resolution looks up by symbol
+            // range and would otherwise miss split symbols.
+            range_to_chunk.insert((sym.range.start, sym.range.end), chunk.id);
+            // first occurrence wins for name lookup
+            name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
         }
+    }
+    // One batched write (≤4 round-trips) instead of one per symbol.
+    if let Err(e) = graph::upsert_symbol_nodes(pool, repo_id, &node_inputs).await {
+        tracing::warn!("failed to store {} symbol node(s) for {}: {}", node_inputs.len(), file_path, e);
     }
 
     // Persist structural edges (DEFINES, CALLS) derived from intra-file analysis.
     if let Some(lang) = language {
         let parsed_edges = extract_edges(&symbols, &source, &lang);
+        let mut edges: Vec<StructuralEdge> = Vec::new();
         for pe in parsed_edges {
             let from_id = range_to_chunk.get(&(pe.from_range.start, pe.from_range.end));
             let to_id = name_to_chunk.get(&pe.to_name);
             if let (Some(&from), Some(&to)) = (from_id, to_id) {
-                let edge = StructuralEdge { from, to, relation: pe.relation };
-                if let Err(e) = graph::upsert_edge(pool, repo_id, &edge).await {
-                    tracing::warn!(
-                        "failed to store edge {:?}→'{}': {}",
-                        pe.from_range, pe.to_name, e
-                    );
-                }
+                edges.push(StructuralEdge { from, to, relation: pe.relation });
             }
+        }
+        // One batched write (≤4 round-trips) instead of one per edge.
+        if let Err(e) = graph::upsert_edges(pool, repo_id, &edges).await {
+            tracing::warn!("failed to store {} edge(s) for {}: {}", edges.len(), file_path, e);
         }
     }
 
@@ -162,6 +177,56 @@ pub struct SkipRecord {
     pub reason: String,
 }
 
+/// Build an `ignore::overrides::Override` that excludes the given glob patterns
+/// (relative to `repo_path`). With only negated (`!`) globs and no whitelist
+/// globs, the `ignore` crate matches everything by default and ignores only
+/// paths that hit one of these patterns — exactly the "index everything except
+/// these" semantics we want. Shared by the full-repo walk and the file watcher
+/// so both apply identical exclusions. `.git/` is pruned separately.
+pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides::Override {
+    use ignore::overrides::OverrideBuilder;
+    let mut builder = OverrideBuilder::new(repo_path);
+    for pat in exclude {
+        let pat = pat.trim();
+        if pat.is_empty() {
+            continue;
+        }
+        // A leading `!` makes an override glob an *ignore* (exclude) rule.
+        if let Err(e) = builder.add(&format!("!{pat}")) {
+            tracing::warn!("ignoring invalid exclude glob {:?}: {}", pat, e);
+        }
+    }
+    builder.build().unwrap_or_else(|e| {
+        tracing::warn!(
+            "failed to build exclude globset for {}: {}",
+            repo_path.display(), e
+        );
+        ignore::overrides::Override::empty()
+    })
+}
+
+/// Whether `rel` (a path relative to the repo root) is excluded by `overrides`.
+///
+/// The full-repo walk relies on `WalkBuilder` to prune excluded directories as
+/// it descends, so a single `Override::matched` per entry suffices there. The
+/// file watcher, however, receives deep paths with no traversal context — and
+/// `Override::matched` (unlike `Gitignore::matched_path_or_any_parents`) tests
+/// only the exact path, not its ancestors. So a change to `target/debug/x.rs`
+/// under a `target/` exclude would slip through. This walks the path's
+/// ancestors so a directory exclude correctly covers everything beneath it.
+pub fn path_excluded(overrides: &ignore::overrides::Override, rel: &Path) -> bool {
+    if overrides.is_empty() {
+        return false;
+    }
+    if overrides.matched(rel, false).is_ignore() {
+        return true;
+    }
+    rel.ancestors()
+        .skip(1) // rel itself already tested above
+        .take_while(|a| !a.as_os_str().is_empty())
+        .any(|ancestor| overrides.matched(ancestor, true).is_ignore())
+}
+
 /// Index all files in a repo.
 ///
 /// Returns the overall `BatchOutcome` plus a list of files that were skipped
@@ -172,6 +237,9 @@ pub struct SkipRecord {
 ///
 /// `on_progress` is called after each file with `(files_done, total_files, path)`.
 /// Pass `|_, _, _| {}` for no-op (daemon background use).
+// Pool, ids, embedder, config knobs and a progress callback — all distinct
+// concerns; a param struct would obscure more than it clarifies.
+#[allow(clippy::too_many_arguments)]
 pub async fn index_repo(
     pool: &PgPool,
     repo_id: Uuid,
@@ -179,13 +247,19 @@ pub async fn index_repo(
     embedder: Arc<dyn EmbeddingBackend>,
     embed_batch_size: usize,
     expected_dim: usize,
+    exclude: &[String],
     on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     use ignore::WalkBuilder;
 
+    // Index everything under the repo root: no .gitignore / hidden-file
+    // filtering. Only `.git/` (pruned below), binary/oversize files (skipped in
+    // index_file), and the per-repo `exclude` globs are left out.
+    let overrides = build_excludes(repo_path, exclude);
     let walker = WalkBuilder::new(repo_path)
-        .hidden(false)
-        .git_ignore(true)
+        .standard_filters(false)
+        .overrides(overrides)
+        .filter_entry(|e| e.file_name() != ".git")
         .build();
 
     let mut files: Vec<std::path::PathBuf> = vec![];
@@ -195,16 +269,21 @@ pub async fn index_repo(
         }
     }
 
+    // The authoritative set of file paths after this walk. `index_file` stores
+    // `file_path` as `path.to_string_lossy()`, so build `keep` the same way to
+    // prune orphaned chunks (deleted-on-disk or newly-excluded files) below.
+    let keep: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+
     let total = files.len();
     let mut done = 0usize;
     let mut any_succeeded = false;
     let mut skips: Vec<SkipRecord> = Vec::new();
 
     for file in &files {
-        // 1500 chars ≈ 500 tokens of code (denser tokenisation than English
-        // text). Stays safely under BGE-Base's 512-token context window;
-        // larger values silently dropped chunks under fastembed and
-        // hard-failed under tessera/candle.
+        // 1500-char cap keeps chunks at a useful search granularity: one
+        // embedding per ~symbol-sized span rather than one blurred vector per
+        // huge file. model2vec mean-pools over all tokens (no context-window
+        // truncation), so this is a quality knob, not a hard limit.
         match index_file(
             pool,
             repo_id,
@@ -232,14 +311,35 @@ pub async fn index_repo(
     // finishIndex (Indexing → Indexed) requires BatchOutcome ≠ NoneSucceeded.
     // A totally-failed non-empty batch must NOT mark the repo as indexed.
     let any_failed = !skips.is_empty();
-    if any_succeeded {
+    if any_succeeded || files.is_empty() {
+        // Authoritative reindex: drop chunks (and graph nodes) for files no
+        // longer in the set — deleted on disk or newly matched by an exclude
+        // glob. Skipped only when the whole batch failed: we must not destroy
+        // data on a bad run. Files that failed *this* run stay in `keep`, so
+        // their prior data is preserved. Non-fatal: a prune error leaves orphans
+        // but the index is otherwise valid.
+        //
+        // Prune the graph first (per orphan file) so we never leave symbol nodes
+        // pointing at chunks that no longer exist.
+        match crate::store::file_paths_not_in(pool, repo_id, &keep).await {
+            Ok(orphans) => {
+                for path in &orphans {
+                    if let Err(e) = crate::graph::delete_file_symbols(pool, repo_id, path).await {
+                        tracing::warn!("graph prune failed for {}: {}", path, e);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("listing orphan files failed for repo {}: {}", repo_id, e),
+        }
+        match crate::store::prune_chunks_not_in(pool, repo_id, &keep).await {
+            Ok(n) if n > 0 => tracing::info!(
+                "reindex pruned {} orphaned chunk(s) in repo {}", n, repo_id),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
+        }
         crate::store::mark_indexed(pool, repo_id).await?;
         let outcome = if any_failed { BatchOutcome::SomeSucceeded } else { BatchOutcome::AllSucceeded };
         Ok((outcome, skips))
-    } else if files.is_empty() {
-        // Vacuously: no files to index — mark as indexed (AllSucceeded over empty set).
-        crate::store::mark_indexed(pool, repo_id).await?;
-        Ok((BatchOutcome::AllSucceeded, skips))
     } else {
         tracing::error!(
             "repo {}: all {} files failed to index — not marking as indexed",
@@ -249,5 +349,56 @@ pub async fn index_repo(
             "BatchOutcome: no files were successfully indexed in repo {}",
             repo_id
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ov(globs: &[&str]) -> ignore::overrides::Override {
+        let v: Vec<String> = globs.iter().map(|s| s.to_string()).collect();
+        build_excludes(Path::new("/repo"), &v)
+    }
+
+    #[test]
+    fn empty_excludes_index_everything() {
+        let o = ov(&[]);
+        assert!(!path_excluded(&o, Path::new("src/main.rs")));
+        assert!(!path_excluded(&o, Path::new("node_modules/pkg/index.js")));
+    }
+
+    #[test]
+    fn dir_exclude_covers_descendants() {
+        let o = ov(&["target/"]);
+        // The directory itself and anything beneath it are excluded …
+        assert!(path_excluded(&o, Path::new("target/debug/build/x.rs")));
+        assert!(path_excluded(&o, Path::new("target/foo")));
+        // … but unrelated paths are still indexed (node_modules NOT excluded).
+        assert!(!path_excluded(&o, Path::new("src/lib.rs")));
+        assert!(!path_excluded(&o, Path::new("node_modules/left-pad/index.js")));
+    }
+
+    #[test]
+    fn glob_exclude_matches_files() {
+        let o = ov(&["**/*.min.js"]);
+        assert!(path_excluded(&o, Path::new("web/static/app.min.js")));
+        assert!(!path_excluded(&o, Path::new("web/static/app.js")));
+    }
+
+    #[test]
+    fn multiple_patterns_combine() {
+        let o = ov(&["target/", "dist/", "**/*.lock"]);
+        assert!(path_excluded(&o, Path::new("target/x")));
+        assert!(path_excluded(&o, Path::new("dist/bundle.js")));
+        assert!(path_excluded(&o, Path::new("a/b/Cargo.lock")));
+        assert!(!path_excluded(&o, Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn blank_patterns_ignored() {
+        // Whitespace-only / empty entries must not turn into a match-all.
+        let o = ov(&["", "   "]);
+        assert!(!path_excluded(&o, Path::new("anything.rs")));
     }
 }

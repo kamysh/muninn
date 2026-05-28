@@ -1,6 +1,6 @@
 [package]
 name = "muninn-core"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2021"
 
 [dependencies]
@@ -21,15 +21,10 @@ tokio = { workspace = true }
 ignore = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }
-fastembed = { version = "5.13", default-features = false, features = [
-  "hf-hub",
-  "hf-hub-native-tls",
-  "ort-download-binaries-native-tls",
-] }
-# Direct pin on fastembed's transitive ort-sys dep — see workspace Cargo.toml
-# for the rationale. The crate itself isn't used in muninn-core code; the
-# direct dep is solely to force the resolver to pick the pinned version.
-ort-sys = { workspace = true }
+# Local embedding backend: model2vec static embeddings (pure Rust — no ONNX
+# runtime, no native ML lib, no ABI/version pinning). `fancy-regex` instead of
+# the default `onig` keeps the tokenizer dependency pure-Rust (no oniguruma C).
+model2vec-rs = { version = "0.2", default-features = false, features = ["hf-hub", "fancy-regex"] }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

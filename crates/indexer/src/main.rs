@@ -176,6 +176,7 @@ async fn scan_and_dispatch(
             let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
                 Arc::from(make_backend(&eff.embeddings));
             let batch_size = eff.embeddings.batch_size;
+            let exclude = eff.exclude.clone();
             let repo_id = repo.id;
             let repo_path_owned = repo_path.to_path_buf();
             let repo_path_str = repo.path.clone();
@@ -200,7 +201,7 @@ async fn scan_and_dispatch(
                 let state = Arc::new(Mutex::new(IndexState::Indexing));
                 let result = index_repo(
                     &pool2, repo_id, &repo_path_owned, embedder,
-                    batch_size, repo_dim, |_, _, _| {},
+                    batch_size, repo_dim, &exclude, |_, _, _| {},
                 )
                 .await;
 
@@ -261,6 +262,8 @@ async fn scan_and_dispatch(
         let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
             Arc::from(make_backend(&eff.embeddings));
         let debounce = eff.watcher.debounce_ms;
+        let batch_size = eff.embeddings.batch_size;
+        let exclude = eff.exclude.clone();
         let id = repo.id;
         let repo_path_owned = repo_path.to_path_buf();
         let initial_state = Arc::new(Mutex::new(IndexState::Watching));
@@ -269,7 +272,7 @@ async fn scan_and_dispatch(
             if let Err(e) = watcher::watch_repo(
                 pool2, id, repo_path_owned, embedder,
                 debounce, initial_state,
-                eff.embeddings.batch_size, repo_dim,
+                batch_size, repo_dim, exclude,
             )
             .await
             {

@@ -41,8 +41,8 @@ user   = "${DBUSER}"
 
 [embeddings]
 backend    = "local"
-model      = "all-MiniLM-L6-v2"
-cache_dir  = "${HOME}/.cache/muninn/fastembed"
+model      = "potion-base-32M"
+cache_dir  = "${HOME}/.cache/muninn/models"
 batch_size = 16
 
 [watcher]

@@ -7,11 +7,13 @@ use tokio::sync::Mutex;
 use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
-use ignore::gitignore::GitignoreBuilder;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::types::IndexState;
-use muninn_core::pipeline::index_file;
+use muninn_core::pipeline::{build_excludes, index_file};
 
+// Pool, ids, embedder, debounce, shared state and config knobs — all distinct
+// concerns; bundling them into a struct would not improve clarity.
+#[allow(clippy::too_many_arguments)]
 pub async fn watch_repo(
     pool: PgPool,
     repo_id: Uuid,
@@ -21,35 +23,12 @@ pub async fn watch_repo(
     state: Arc<Mutex<IndexState>>,
     embed_batch_size: usize,
     expected_dim: usize,
+    exclude: Vec<String>,
 ) -> Result<()> {
-    // Build gitignore matcher from the repo root so the watcher skips the same
-    // files that index_repo (WalkBuilder with git_ignore=true) would skip.
-    // Build gitignore from ALL nested .gitignore files so that patterns like
-    // BLD/ defined in subdirectory .gitignore files are respected.
-    let gitignore = {
-        let mut builder = GitignoreBuilder::new(&repo_path);
-        let walker = ignore::WalkBuilder::new(&repo_path)
-            .git_ignore(false)
-            .hidden(false)
-            .build();
-        for entry in walker.filter_map(|e| e.ok()) {
-            if entry.file_name() == ".gitignore" && entry.path().is_file() {
-                if let Some(err) = builder.add(entry.path()) {
-                    tracing::warn!(
-                        "failed to load gitignore {}: {}",
-                        entry.path().display(), err
-                    );
-                }
-            }
-        }
-        match builder.build() {
-            Ok(gi) => gi,
-            Err(e) => {
-                tracing::warn!("failed to build gitignore matcher for {}: {}", repo_path.display(), e);
-                ignore::gitignore::Gitignore::empty()
-            }
-        }
-    };
+    // Mirror index_repo's discovery: index everything except `.git/` and the
+    // per-repo exclude globs. (No .gitignore filtering — gitignored files are
+    // indexed on purpose.)
+    let overrides = build_excludes(&repo_path, &exclude);
 
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
 
@@ -88,11 +67,8 @@ pub async fn watch_repo(
 
         // collect more events within the debounce window
         let _ = tokio::time::timeout(debounce, async {
-            loop {
-                match rx.recv().await {
-                    Some(p) => batch.push(p),
-                    None => break,
-                }
+            while let Some(p) = rx.recv().await {
+                batch.push(p);
             }
         }).await;
 
@@ -111,12 +87,12 @@ pub async fn watch_repo(
 
         let mut any_succeeded = false;
         for path in batch {
-            // Skip .git internals and gitignored paths (mirrors WalkBuilder in index_repo)
+            // Skip .git internals and excluded paths (mirrors index_repo's walk).
             let is_git_internal = path.components().any(|c| c.as_os_str() == ".git");
-            let is_ignored = path.strip_prefix(&repo_path)
-                .map(|rel| gitignore.matched(rel, false).is_ignore())
+            let is_excluded = path.strip_prefix(&repo_path)
+                .map(|rel| muninn_core::pipeline::path_excluded(&overrides, rel))
                 .unwrap_or(false);
-            if is_git_internal || is_ignored {
+            if is_git_internal || is_excluded {
                 continue;
             }
 
@@ -136,12 +112,19 @@ pub async fn watch_repo(
                     Err(e) => tracing::warn!("incremental index error for {}: {}", path.display(), e),
                 }
             } else {
+                let fp = path.to_string_lossy();
                 if let Err(e) = muninn_core::store::delete_file_chunks(
-                    &pool, repo_id,
-                    path.to_string_lossy().as_ref(),
+                    &pool, repo_id, fp.as_ref(),
                 ).await {
                     tracing::warn!("failed to delete chunks for {}: {}", path.display(), e);
                 } else {
+                    // Also drop the file's symbol nodes so the graph stays in
+                    // sync. Best-effort: a graph error shouldn't fail the batch.
+                    if let Err(e) = muninn_core::graph::delete_file_symbols(
+                        &pool, repo_id, fp.as_ref(),
+                    ).await {
+                        tracing::warn!("failed to delete graph nodes for {}: {}", path.display(), e);
+                    }
                     any_succeeded = true;
                 }
             }

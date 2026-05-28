@@ -34,6 +34,9 @@ pub struct KnowledgeResult {
 /// `expected_dim` is the dimension of the active embedding backend; if `embedding` is
 /// present its length must match to prevent dimension-mismatch errors at query time.
 /// Returns the persisted item (with embedding cleared — caller must re-embed if needed).
+// Cohesive set of knowledge-item fields; bundling them into a struct would just
+// move the argument list elsewhere without improving clarity.
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert(
     pool:          &PgPool,
     id:            Option<Uuid>,
@@ -203,8 +206,8 @@ pub async fn search_hybrid(
     let ft  = search_fulltext(pool, repo_path, query, limit * 2).await?;
 
     // Reuse the existing RRF implementation via the SearchResult adaptor.
-    let sem_sr: Vec<SearchResult> = sem.iter().map(|r| knowledge_to_search_result(r)).collect();
-    let ft_sr:  Vec<SearchResult> = ft.iter().map(|r|  knowledge_to_search_result(r)).collect();
+    let sem_sr: Vec<SearchResult> = sem.iter().map(knowledge_to_search_result).collect();
+    let ft_sr:  Vec<SearchResult> = ft.iter().map(knowledge_to_search_result).collect();
 
     let merged_sr = rrf_merge(sem_sr, ft_sr, limit as usize);
 

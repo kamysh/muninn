@@ -117,6 +117,20 @@ impl Default for WatcherConfig {
     }
 }
 
+// ── Index config ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct IndexConfig {
+    /// Glob patterns (relative to the repo root) to exclude from indexing.
+    /// muninn indexes everything by default — including files normally hidden
+    /// by .gitignore (node_modules, build output, dotfiles), because gitignored
+    /// files are often worth searching. Use this to opt specific paths back
+    /// out, e.g. `exclude = ["target/", "**/*.min.js"]`. `.git/` is always
+    /// excluded regardless of this list.
+    pub exclude: Vec<String>,
+}
+
 // ── MCP config ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -170,6 +184,8 @@ pub struct GlobalConfig {
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
     #[serde(default)]
+    pub index: IndexConfig,
+    #[serde(default)]
     pub mcp: McpConfig,
 }
 
@@ -183,7 +199,7 @@ impl GlobalConfig {
         CONFIG_TEMPLATE
     }
 
-    pub fn from_str(content: &str) -> anyhow::Result<Self> {
+    pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
         toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
@@ -291,9 +307,11 @@ user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username 
 #             Get a key at https://platform.openai.com  →  API keys.
 #             Suggested model: text-embedding-3-small (1536 dims).
 #
-#   local   — No API key required.  Runs BGE-Base-EN-v1.5 (768 dims) entirely
-#             on-device via ONNX (CPU).  ~200 MB download on first use.
-#             Good quality; lower than code-trained API backends (voyage/openai).
+#   local   — No API key required.  Runs potion-base-32M static embeddings
+#             (512 dims) entirely on-device, pure-Rust.  ~120 MB download on
+#             first use; embeds ~6k chunks/sec (fast enough to index deps too).
+#             Lower contextual quality than a transformer (voyage/openai) but
+#             ample for code search.
 #
 # WARNING: the backend (and therefore the vector dimension) is frozen after the
 # first index run.  To switch backends you must unregister and re-index the repo.
@@ -314,6 +332,16 @@ batch_size = 64                 # texts sent to the API in one request; reduce i
 
 [watcher]
 debounce_ms = 300   # milliseconds; 300 is a good default for most editors
+
+# ── Index ─────────────────────────────────────────────────────────────────────
+# muninn indexes EVERYTHING under a repo root by default — including files that
+# .gitignore normally hides (node_modules, build output, dotfiles) — because
+# those are often worth searching. Only `.git/`, binary files, and files larger
+# than 10 MiB are skipped automatically. Add glob patterns here (relative to the
+# repo root) to opt specific paths back out. Leave empty to index everything.
+
+[index]
+exclude = []   # e.g. ["target/", "dist/", "**/*.min.js"]
 
 # ── MCP (Claude Code) ─────────────────────────────────────────────────────────
 # muninn-mcp serves search tools to Claude Code and can keep a local usage log.
@@ -342,6 +370,8 @@ pub struct RepoConfig {
     pub embeddings: Option<EmbeddingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watcher: Option<WatcherConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<IndexConfig>,
 }
 
 impl RepoConfig {
@@ -349,7 +379,7 @@ impl RepoConfig {
 
     /// Parse a RepoConfig from a TOML string (e.g. read from a temp file).
     /// Returns an error with a descriptive message on unknown fields or bad syntax.
-    pub fn from_str(content: &str) -> anyhow::Result<Self> {
+    pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
         toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
@@ -424,7 +454,14 @@ impl RepoConfig {
                  # [watcher]\n\
                  # Override the file-change debounce for this repo.\n\
                  # Increase if you see excessive re-indexing during large rebases.\n\
-                 # debounce_ms = 300\n",
+                 # debounce_ms = 300\n\
+                 \n\
+                 # [index]\n\
+                 # muninn indexes everything under the repo root by default (including\n\
+                 # gitignored files like node_modules). Add globs (relative to the repo\n\
+                 # root) to exclude specific paths. `.git/`, binaries, and files over\n\
+                 # 10 MiB are always skipped.\n\
+                 # exclude = [\"target/\", \"dist/\", \"**/*.min.js\"]\n",
                 dir_name = dir_name
         )
     }
@@ -447,6 +484,7 @@ pub struct EffectiveConfig {
     pub database: DatabaseConfig,
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
+    pub exclude: Vec<String>,
     pub repo_name: String,
 }
 
@@ -458,6 +496,8 @@ impl EffectiveConfig {
             database:  repo.database.clone().unwrap_or_else(|| global.database.clone()),
             embeddings: repo.embeddings.clone().unwrap_or_else(|| global.embeddings.clone()),
             watcher:   repo.watcher.clone().unwrap_or_else(|| global.watcher.clone()),
+            exclude:   repo.index.as_ref().map(|i| i.exclude.clone())
+                           .unwrap_or_else(|| global.index.exclude.clone()),
             repo_name: repo.repo_name.clone().unwrap_or_else(|| dir_name.to_string()),
         }
     }
@@ -524,6 +564,7 @@ mod tests {
                 batch_size: 32,
             }),
             watcher: None,
+            index: None,
         };
         let eff = EffectiveConfig::merge(&global, &repo, "proj");
         assert_eq!(eff.embeddings.backend, EmbeddingBackend::Local);

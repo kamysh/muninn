@@ -2,88 +2,147 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
 use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
-use crate::store::{graph_name, chunk_exists};
+use crate::store::graph_name;
 
-/// Insert or update a symbol node in the per-repo AGE graph.
-/// Enforces the IsolatedGraph invariant: the chunk_id must exist in the
-/// repo's chunk store before a symbol node may reference it.
+/// Input for one symbol node in a batch upsert.
+pub struct SymbolNodeInput {
+    pub chunk_id: Uuid,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub file_path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+fn kind_label(kind: &SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function => "Function",
+        SymbolKind::Class    => "Class",
+        SymbolKind::Module   => "Module",
+        SymbolKind::Import   => "Import",
+    }
+}
+
+fn relation_label(rel: &StructuralRelation) -> &'static str {
+    match rel {
+        StructuralRelation::Calls        => "CALLS",
+        StructuralRelation::Imports      => "IMPORTS",
+        StructuralRelation::Defines      => "DEFINES",
+        StructuralRelation::InheritsFrom => "INHERITS_FROM",
+    }
+}
+
+/// Batch-upsert symbol nodes into the per-repo AGE graph using one
+/// `UNWIND … MERGE` per distinct node label (≤4 round-trips total) instead of
+/// one round-trip per symbol. Each AGE Cypher call costs ~4–5 ms, so for a
+/// dense code file this turns hundreds of round-trips into a handful.
 ///
-/// SafeSymbolUpsert invariant: `kind` comes from the SymbolKind enum
-/// (hardcoded label strings, never user input); `chunk_id` is a UUID.
-/// `name` and `file_path` are user-supplied and are passed as bound
-/// parameters via muninn_cypher's params argument — never interpolated.
-pub async fn upsert_symbol_node(
+/// IsolatedGraph is preserved by the caller's ordering, not a per-node check:
+/// `index_file` persists all chunks (with `?` early-return on any failure)
+/// before calling this, so every `chunk_id` here already exists in the store.
+///
+/// SafeSymbolUpsert: `name`/`file_path` are user-supplied and travel inside the
+/// `$rows` params list (bound as agtype, never interpolated). The node label is
+/// a SymbolKind enum string (hardcoded), so it is safe to interpolate.
+pub async fn upsert_symbol_nodes(
     pool: &PgPool,
     repo_id: Uuid,
-    chunk_id: Uuid,
-    name: &str,
-    kind: &str,
-    file_path: &str,
-    start_line: u32,
-    end_line: u32,
+    nodes: &[SymbolNodeInput],
 ) -> Result<()> {
-    anyhow::ensure!(
-        chunk_exists(pool, repo_id, chunk_id).await?,
-        "IsolatedGraph violation: chunk {} not found in repo {} store",
-        chunk_id, repo_id
-    );
+    if nodes.is_empty() {
+        return Ok(());
+    }
     let gname = graph_name(repo_id);
 
-    // name and file_path are bound via the params JSON argument.
-    // kind and chunk_id are safe to interpolate: kind is a SymbolKind enum
-    // (hardcoded strings), chunk_id is a UUID (injection-impossible).
-    let params = serde_json::json!({
-        "sym_name": name,
-        "sym_file_path": file_path
-    });
+    let mut by_label: std::collections::HashMap<&'static str, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for n in nodes {
+        by_label.entry(kind_label(&n.kind)).or_default().push(serde_json::json!({
+            "chunk_id": n.chunk_id.to_string(),
+            "name": n.name,
+            "file_path": n.file_path,
+            "start_line": n.start_line,
+            "end_line": n.end_line,
+        }));
+    }
 
-    let cypher = format!(
-        r#"MERGE (n:{kind} {{chunk_id: '{chunk_id}'}})
-           SET n.name = $sym_name,
-               n.kind = '{kind}',
-               n.file_path = $sym_file_path,
-               n.start_line = {sl},
-               n.end_line = {el}"#,
-        kind = kind,
-        chunk_id = chunk_id,
-        sl = start_line,
-        el = end_line,
-    );
-
-    sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-        .bind(&gname)
-        .bind(&cypher)
-        .bind(params.to_string())
-        .execute(pool)
-        .await?;
+    for (label, rows) in by_label {
+        let params = serde_json::json!({ "rows": rows });
+        let cypher = format!(
+            r#"UNWIND $rows AS r
+               MERGE (n:{label} {{chunk_id: r.chunk_id}})
+               SET n.name = r.name,
+                   n.kind = '{label}',
+                   n.file_path = r.file_path,
+                   n.start_line = r.start_line,
+                   n.end_line = r.end_line"#,
+            label = label,
+        );
+        sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
+            .bind(&gname)
+            .bind(&cypher)
+            .bind(params.to_string())
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
-/// Insert a directed edge between two symbol nodes in the per-repo graph.
-///
-/// `from` and `to` are UUIDs bound via the params JSON argument and
-/// referenced as $from_id / $to_id inside the Cypher template — never
-/// interpolated.
-pub async fn upsert_edge(pool: &PgPool, repo_id: Uuid, edge: &StructuralEdge) -> Result<()> {
-    let rel = match edge.relation {
-        StructuralRelation::Calls => "CALLS",
-        StructuralRelation::Imports => "IMPORTS",
-        StructuralRelation::Defines => "DEFINES",
-        StructuralRelation::InheritsFrom => "INHERITS_FROM",
-    };
+/// Batch-upsert directed edges into the per-repo graph using one
+/// `UNWIND … MATCH … MERGE` per distinct relation type (≤4 round-trips).
+/// `from`/`to` chunk-id UUIDs travel inside the `$rows` params list; the
+/// relation type is a StructuralRelation enum string (hardcoded).
+pub async fn upsert_edges(pool: &PgPool, repo_id: Uuid, edges: &[StructuralEdge]) -> Result<()> {
+    if edges.is_empty() {
+        return Ok(());
+    }
     let gname = graph_name(repo_id);
-    let params = serde_json::json!({
-        "from_id": edge.from.to_string(),
-        "to_id": edge.to.to_string(),
-    });
-    let cypher = format!(
-        r#"MATCH (a {{chunk_id: $from_id}}), (b {{chunk_id: $to_id}})
-           MERGE (a)-[:{rel}]->(b)"#,
-        rel = rel,
-    );
+
+    let mut by_rel: std::collections::HashMap<&'static str, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for e in edges {
+        by_rel.entry(relation_label(&e.relation)).or_default().push(serde_json::json!({
+            "from": e.from.to_string(),
+            "to": e.to.to_string(),
+        }));
+    }
+
+    for (rel, rows) in by_rel {
+        let params = serde_json::json!({ "rows": rows });
+        let cypher = format!(
+            r#"UNWIND $rows AS r
+               MATCH (a {{chunk_id: r.from}}), (b {{chunk_id: r.to}})
+               MERGE (a)-[:{rel}]->(b)"#,
+            rel = rel,
+        );
+        sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
+            .bind(&gname)
+            .bind(&cypher)
+            .bind(params.to_string())
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Delete all symbol nodes (and their incident edges) for a file from the
+/// per-repo graph. `DETACH DELETE` removes a node together with its
+/// relationships, so callers don't need to delete edges separately.
+///
+/// Called before re-indexing a file — its chunk_ids are regenerated each index,
+/// so the MERGE-by-chunk_id in `upsert_symbol_nodes` would otherwise create fresh
+/// nodes and leave the previous ones dangling — and when a file is removed
+/// entirely (deleted on disk or newly matched by an `[index] exclude` glob).
+///
+/// `file_path` is user-supplied and is bound via the params JSON, never
+/// interpolated (same discipline as the other graph writes).
+pub async fn delete_file_symbols(pool: &PgPool, repo_id: Uuid, file_path: &str) -> Result<()> {
+    let gname = graph_name(repo_id);
+    let params = serde_json::json!({ "sym_file_path": file_path });
+    let cypher = r#"MATCH (n {file_path: $sym_file_path}) DETACH DELETE n"#;
     sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
         .bind(&gname)
-        .bind(&cypher)
+        .bind(cypher)
         .bind(params.to_string())
         .execute(pool)
         .await?;

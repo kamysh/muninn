@@ -28,7 +28,7 @@ user   = "alice"
 
 [embeddings]
 backend    = "local"
-model      = "bge-base-en-v1.5"
+model      = "potion-base-32M"
 batch_size = 64
 
 [watcher]
@@ -95,7 +95,7 @@ The `[watcher]`, `[mcp]`, and `[mcp.logging]` sections are optional and shown ab
 
 | Backend | Model | Dims | API key |
 |---------|-------|------|---------|
-| `local` | `bge-base-en-v1.5` | 768 | None needed |
+| `local` | `potion-base-32M` | 512 | None needed |
 | `voyage` | `voyage-code-3` | 1024 | [dash.voyageai.com](https://dash.voyageai.com) |
 | `openai` | `text-embedding-3-small` | 1536 | [platform.openai.com](https://platform.openai.com) |
 
@@ -111,6 +111,14 @@ muninn add    /path/to/repo
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `debounce_ms` | integer | `300` | Milliseconds to wait after the last file-change event before re-indexing. Increase (e.g. `2000`) if you see excessive re-indexing during large rebases or when editors write many small saves. |
+
+### `[index]`
+
+muninn indexes **everything** under a repo root by default — including files that `.gitignore` normally hides (`node_modules`, build output, dotfiles), because gitignored files are often worth searching. The only automatic exclusions are `.git/`, binary files (detected by a null byte), and files larger than 10 MiB.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `exclude` | array of strings | `[]` | Glob patterns (relative to the repo root) to exclude from indexing. Gitignore-style syntax. Example: `exclude = ["target/", "dist/", "**/*.min.js"]`. |
 
 ### `[mcp]`
 
@@ -135,7 +143,7 @@ muninn add    /path/to/repo
 
 All sections are optional. An empty file is valid and inherits everything from the global config.
 
-Overridable sections: `[database]`, `[embeddings]`, `[watcher]`. The `[mcp]` section cannot be overridden per-repo.
+Overridable sections: `[database]`, `[embeddings]`, `[watcher]`, `[index]`. The `[mcp]` section cannot be overridden per-repo.
 
 **Top-level key:** `repo_name` — the display name shown in `muninn list`. Defaults to the directory name.
 
@@ -152,6 +160,10 @@ Overridable sections: `[database]`, `[embeddings]`, `[watcher]`. The `[mcp]` sec
 
 # [watcher]
 # debounce_ms = 300
+
+# [index]
+# Exclude paths from indexing (everything is indexed by default).
+# exclude = ["target/", "dist/", "**/*.min.js"]
 ```
 
 **Embedding dimension lock:** If you try to change the embedding backend in `.muninn.toml` after the first index, `muninn configure` will reject it. Remove and re-add the repo to switch backends.

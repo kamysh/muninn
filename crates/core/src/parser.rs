@@ -241,9 +241,38 @@ pub fn parse_file(source: &str, language: Language) -> Result<Vec<ParsedSymbol>>
     let tree = parser.parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("tree-sitter parse failed"))?;
 
+    let lines: Vec<&str> = source.lines().collect();
     let mut symbols = Vec::new();
-    extract_symbols(tree.root_node(), source, &language, &mut symbols);
+    extract_symbols(tree.root_node(), source, &lines, &language, &mut symbols);
     Ok(symbols)
+}
+
+/// Walk upward from a symbol's code start over contiguous comment and
+/// attribute/decorator lines, returning the earliest such 0-indexed row.
+/// tree-sitter places leading `///` doc comments and `#[attr]` lines as
+/// siblings *before* the item node, so without this a documented symbol's
+/// chunk excludes its own documentation — and a semantic search for what the
+/// doc describes never surfaces the symbol. Stops at the first blank or code
+/// line so a comment separated by a blank line (belonging to nothing, or to a
+/// previous item) is not absorbed.
+fn extend_over_leading_doc(lines: &[&str], code_start_row: usize, language: &Language) -> usize {
+    let mut start = code_start_row;
+    while start > 0 {
+        let prev = lines[start - 1].trim_start();
+        if prev.is_empty() { break; }
+        let is_doc_or_attr = match language {
+            Language::Rust =>
+                prev.starts_with("//") || prev.starts_with("#[") || prev.starts_with("#![")
+                || prev.starts_with("/*") || prev.starts_with('*'),
+            Language::Python =>
+                prev.starts_with('#') || prev.starts_with('@'),
+            Language::JavaScript | Language::TypeScript =>
+                prev.starts_with("//") || prev.starts_with("/*") || prev.starts_with('*')
+                || prev.starts_with('@'),
+        };
+        if is_doc_or_attr { start -= 1; } else { break; }
+    }
+    start
 }
 
 /// Extract a display name for a symbol node.
@@ -277,6 +306,7 @@ fn extract_symbol_name(
 fn extract_symbols(
     node: tree_sitter::Node,
     source: &str,
+    lines: &[&str],
     language: &Language,
     out: &mut Vec<ParsedSymbol>,
 ) {
@@ -296,7 +326,9 @@ fn extract_symbols(
 
     if let Some(k) = kind {
         let name = extract_symbol_name(&k, node, source);
-        let start_line = node.start_position().row as u32 + 1;
+        let code_start_row = node.start_position().row;
+        let start_row = extend_over_leading_doc(lines, code_start_row, language);
+        let start_line = start_row as u32 + 1;
         let end_line = node.end_position().row as u32 + 1;
         out.push(ParsedSymbol {
             name,
@@ -307,7 +339,7 @@ fn extract_symbols(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        extract_symbols(child, source, language, out);
+        extract_symbols(child, source, lines, language, out);
     }
 }
 
@@ -328,7 +360,7 @@ pub fn chunk_file(
     // the file's 1-indexed line number of `span[0]`. Whitespace-only
     // sub-chunks are skipped — they add no semantic signal and would later
     // be dropped by the ValidChunk filter in pipeline.rs anyway.
-    let mut accumulate = |span: &[&str], base_line_1idx: u32, out: &mut Vec<crate::types::Chunk>| {
+    let accumulate = |span: &[&str], base_line_1idx: u32, out: &mut Vec<crate::types::Chunk>| {
         let mut local_start = 0usize;
         while local_start < span.len() {
             let mut acc = String::new();
@@ -371,7 +403,9 @@ pub fn chunk_file(
     for sym in symbols {
         let s = (sym.range.start as usize).saturating_sub(1).min(lines.len());
         let e = (sym.range.end as usize).min(lines.len());
-        for i in s..e { covered[i] = true; }
+        if let Some(slice) = covered.get_mut(s..e) {
+            slice.fill(true);
+        }
     }
 
     // Emit one chunk per symbol; if a symbol's body exceeds max_chars, split
@@ -440,6 +474,51 @@ mod tests {
         let src = "fn hello_world() {\n    println!(\"hello\");\n}\n";
         let symbols = parse_file(src, Language::Rust).unwrap();
         assert!(symbols.iter().any(|s| s.name == "hello_world"));
+    }
+
+    #[test]
+    fn doc_comment_is_part_of_symbol_chunk() {
+        // A `///` doc comment + `#[attr]` directly above a fn must be part of
+        // the function's own chunk — so a semantic search for what the doc
+        // describes surfaces the function, not a detached gap chunk.
+        let src = "\
+/// Adds two numbers together.
+/// Returns their sum.
+#[inline]
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+";
+        let symbols = parse_file(src, Language::Rust).unwrap();
+        let add = symbols.iter().find(|s| s.name == "add").expect("add symbol");
+        // Symbol range starts at the doc comment (line 1), not the fn (line 4).
+        assert_eq!(add.range.start, 1, "symbol start should include leading doc/attr");
+
+        let chunks = chunk_file(src, &symbols, 512);
+        let add_chunk = chunks.iter()
+            .find(|c| c.range.start == add.range.start)
+            .expect("chunk for add");
+        assert!(add_chunk.content.contains("Adds two numbers together"),
+            "doc comment must be in the symbol's chunk");
+        assert!(add_chunk.content.contains("fn add"),
+            "fn body must be in the same chunk as its doc");
+    }
+
+    #[test]
+    fn blank_line_separates_doc_from_symbol() {
+        // A comment separated by a blank line is NOT absorbed into the symbol.
+        let src = "\
+// unrelated standalone comment
+
+fn foo() {
+    bar();
+}
+";
+        let symbols = parse_file(src, Language::Rust).unwrap();
+        let foo = symbols.iter().find(|s| s.name == "foo").expect("foo symbol");
+        // fn foo is on line 3; the comment on line 1 is separated by a blank
+        // line 2, so the symbol must start at line 3, not absorb the comment.
+        assert_eq!(foo.range.start, 3);
     }
 
     #[test]

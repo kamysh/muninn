@@ -17,7 +17,7 @@ The shell sets:
 - `DATABASE_URL=postgresql://localhost/muninn_dev`
 - `TEST_DATABASE_URL=postgresql://localhost/muninn_test`
 
-ONNX Runtime is statically linked into the binary at build time (via `cargo build`'s `ort-download-binaries-native-tls` feature), so no `ORT_DYLIB_PATH` is required at runtime.
+The local embedding backend uses model2vec (static token embeddings) — pure Rust, no ONNX runtime or native ML library. The model (~120 MB) is downloaded from Hugging Face on first use and cached; nothing is linked at build time.
 
 ## Database setup
 
@@ -34,8 +34,8 @@ sqlx migrate run
 | Build (debug) | `cargo build` |
 | Build (release) | `cargo build --release` |
 | Test (all) | `cargo nextest run` |
-| Test (single crate) | `cargo nextest run -p muninn_core` |
-| Test (single test by name) | `cargo nextest run -p muninn_core -- types::tests::line_range_valid_when_start_equals_end` |
+| Test (single crate) | `cargo nextest run -p muninn-core` |
+| Test (single test by name) | `cargo nextest run -p muninn-core -- types::tests::line_range_valid_when_start_equals_end` |
 | Lint | `cargo clippy -- -D warnings` |
 | Format | `cargo fmt` |
 | Watch mode | `cargo watch -x build` |
@@ -69,7 +69,7 @@ The `ever_indexed` column distinguishes "freshly registered, never indexed" (ski
 
 Each registered repo gets its own PostgreSQL table, named `chunks_<uuid>` where `uuid` is the repo's primary key in the `repos` table. Each table has a `VECTOR(N)` column where N is the embedding dimension chosen at registration time.
 
-This design is forced by how vector columns work: a `VECTOR(768)` column cannot store a `VECTOR(1024)` embedding — the type is parameterised by dimension. Because different repos can use different embedding backends, and different backends produce different dimensions (local=768, voyage=1024, openai=1536), a single shared `chunks` table is not viable unless all repos use the same dimension. The per-repo table design sidesteps this entirely.
+This design is forced by how vector columns work: a `VECTOR(512)` column cannot store a `VECTOR(1024)` embedding — the type is parameterised by dimension. Because different repos can use different embedding backends, and different backends produce different dimensions (local=512, voyage=1024, openai=1536), a single shared `chunks` table is not viable unless all repos use the same dimension. The per-repo table design sidesteps this entirely.
 
 The consequence is the DimFrozen invariant: once a repo's embedding dimension is recorded in `repos.embedding_dim`, it cannot change without dropping and recreating the table. `muninn remove` + `muninn add` is the supported migration path. The dimension is recorded at `muninn add` time by calling `expected_dimension(&eff.embeddings)`, which maps (backend, model) → fixed integer. This function must return a stable value — see the contributor note in the Embedding backends section.
 
@@ -140,7 +140,7 @@ The `EmbeddingBackend` trait lives in `crates/core/src/embeddings/`. `make_backe
 
 | Backend | Model | Dims |
 |---------|-------|------|
-| `local` | BGE-Base-EN-v1.5 | 768 |
+| `local` | potion-base-32M (model2vec) | 512 |
 | `voyage` | voyage-code-3 | 1024 |
 | `openai` | text-embedding-3-small | 1536 |
 
@@ -157,7 +157,7 @@ Parsers live in `crates/core/src/parser.rs`. Each language needs four additions:
 3. A match arm in `chunk_file` mapping `Language` to a tree-sitter query for chunking
 4. A match arm in `extract_edges` mapping `Language` to a tree-sitter query for symbol edges
 
-Run `cargo nextest run -p muninn_core` after adding a parser. Tests in `parser.rs` cover round-trip parse → chunk → edge extraction.
+Run `cargo nextest run -p muninn-core` after adding a parser. Tests in `parser.rs` cover round-trip parse → chunk → edge extraction.
 
 ---
 
@@ -203,11 +203,9 @@ nix profile install .
 claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
 ```
 
-The `muninn` derivation links onnxruntime dynamically against the copy in the
-Nix store (the `ORT_LIB_LOCATION` env var bypasses ort-sys's pyke download —
-the sandbox has no network). The resulting binary embeds Nix-store paths, so
-it only works on a machine where those exact paths exist. The profile install
-keeps them as a GC root.
+The `muninn` derivation is a plain Rust build (model2vec needs no native ML
+library). The resulting binary may embed a few Nix-store paths (e.g. libiconv
+on darwin), so the profile install keeps them as a GC root.
 
 ### Portable release binary (copy anywhere)
 
@@ -217,9 +215,9 @@ keeps them as a GC root.
 cargo build --release --target=aarch64-apple-darwin
 ```
 
-ort-sys downloads pyke's prebuilt static onnxruntime archive at build time and
-links it into the binary, so the result has no runtime `libonnxruntime`
-dependency. Network access is required during the build.
+All dependencies are pure Rust, so the build needs no native ML runtime and the
+result has no `libonnxruntime` or other native dependency. For a fully static,
+store-path-free binary use `nix build .#muninn-static`.
 
 Binaries land in `target/<triple>/release/`: `muninn`, `muninn-index`,
 `muninn-mcp`. The GitHub release workflow (`.github/workflows/release.yml`)

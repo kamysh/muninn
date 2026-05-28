@@ -249,7 +249,7 @@ Make these changes:
 
 - **`voyage`** — best search quality for code. Requires a [Voyage AI](https://dash.voyageai.com) account. Set `backend = "voyage"`, `model = "voyage-code-3"`, and paste your key. Short text chunks are sent to Voyage AI to generate embeddings; your source files are never transmitted.
 - **`openai`** — good quality. Requires an [OpenAI](https://platform.openai.com) account. Set `backend = "openai"`, `model = "text-embedding-3-small"`, and paste your key. Same privacy guarantee as above.
-- **`local`** — no account required, works offline. Set `backend = "local"`, `model = "bge-base-en-v1.5"`, and remove the `api_key` line entirely. Downloads ~200 MB on first use. Nothing leaves your machine.
+- **`local`** — no account required, works offline. Set `backend = "local"`, `model = "potion-base-32M"`, and remove the `api_key` line entirely. Downloads ~120 MB on first use. Uses model2vec static embeddings — fast enough to index large repos (deps included) on CPU. Nothing leaves your machine.
 
 If you are not sure, start with `local`. You can switch to Voyage AI later — just know that switching backends requires removing and re-adding the repo (`muninn remove` then `muninn add`), because the embedding format is locked in at registration time.
 

@@ -15,13 +15,13 @@ open import Relation.Binary.PropositionalEquality using (_≡_)
 data EmbeddingBackend : Set where
   Voyage : EmbeddingBackend   -- voyage-code-3       (1024 dims)
   OpenAI : EmbeddingBackend   -- text-embedding-3-small (1536 dims)
-  Local  : EmbeddingBackend   -- BGE-Base-EN-v1.5 fastembed model (768 dims)
+  Local  : EmbeddingBackend   -- potion-base-32M model2vec static embeddings (512 dims)
 
 -- Each backend produces vectors of a fixed, well-known dimension.
 EmbeddingDimension : EmbeddingBackend → ℕ
 EmbeddingDimension Voyage = 1024
 EmbeddingDimension OpenAI = 1536
-EmbeddingDimension Local  = 768
+EmbeddingDimension Local  = 512
 
 -- The dimension stored on a Repo must equal the canonical dimension for the
 -- backend active at registration time.  Set once, never changes, so the

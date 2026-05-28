@@ -265,18 +265,40 @@ pub async fn delete_file_chunks(pool: &PgPool, repo_id: Uuid, file_path: &str) -
     Ok(())
 }
 
-/// Check whether a chunk with the given id exists in the repo's store.
-/// Used to enforce the IsolatedGraph invariant before inserting symbol nodes.
-pub async fn chunk_exists(pool: &PgPool, repo_id: Uuid, chunk_id: Uuid) -> Result<bool> {
+/// Delete every chunk for a repo whose `file_path` is not in `keep`.
+///
+/// A full reindex re-inserts chunks only for files it walks, so files deleted
+/// from disk or newly matched by an `[index] exclude` glob would otherwise
+/// leave orphaned chunks behind. Calling this with the set of files just
+/// indexed makes the reindex authoritative over the current file set. Returns
+/// the number of rows deleted. With an empty `keep` set this deletes all chunks
+/// (the entire file set is gone or excluded).
+pub async fn prune_chunks_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) -> Result<u64> {
     let table = chunks_table(repo_id);
-    let exists: bool = sqlx::query(&format!(
-        r#"SELECT EXISTS(SELECT 1 FROM "{table}" WHERE id = $1)"#
+    // `<> ALL($1)` is true when file_path equals no kept path; for an empty
+    // array it is vacuously true, so every row is removed.
+    let res = sqlx::query(&format!(
+        r#"DELETE FROM "{table}" WHERE file_path <> ALL($1)"#
     ))
-    .bind(chunk_id)
-    .fetch_one(pool)
-    .await?
-    .try_get(0)?;
-    Ok(exists)
+    .bind(keep)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Distinct `file_path`s currently in the repo's chunk store that are NOT in
+/// `keep`. These are the files a reindex no longer covers (deleted on disk or
+/// newly excluded); the caller prunes their graph nodes before pruning chunks.
+pub async fn file_paths_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) -> Result<Vec<String>> {
+    use sqlx::Row;
+    let table = chunks_table(repo_id);
+    let rows = sqlx::query(&format!(
+        r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#
+    ))
+    .bind(keep)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().filter_map(|r| r.try_get::<String, _>("file_path").ok()).collect())
 }
 
 // ---- indexing lock ----------------------------------------------------------
