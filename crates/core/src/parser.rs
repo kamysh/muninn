@@ -321,30 +321,62 @@ pub fn chunk_file(
     let lines: Vec<&str> = source.lines().collect();
     let mut chunks = Vec::new();
 
-    if symbols.is_empty() {
-        let mut start = 0usize;
-        while start < lines.len() {
+    if lines.is_empty() { return chunks; }
+
+    // Line-aligned accumulation into chunks of ≤ max_chars (with single-line
+    // fallback if any one line alone exceeds the budget). `base_line_1idx` is
+    // the file's 1-indexed line number of `span[0]`. Whitespace-only
+    // sub-chunks are skipped — they add no semantic signal and would later
+    // be dropped by the ValidChunk filter in pipeline.rs anyway.
+    let mut accumulate = |span: &[&str], base_line_1idx: u32, out: &mut Vec<crate::types::Chunk>| {
+        let mut local_start = 0usize;
+        while local_start < span.len() {
             let mut acc = String::new();
-            let mut end = start;
-            while end < lines.len() && acc.len() + lines[end].len() < max_chars {
-                acc.push_str(lines[end]);
+            let mut local_end = local_start;
+            while local_end < span.len() && acc.len() + span[local_end].len() < max_chars {
+                acc.push_str(span[local_end]);
                 acc.push('\n');
-                end += 1;
+                local_end += 1;
             }
-            if end == start { acc = lines[start].to_string(); end += 1; }
-            chunks.push(crate::types::Chunk {
-                id: Uuid::new_v4(),
-                repo_id: Uuid::nil(),
-                file_path: String::new(),
-                range: LineRange { start: start as u32 + 1, end: end as u32 },
-                content: acc,
-                embedding: None,
-            });
-            start = end;
+            if local_end == local_start {
+                acc = span[local_start].to_string();
+                local_end += 1;
+            }
+            if !acc.trim().is_empty() {
+                out.push(crate::types::Chunk {
+                    id: Uuid::new_v4(),
+                    repo_id: Uuid::nil(),
+                    file_path: String::new(),
+                    range: LineRange {
+                        start: base_line_1idx + local_start as u32,
+                        end: base_line_1idx + local_end as u32 - 1,
+                    },
+                    content: acc,
+                    embedding: None,
+                });
+            }
+            local_start = local_end;
         }
+    };
+
+    if symbols.is_empty() {
+        accumulate(&lines, 1, &mut chunks);
         return chunks;
     }
 
+    // Mark which lines are covered by some symbol — used to emit gap chunks
+    // for module-level prose (top-of-file doc comments, `use` blocks, etc.)
+    // that would otherwise be invisible to semantic search.
+    let mut covered = vec![false; lines.len()];
+    for sym in symbols {
+        let s = (sym.range.start as usize).saturating_sub(1).min(lines.len());
+        let e = (sym.range.end as usize).min(lines.len());
+        for i in s..e { covered[i] = true; }
+    }
+
+    // Emit one chunk per symbol; if a symbol's body exceeds max_chars, split
+    // via accumulate (the first sub-chunk inherits the symbol's start line
+    // so pipeline.rs can still match symbol→chunk for the graph node).
     for sym in symbols {
         let s = (sym.range.start as usize).saturating_sub(1);
         let e = sym.range.end as usize;
@@ -361,40 +393,21 @@ pub fn chunk_file(
                 content: full_content,
                 embedding: None,
             });
-            continue;
-        }
-
-        // Symbol body exceeds the embedder's budget — split into line-aligned
-        // sub-chunks. The first sub-chunk inherits the symbol's start line
-        // (so pipeline.rs can still match symbol→chunk for the graph node);
-        // subsequent sub-chunks are unlinked but still embedded and searchable.
-        let mut local_start = 0usize;
-        while local_start < span.len() {
-            let mut acc = String::new();
-            let mut local_end = local_start;
-            while local_end < span.len() && acc.len() + span[local_end].len() < max_chars {
-                acc.push_str(span[local_end]);
-                acc.push('\n');
-                local_end += 1;
-            }
-            if local_end == local_start {
-                acc = span[local_start].to_string();
-                local_end += 1;
-            }
-            chunks.push(crate::types::Chunk {
-                id: Uuid::new_v4(),
-                repo_id: Uuid::nil(),
-                file_path: String::new(),
-                range: LineRange {
-                    start: sym.range.start + local_start as u32,
-                    end: sym.range.start + local_end as u32 - 1,
-                },
-                content: acc,
-                embedding: None,
-            });
-            local_start = local_end;
+        } else {
+            accumulate(span, sym.range.start, &mut chunks);
         }
     }
+
+    // Emit gap chunks for contiguous uncovered line ranges.
+    let mut i = 0usize;
+    while i < lines.len() {
+        if covered[i] { i += 1; continue; }
+        let gap_start = i;
+        while i < lines.len() && !covered[i] { i += 1; }
+        let gap_end = i;
+        accumulate(&lines[gap_start..gap_end], (gap_start as u32) + 1, &mut chunks);
+    }
+
     chunks
 }
 
@@ -516,6 +529,77 @@ mod tests {
             }
             let path = format!("{}.py", sanitized);
             quickcheck::TestResult::from_bool(detect_language(&path) == Some(Language::Python))
+        }
+
+        // ── DISCOVERY-ORIENTED CHUNKER INVARIANTS ──────────────────────────
+        //
+        // These hold regardless of input. Each violation is a real bug.
+        // Catches the silent-truncation class of issue that was latent in
+        // v0.1.10's chunker (oversize symbol bodies emitted as one chunk,
+        // then fastembed silently truncated their tokens past 512).
+
+        // Every chunk's content is ≤ max_chars + one line of slop.
+        // (A single line longer than max_chars is still accepted as one chunk;
+        // anything larger is a bug — the symbols path must split.)
+        fn prop_no_chunk_grossly_exceeds_max_chars(content: String, max_chars_seed: u16) -> bool {
+            let max_chars = (max_chars_seed as usize).max(64).min(4096);
+            let symbols = parse_file(&content, Language::Rust).unwrap_or_default();
+            let chunks = chunk_file(&content, &symbols, max_chars);
+            // The chunker is line-aligned and accumulates until the next line would push past
+            // max_chars, so worst case is one chunk containing a single line that is itself
+            // longer than max_chars (e.g. minified JSON). Allow generous slop for that case
+            // (10x); any chunk substantially larger indicates the splitter is broken.
+            chunks.iter().all(|c| c.content.len() <= max_chars * 10)
+        }
+
+        // Chunks together cover every non-empty line of the symbols' ranges
+        // (the symbol-split fix must not drop any content).
+        fn prop_split_symbol_preserves_coverage(seed: u16) -> bool {
+            // Construct a synthetic Rust source with one oversized symbol that
+            // forces the symbols-path splitter to fire. We can't synthesise
+            // realistic code via quickcheck, so we build it deterministically
+            // from the seed.
+            let body_lines = ((seed as usize) % 80) + 40;  // 40..120 lines
+            let body: Vec<String> = (0..body_lines)
+                .map(|i| format!("    let var_{i} = {i} * {i};"))
+                .collect();
+            let src = format!("fn big() {{\n{}\n}}\n", body.join("\n"));
+            let symbols = parse_file(&src, Language::Rust).unwrap();
+            // Force splitting with a low max_chars.
+            let chunks = chunk_file(&src, &symbols, 200);
+            if chunks.is_empty() { return false; }
+            // Every line of the original symbol's range must appear in
+            // the concatenation of all chunks' content.
+            let combined: String = chunks.iter().map(|c| c.content.as_str()).collect::<Vec<_>>().join("\n");
+            (0..body_lines).all(|i| combined.contains(&format!("var_{i} = {i} * {i}")))
+        }
+
+        // Splitting is deterministic — same input → same chunks across runs.
+        fn prop_chunk_deterministic(content: String) -> bool {
+            let symbols = parse_file(&content, Language::Rust).unwrap_or_default();
+            let a = chunk_file(&content, &symbols, 256);
+            let b = chunk_file(&content, &symbols, 256);
+            // Compare by range + content (IDs are random UUIDs, expected to differ).
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)|
+                x.range.start == y.range.start
+                && x.range.end == y.range.end
+                && x.content == y.content
+            )
+        }
+
+        // First sub-chunk of any symbol always inherits the symbol's start
+        // line (pipeline.rs depends on this to link symbol→graph node).
+        fn prop_symbol_first_chunk_keeps_start_line(seed: u16) -> bool {
+            let body_lines = ((seed as usize) % 60) + 30;
+            let body: Vec<String> = (0..body_lines)
+                .map(|i| format!("    let x_{i} = {i};"))
+                .collect();
+            let src = format!("fn alpha() {{\n{}\n}}\nfn beta() {{\n    return 1;\n}}\n", body.join("\n"));
+            let symbols = parse_file(&src, Language::Rust).unwrap();
+            let chunks = chunk_file(&src, &symbols, 100);
+            symbols.iter().all(|sym| {
+                chunks.iter().any(|c| c.range.start == sym.range.start)
+            })
         }
     }
 }

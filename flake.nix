@@ -13,7 +13,32 @@
   outputs = { self, nixpkgs, rust-overlay, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ (import rust-overlay) ];
+        # crates.io's data-access filter currently 403s the default UA sent
+        # by nixpkgs's `fetchurl` on linux (likely the linux-shipped curl
+        # version triggers a deny heuristic; darwin's curl slips through).
+        # Reproduces on any linux machine with `nix build .#muninn-static`
+        # from a cold store — not GH-runner-specific. This overlay injects
+        # a contact-bearing UA on any fetchurl pointing at crates.io so
+        # rustPlatform's per-crate downloads succeed. Darwin doesn't need
+        # the override but applying it everywhere is harmless and keeps
+        # the flake portable. Every non-crates.io fetchurl is untouched.
+        cratesIoUa = "muninn-build (https://github.com/kamysh/muninn)";
+        cratesIoUaOverlay = (final: prev: {
+          fetchurl = args:
+            let
+              urls = args.urls or (if args ? url then [ args.url ] else [ ]);
+              hitsCratesIo = builtins.any
+                (u: prev.lib.hasPrefix "https://crates.io/" u
+                  || prev.lib.hasPrefix "http://crates.io/" u)
+                urls;
+            in
+            if hitsCratesIo
+            then prev.fetchurl (args // {
+              curlOptsList = (args.curlOptsList or [ ]) ++ [ "-A" cratesIoUa ];
+            })
+            else prev.fetchurl args;
+        });
+        overlays = [ (import rust-overlay) cratesIoUaOverlay ];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
@@ -35,19 +60,19 @@
         # Hashes come from ort-sys's `build/download/dist.txt`. Update both
         # `pykeVersion` and the per-target sha256 when ort-sys bumps the
         # Pyke release.
-        pykeVersion = "1.23.2";
+        pykeVersion = "1.24.2";
         pykeTargets = {
           "aarch64-darwin" = {
             target = "aarch64-apple-darwin";
-            sha256 = "0897a0e1b840566a97e5a49497b02cbc204be2d006815174b639bc99731840f9";
+            sha256 = "612739f75438dc0a075461e1fb454226b4a1eb175e60a7271ba966bbbb972cd4";
           };
           "x86_64-linux" = {
             target = "x86_64-unknown-linux-gnu";
-            sha256 = "8c57d059aaaee407812a5698d6706c79e090ad69e1a14204309e802dcbbaa35f";
+            sha256 = "acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671";
           };
           "aarch64-linux" = {
             target = "aarch64-unknown-linux-gnu";
-            sha256 = "c25248c32d84f228b9d584b84b31e1577e4810d46beb5e304e9fa340c000176c";
+            sha256 = "7e4f5fec4494cbf578c4e28082b0229c42f735523f584259028dde96acf3b092";
           };
         };
         pyke = pykeTargets.${system} or null;
@@ -160,7 +185,7 @@
 
         # Shared between both packages.
         commonAttrs = {
-          version = "0.1.14";
+          version = "0.1.15";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # Tests need an embedding model + Postgres; run them in the dev
