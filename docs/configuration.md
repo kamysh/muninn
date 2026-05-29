@@ -118,7 +118,36 @@ muninn indexes **everything** under a repo root by default — including files t
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `exclude` | array of strings | `[]` | Glob patterns (relative to the repo root) to exclude from indexing. Gitignore-style syntax. Example: `exclude = ["target/", "dist/", "**/*.min.js"]`. |
+| `exclude` | array of strings | `[]` | Glob patterns (relative to the repo root) to exclude from indexing. Gitignore-style syntax. Example: `exclude = ["**/dist/", "**/*.map", "**/*.min.js"]`. |
+
+**Recommended starting point.** muninn deliberately keeps your dependency
+*source* searchable — that is why `node_modules` and other gitignored trees are
+indexed by default. So a good exclude set targets only **generated,
+non-searchable files** and **build/cache output**, never the dependencies
+themselves:
+
+```toml
+[index]
+exclude = [
+  # generated / non-searchable — noise even inside node_modules
+  "**/*.map",                # source maps
+  "**/*.min.js",             # minified bundles
+  "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/go.sum",
+
+  # build output / caches — regenerated, not source (search src/ instead)
+  "**/dist/", "**/build/", "**/target/", "**/.vite/", "**/.next/",
+  "**/coverage/", "**/.nyc_output/",
+  "**/__pycache__/", "**/.pytest_cache/", "**/.mypy_cache/",
+  "**/.terraform/",
+]
+```
+
+Note the deliberate omission of `**/node_modules/`: excluding it would make your
+dependencies' source unsearchable, which defeats much of muninn's value. If your
+index is dominated by compiled output you don't care about, prefer excluding the
+specific build directories (`**/dist/`, `**/build/`) over the whole dependency
+tree. Changing `exclude` and running `muninn reindex <path>` is authoritative —
+the reindex prunes chunks for the newly-excluded files.
 
 ### `[mcp]`
 
@@ -162,8 +191,10 @@ Overridable sections: `[database]`, `[embeddings]`, `[watcher]`, `[index]`. The 
 # debounce_ms = 300
 
 # [index]
-# Exclude paths from indexing (everything is indexed by default).
-# exclude = ["target/", "dist/", "**/*.min.js"]
+# Exclude paths from indexing (everything, including node_modules, is indexed
+# by default). See "Recommended starting point" under the [index] section above
+# for a suggested set. Minimal example:
+# exclude = ["**/*.map", "**/*.min.js", "**/dist/", "**/build/"]
 ```
 
 **Embedding dimension lock:** If you try to change the embedding backend in `.muninn.toml` after the first index, `muninn config set --repo <path>` (or `config edit --repo <path>`) will reject it. Remove and re-add the repo to switch backends.
