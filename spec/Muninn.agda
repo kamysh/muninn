@@ -5,10 +5,11 @@
 --
 -- Sub-modules:
 --   Muninn.Float      — postulated IEEE 754 Float operations
+--   Muninn.IndexFsm   — (--safe) indexing FSM: holder kinds, preemption, configure decision
 --   Muninn.Types      — core domain types (Chunk, Repo, SearchResult, …)
 --   Muninn.Graph      — symbol kinds, structural edges, and per-repo graph
 --   Muninn.Storage    — RepoStorage, UniqueRepoPaths, isolation invariants
---   Muninn.Index      — IndexState machine, ValidRange, ValidChunk
+--   Muninn.Index      — daemon dispatch, ValidRange, ValidChunk (re-exports IndexFsm)
 --   Muninn.Search     — Similarity, RRF scoring, HybridResultBound
 --   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
 --   Muninn.Config     — GlobalConfig, RepoConfig, EffectiveConfig, merge, DimFrozen, discovery
@@ -18,6 +19,7 @@
 module Muninn where
 
 open import Muninn.Float        public
+open import Muninn.IndexFsm     public
 open import Muninn.Types        public
 open import Muninn.Graph        public
 open import Muninn.Storage      public

@@ -1,8 +1,13 @@
-use crate::types::{Chunk, Repo};
+use crate::types::{Chunk, HolderKind, Repo};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+/// The repo columns selected into a `Repo` by `row_to_repo`. Kept as one
+/// constant so every query stays in sync with the struct.
+const REPO_COLUMNS: &str = "id, path, name, indexed_at, ever_indexed, \
+     embedding_dim, indexing_heartbeat, lock_holder, preempt_requested";
 
 /// Derive the per-repo chunks table name from the repo UUID.
 /// Uses the simple (no-hyphen) UUID hex so the name is a valid SQL identifier.
@@ -21,14 +26,14 @@ pub async fn register_repo(
     name: &str,
     embedding_dim: usize,
 ) -> Result<Repo> {
-    let row = sqlx::query(
+    let row = sqlx::query(&format!(
         r#"
         INSERT INTO repos (id, path, name, indexed_at, embedding_dim)
         VALUES ($1, $2, $3, NULL, $4)
         ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name
-        RETURNING id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat
-        "#,
-    )
+        RETURNING {REPO_COLUMNS}
+        "#
+    ))
     .bind(Uuid::new_v4())
     .bind(path)
     .bind(name)
@@ -139,9 +144,9 @@ pub async fn delete_repo(pool: &PgPool, repo_id: Uuid) -> Result<()> {
 }
 
 pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>> {
-    let row = sqlx::query(
-        r#"SELECT id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat FROM repos WHERE path = $1"#,
-    )
+    let row = sqlx::query(&format!(
+        r#"SELECT {REPO_COLUMNS} FROM repos WHERE path = $1"#
+    ))
     .bind(path)
     .fetch_optional(pool)
     .await?;
@@ -150,10 +155,11 @@ pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>>
 }
 
 pub async fn list_repos(pool: &PgPool) -> Result<Vec<Repo>> {
-    let rows =
-        sqlx::query(r#"SELECT id, path, name, indexed_at, ever_indexed, embedding_dim, indexing_heartbeat FROM repos ORDER BY name"#)
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query(&format!(
+        r#"SELECT {REPO_COLUMNS} FROM repos ORDER BY name"#
+    ))
+    .fetch_all(pool)
+    .await?;
 
     rows.into_iter().map(row_to_repo).collect()
 }
@@ -303,28 +309,66 @@ pub async fn file_paths_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) ->
 
 // ---- indexing lock ----------------------------------------------------------
 
-/// Atomically acquire the indexing lock for a repo (CAS on indexing_heartbeat).
-/// Returns true if the lock was acquired, false if held by a live process.
-/// Stale locks (heartbeat > 2 min old) are taken over automatically.
-/// Spec: Muninn.Concurrency.CanAcquire / try_lock_repo.
-pub async fn try_lock_repo(pool: &PgPool, repo_id: Uuid) -> Result<bool> {
+/// Atomically acquire the indexing lock for a repo (CAS on indexing_heartbeat),
+/// recording who holds it. Returns true if the lock was acquired, false if held
+/// by a live process. Stale locks (heartbeat > 2 min old) are taken over
+/// automatically. Acquiring clears any pending preempt request — whoever now
+/// holds the lock is the job the waiter was after.
+/// Spec: Muninn.Concurrency.CanAcquire / Muninn.IndexFsm.HolderKind.
+pub async fn try_lock_repo(pool: &PgPool, repo_id: Uuid, holder: HolderKind) -> Result<bool> {
     let result = sqlx::query(
         r#"UPDATE repos
-              SET indexing_heartbeat = NOW()
+              SET indexing_heartbeat = NOW(),
+                  lock_holder = $2,
+                  preempt_requested = FALSE
             WHERE id = $1
               AND (indexing_heartbeat IS NULL
                    OR indexing_heartbeat < NOW() - INTERVAL '2 minutes')"#,
     )
     .bind(repo_id)
+    .bind(holder.as_str())
     .execute(pool)
     .await?;
     Ok(result.rows_affected() == 1)
 }
 
 /// Release the indexing lock. Always call this in a finally-equivalent after
-/// index_repo completes (success or failure).
+/// index_repo completes (success or failure). Clears holder and preempt flag.
 pub async fn release_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NULL WHERE id = $1"#)
+    sqlx::query(
+        r#"UPDATE repos
+              SET indexing_heartbeat = NULL, lock_holder = NULL, preempt_requested = FALSE
+            WHERE id = $1"#,
+    )
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Release the lock AND mark the repo as needing a (re)index (indexed_at = NULL).
+/// Used when a foreground index is interrupted (Ctrl-C): the lock must not be
+/// left held by a dead process, and the half-finished index is owed a redo.
+/// everIndexed is left unchanged. Spec: Muninn.IndexFsm.interrupt.
+pub async fn abort_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(
+        r#"UPDATE repos
+              SET indexing_heartbeat = NULL, lock_holder = NULL,
+                  preempt_requested = FALSE, indexed_at = NULL
+            WHERE id = $1"#,
+    )
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Yield the lock from a background holder to a waiting foreground job: clear the
+/// heartbeat and holder but KEEP preempt_requested set. This stops the daemon's
+/// scan guard from re-grabbing the repo before the foreground job acquires it
+/// (acquiring clears the flag via try_lock_repo). Spec: Muninn.IndexFsm.yield.
+pub async fn yield_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NULL, lock_holder = NULL WHERE id = $1"#)
         .bind(repo_id)
         .execute(pool)
         .await?;
@@ -341,6 +385,29 @@ pub async fn pulse_heartbeat(pool: &PgPool, repo_id: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// Signal that a foreground job is waiting for the lock and the current
+/// background holder should yield. Spec: Muninn.IndexFsm.requestPreempt.
+pub async fn request_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET preempt_requested = TRUE WHERE id = $1"#)
+        .bind(repo_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Whether a foreground job has requested preemption. The background reindex
+/// task polls this every ~10 s and yields the lock when it is true.
+pub async fn is_preempt_requested(pool: &PgPool, repo_id: Uuid) -> Result<bool> {
+    let row = sqlx::query(r#"SELECT preempt_requested FROM repos WHERE id = $1"#)
+        .bind(repo_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row
+        .map(|r| r.try_get::<bool, _>("preempt_requested"))
+        .transpose()?
+        .unwrap_or(false))
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
@@ -352,5 +419,9 @@ fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
         ever_indexed: row.try_get::<bool, _>("ever_indexed")?,
         embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
         indexing_heartbeat: row.try_get::<Option<DateTime<Utc>>, _>("indexing_heartbeat")?,
+        lock_holder: row
+            .try_get::<Option<String>, _>("lock_holder")?
+            .and_then(|s| HolderKind::from_db(&s)),
+        preempt_requested: row.try_get::<bool, _>("preempt_requested")?,
     })
 }

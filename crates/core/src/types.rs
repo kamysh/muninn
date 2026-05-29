@@ -14,6 +14,32 @@ impl LineRange {
     }
 }
 
+/// Who holds a repo's indexing lock. Spec: Muninn.IndexFsm.HolderKind.
+/// Foreground (CLI) jobs are interactive and never preempted; background
+/// (daemon) reindexes yield the lock to a waiting foreground job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HolderKind {
+    Fg,
+    Bg,
+}
+
+impl HolderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HolderKind::Fg => "fg",
+            HolderKind::Bg => "bg",
+        }
+    }
+
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "fg" => Some(HolderKind::Fg),
+            "bg" => Some(HolderKind::Bg),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repo {
     pub id: Uuid,
@@ -30,6 +56,10 @@ pub struct Repo {
     /// holder pulses every 60 s. Stale (dead holder) if older than 2 minutes.
     /// Spec: Muninn.Concurrency.
     pub indexing_heartbeat: Option<DateTime<Utc>>,
+    /// Who holds the lock. NULL iff indexing_heartbeat is NULL.
+    pub lock_holder: Option<HolderKind>,
+    /// A foreground job is waiting and has asked a background holder to yield.
+    pub preempt_requested: bool,
 }
 
 impl Repo {

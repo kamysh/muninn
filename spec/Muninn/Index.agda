@@ -1,9 +1,16 @@
 -- Muninn/Index.agda
--- Indexing state machine, chunk validity predicates, and daemon dispatch logic.
+-- Chunk validity predicates and daemon dispatch logic.
+--
+-- The indexing state machine itself (IndexState, Step, holder kinds, preemption,
+-- and the configure decision) lives in the --safe, postulate-free module
+-- Muninn.IndexFsm, which this module re-exports.  The Repo-/Concurrency-dependent
+-- glue (lock precondition, daemon scan decision) stays here because it relies on
+-- the postulated wall-clock liveness from Muninn.Concurrency.
 module Muninn.Index where
 
 open import Muninn.Types
 open import Muninn.Concurrency
+open import Muninn.IndexFsm public
 open import Data.Bool   using (Bool; true; false)
 open import Data.List   using (List)
 open import Data.Maybe  using (Maybe; nothing; just)
@@ -12,41 +19,10 @@ open import Data.String using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary using (¬_)
 
--- ─── Indexing State Machine ────────────────────────────────────────────────────
-
-data IndexState : Set where
-  Unindexed : IndexState   -- repo registered, never indexed
-  Indexing  : IndexState   -- full (re)index in progress (lock held)
-  Indexed   : IndexState   -- index is up to date, no active task
-  Watching  : IndexState   -- indexed + file-watcher active
-  Stale     : IndexState   -- watcher detected changes not yet applied
-
--- The outcome of processing a batch of files.
--- NoneSucceeded is intentionally absent: a totally-failed batch must NOT
--- advance to Indexed.  Only a batch where at least one file was successfully
--- indexed may close the Indexing state.
-data BatchOutcome : Set where
-  AllSucceeded  : BatchOutcome  -- every file in the batch indexed without error
-  SomeSucceeded : BatchOutcome  -- at least one indexed; others warned and skipped
-
--- Valid transitions encoded as an indexed inductive type so that only the
--- permitted edges exist.
---
--- All transitions INTO Indexing require the lock to be acquirable first
--- (CanAcquire), enforced at the call site.  The lock is released when the
--- transition OUT of Indexing fires (finishIndex / indexFailed).
-data IndexTransition : IndexState → IndexState → Set where
-  startIndex    : IndexTransition Unindexed Indexing            -- first index (CLI)
-  finishIndex   : BatchOutcome → IndexTransition Indexing Indexed -- at-least-partial success
-  indexFailed   : IndexTransition Indexing  Unindexed           -- total failure; lock released, stay unindexed
-  startReindex  : IndexTransition Indexed   Indexing            -- daemon or CLI reindex
-  attachWatcher : IndexTransition Indexed   Watching            -- daemon attaches watcher
-  detectChange  : IndexTransition Watching  Stale               -- watcher fires
-  reindexStale  : IndexTransition Stale     Indexing            -- reindex after stale
-
 -- ─── Lock Precondition for Indexing Transitions ──────────────────────────────
--- Any transition INTO Indexing requires that the repo's lock is acquirable.
--- This is checked atomically via try_lock_repo (CAS on indexing_heartbeat).
+-- Any transition INTO Indexing (Step _ (Indexing _)) requires that the repo's
+-- lock is acquirable.  Checked atomically via try_lock_repo (CAS on
+-- indexing_heartbeat).
 
 IndexingPre : Repo → Set
 IndexingPre repo = CanAcquire (Repo.indexingHeartbeat repo)

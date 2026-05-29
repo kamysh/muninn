@@ -14,10 +14,13 @@ This directory contains the Agda formal specification for muninn.
 2. **Repo registration invariant** — `UniqueRepoPaths` asserts that equal paths
    imply equal repo identities across any list of registered repos.
 
-3. **Indexing state machine** — `IndexState` and `IndexTransition` encode the
+3. **Indexing state machine** — `IndexState` and `Step` (in the `--safe`,
+   postulate-free `Muninn.IndexFsm`, re-exported by `Muninn.Index`) encode the
    valid lifecycle as an indexed inductive type, making invalid transitions
-   unrepresentable:
-   `Unindexed → Indexing → Indexed ⇄ Watching → Stale → Indexing`
+   unrepresentable. `Indexing` is parameterised by the lock holder
+   (`Fg` foreground / `Bg` background daemon); foreground jobs preempt the
+   daemon, which never first-indexes:
+   `Unindexed → Indexing Fg → Indexed ⇄ Watching → Stale → Indexing _`
 
 4. **Validity predicates** — `ValidRange` (start ≤ end) and `ValidChunk`
    (content ≢ "").

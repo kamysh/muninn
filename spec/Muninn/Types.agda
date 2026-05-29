@@ -3,6 +3,7 @@
 module Muninn.Types where
 
 open import Muninn.Float
+open import Muninn.IndexFsm using (HolderKind)
 open import Data.String using (String)
 open import Data.List   using (List)
 open import Data.Bool   using (Bool; true; false)
@@ -39,10 +40,12 @@ record Repo : Set where
   field id                : RepoId
         path              : FilePath
         name              : String
-        indexedAt         : Maybe String   -- ISO-8601 timestamp; nothing = never indexed
-        everIndexed       : Bool           -- true after the first successful index; survives reindex reset
-        embeddingDim      : ℕ             -- VECTOR(n) dimension recorded at registration time
-        indexingHeartbeat : Maybe String   -- NULL = unlocked; just hb = lock held, last heartbeat at hb
+        indexedAt         : Maybe String       -- ISO-8601 timestamp; nothing = never indexed
+        everIndexed       : Bool               -- true after the first successful index; survives reindex reset
+        embeddingDim      : ℕ                 -- VECTOR(n) dimension recorded at registration time
+        indexingHeartbeat : Maybe String       -- NULL = unlocked; just hb = lock held, last heartbeat at hb
+        lockHolder        : Maybe HolderKind   -- who holds the lock; NULL iff indexingHeartbeat NULL
+        preemptRequested  : Bool               -- a foreground waiter has asked a Bg holder to yield
 
 -- A single result returned by a search query.
 record SearchResult : Set where

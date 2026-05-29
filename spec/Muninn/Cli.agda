@@ -115,16 +115,16 @@ ReindexOnePost : Repo → Set
 ReindexOnePost repo = Repo.indexedAt repo ≡ nothing
 
 -- ─── State-machine connection ─────────────────────────────────────────────────
--- `muninn index` drives the repo through: Unindexed → Indexing → Indexed.
--- `muninn reindex` resets indexedAt, moving the repo back to Unindexed so
--- the daemon can perform startIndex / startReindex on its next scan.
+-- `muninn index` drives the repo through: Unindexed → Indexing Fg → Indexed.
+-- `muninn reindex` re-drives a previously-indexed repo: Indexed → Indexing Fg.
+-- Both are foreground (CLI) transitions; see Muninn.IndexFsm.Step.
 
 IndexTransitionsCorrect : Set
 IndexTransitionsCorrect =
-  -- index moves an unindexed repo to Indexed via Indexing
-  (IndexTransition Unindexed Indexing × IndexTransition Indexing Indexed) ×
-  -- reindex resets a previously-indexed repo so it can be re-driven to Indexing
-  IndexTransition Indexed Indexing
+  -- index moves an unindexed repo to Indexed via a foreground index
+  (Step Unindexed (Indexing Fg) × Step (Indexing Fg) Indexed) ×
+  -- reindex re-drives a previously-indexed repo into a foreground index
+  Step Indexed (Indexing Fg)
 
 -- ─── Register idempotency ────────────────────────────────────────────────────
 -- Running `register` on a path that already has a .muninn.toml is a no-op:

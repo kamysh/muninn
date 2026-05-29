@@ -6,7 +6,7 @@ use muninn_core::{
     embeddings::{make_backend, expected_dimension},
     pipeline::index_repo,
     store,
-    types::{BatchOutcome, IndexState},
+    types::{BatchOutcome, HolderKind, IndexState},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -131,11 +131,24 @@ async fn scan_and_dispatch(
 
         if repo.indexed_at.is_none() {
             if !repo.ever_indexed {
-                // Freshly registered, never indexed. User must run `muninn index`.
+                // Freshly registered, never indexed. Daemon never first-indexes;
+                // the user must run `muninn add` (foreground). Spec:
+                // Muninn.IndexFsm.DaemonNeverFirstIndexes.
                 continue;
             }
 
-            // Was indexed before; `muninn reindex` reset indexed_at. Daemon must act.
+            // A foreground job is waiting for this repo. Do not start a background
+            // reindex we'd only have to yield — the foreground job will index it.
+            // Spec: Muninn.IndexFsm foreground priority.
+            if repo.preempt_requested {
+                tracing::debug!(
+                    "repo {} has a foreground waiter — leaving it for the CLI",
+                    repo.path
+                );
+                continue;
+            }
+
+            // Was indexed before; `muninn reindex --background` reset indexed_at.
             // Skip if a reindex is already in flight for this process.
             if reindexing.lock().await.contains(&repo.id) {
                 continue;
@@ -151,9 +164,9 @@ async fn scan_and_dispatch(
                 );
             }
 
-            // IndexingPre: atomically acquire the distributed lock (CAS on indexing_heartbeat).
+            // IndexingPre: atomically acquire the lock as a background holder.
             // If another process wins the CAS, skip — they will NOTIFY when done.
-            match store::try_lock_repo(pool, repo.id).await {
+            match store::try_lock_repo(pool, repo.id, HolderKind::Bg).await {
                 Ok(true) => {}
                 Ok(false) => {
                     tracing::debug!(
@@ -169,8 +182,7 @@ async fn scan_and_dispatch(
             }
 
             // Spawn background full reindex.  After success, notify the daemon so
-            // it re-scans and re-attaches the watcher (startReindex → Indexing →
-            // Indexed → attachWatcher → Watching in the spec state machine).
+            // it re-scans and re-attaches the watcher.
             reindexing.lock().await.insert(repo.id);
             let pool2 = pool.clone();
             let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
@@ -182,62 +194,81 @@ async fn scan_and_dispatch(
             let repo_path_str = repo.path.clone();
             let reindexing2 = Arc::clone(reindexing);
             tokio::spawn(async move {
-                // Pulse the heartbeat every 60 s so the lock is not declared stale.
-                // The staleness window is 2 min (spec: Muninn.Concurrency); two missed
-                // pulses mark the holder as dead and allow another process to take over.
-                let pool_hb = pool2.clone();
-                let heartbeat = tokio::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(60));
-                    interval.tick().await; // consume the immediate first tick
-                    loop {
-                        interval.tick().await;
-                        if let Err(e) = store::pulse_heartbeat(&pool_hb, repo_id).await {
-                            tracing::warn!("heartbeat pulse failed for {}: {}", repo_id, e);
-                        }
-                    }
-                });
-
-                let state = Arc::new(Mutex::new(IndexState::Indexing));
-                let result = index_repo(
+                // Run the index while polling every 10 s: pulse the heartbeat
+                // (every 60 s, so the lock is not declared stale) and check the
+                // preempt flag. If a foreground job requests the lock, abort and
+                // yield. Spec: Muninn.IndexFsm.bgPollDecision / yield.
+                let index_fut = index_repo(
                     &pool2, repo_id, &repo_path_owned, embedder,
                     batch_size, repo_dim, &exclude, |_, _, _| {},
-                )
-                .await;
+                );
+                tokio::pin!(index_fut);
+                let mut ticker =
+                    tokio::time::interval(std::time::Duration::from_secs(10));
+                ticker.tick().await; // consume the immediate first tick
+                let mut elapsed_secs: u64 = 0;
 
-                heartbeat.abort();
-                if let Err(e) = store::release_lock(&pool2, repo_id).await {
-                    tracing::warn!("release_lock for {} failed: {}", repo_path_str, e);
-                }
-
-                match result {
-                    Ok((outcome, skips)) => {
-                        {
-                            let mut s = state.lock().await;
-                            debug_assert_eq!(*s, IndexState::Indexing);
-                            *s = IndexState::Indexed;
-                        }
-                        if outcome == BatchOutcome::SomeSucceeded {
-                            tracing::warn!(
-                                "reindex of {} completed with {} files skipped",
-                                repo_path_str,
-                                skips.len()
-                            );
-                        } else {
-                            tracing::info!("reindex of {} complete", repo_path_str);
-                        }
-                        // mark_indexed was called inside index_repo; now notify
-                        // so the daemon re-scans and re-attaches the watcher promptly.
-                        if let Err(e) = store::notify_repos_changed(&pool2).await {
-                            tracing::warn!(
-                                "reindex of {} complete but notify failed: {}",
-                                repo_path_str, e
-                            );
+                let finished = loop {
+                    tokio::select! {
+                        r = &mut index_fut => break Some(r),
+                        _ = ticker.tick() => {
+                            elapsed_secs += 10;
+                            if elapsed_secs.is_multiple_of(60) {
+                                if let Err(e) = store::pulse_heartbeat(&pool2, repo_id).await {
+                                    tracing::warn!("heartbeat pulse failed for {}: {}", repo_id, e);
+                                }
+                            }
+                            match store::is_preempt_requested(&pool2, repo_id).await {
+                                Ok(true) => break None,
+                                Ok(false) => {}
+                                Err(e) => tracing::warn!("preempt check failed for {}: {}", repo_id, e),
+                            }
                         }
                     }
-                    Err(e) => tracing::error!(
-                        "reindex of {} failed: {}", repo_path_str, e
-                    ),
+                };
+
+                match finished {
+                    Some(result) => {
+                        if let Err(e) = store::release_lock(&pool2, repo_id).await {
+                            tracing::warn!("release_lock for {} failed: {}", repo_path_str, e);
+                        }
+                        match result {
+                            Ok((outcome, skips)) => {
+                                if outcome == BatchOutcome::SomeSucceeded {
+                                    tracing::warn!(
+                                        "reindex of {} completed with {} files skipped",
+                                        repo_path_str,
+                                        skips.len()
+                                    );
+                                } else {
+                                    tracing::info!("reindex of {} complete", repo_path_str);
+                                }
+                                // mark_indexed was called inside index_repo; now notify
+                                // so the daemon re-scans and re-attaches the watcher.
+                                if let Err(e) = store::notify_repos_changed(&pool2).await {
+                                    tracing::warn!(
+                                        "reindex of {} complete but notify failed: {}",
+                                        repo_path_str, e
+                                    );
+                                }
+                            }
+                            Err(e) => tracing::error!(
+                                "reindex of {} failed: {}", repo_path_str, e
+                            ),
+                        }
+                    }
+                    None => {
+                        // Preempted by a foreground job. Dropping the index future
+                        // (at scope end) cancels it; yield the lock keeping the
+                        // preempt flag set so we don't immediately re-grab. The
+                        // foreground job clears the flag when it acquires.
+                        if let Err(e) = store::yield_lock(&pool2, repo_id).await {
+                            tracing::warn!("yield_lock for {} failed: {}", repo_path_str, e);
+                        }
+                        tracing::info!(
+                            "yielded {} to a waiting foreground job", repo_path_str
+                        );
+                    }
                 }
                 reindexing2.lock().await.remove(&repo_id);
             });

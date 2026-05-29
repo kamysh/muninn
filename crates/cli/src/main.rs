@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use muninn_core::{config::GlobalConfig, db, store};
+use muninn_core::{config::GlobalConfig, db, store, types::HolderKind};
 use sqlx::{PgPool, Row};
 use std::io::Write as _;
 
@@ -26,11 +26,14 @@ enum Commands {
     Remove { path: String },
     /// List registered repositories and their index status
     List,
-    /// Mark a repository for re-indexing (daemon picks it up on next run)
+    /// Re-index a repository in the foreground (or hand it to the daemon with --background)
     Reindex {
         path: Option<String>,
         #[arg(long, conflicts_with = "path")]
         all: bool,
+        /// Hand the reindex to the background daemon instead of running it here.
+        #[arg(long, conflicts_with = "all")]
+        background: bool,
     },
     /// Show registered repos and index status
     Status,
@@ -111,12 +114,39 @@ async fn run_foreground_index(
         );
     }
 
-    if !store::try_lock_repo(pool, repo.id).await? {
-        anyhow::bail!(
-            "repo '{}' is currently being indexed by another process. \
-             Wait for it to finish, or wait 2 minutes for a stale lock to expire.",
-            repo_path.display()
-        );
+    // Acquire the lock as a foreground holder. A foreground job always takes
+    // priority: if the background daemon holds the lock, ask it to yield and
+    // wait for it (the daemon polls the preempt flag every ~10 s, so this is
+    // brief). If another foreground process holds it, fail — two interactive
+    // indexers must not race. No fixed timeout: a hung holder eventually goes
+    // stale (2 min) and try_lock_repo steals it via the CAS.
+    if !store::try_lock_repo(pool, repo.id, HolderKind::Fg).await? {
+        let mut requested = false;
+        loop {
+            let cur = store::get_repo_by_path(pool, &repo_path.to_string_lossy())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("repo not found in database"))?;
+            if cur.is_lock_live() && cur.lock_holder == Some(HolderKind::Fg) {
+                anyhow::bail!(
+                    "repo '{}' is being indexed by another muninn process. \
+                     Wait for it to finish, then try again.",
+                    repo_path.display()
+                );
+            }
+            if !requested {
+                print!("Background indexer holds the lock; asking it to yield…");
+                std::io::stdout().flush()?;
+                store::request_preempt(pool, repo.id).await?;
+                requested = true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if store::try_lock_repo(pool, repo.id, HolderKind::Fg).await? {
+                println!(" done.");
+                break;
+            }
+            print!(".");
+            std::io::stdout().flush()?;
+        }
     }
 
     println!(
@@ -143,36 +173,51 @@ async fn run_foreground_index(
     });
 
     let repo_path_for_progress = repo_path.to_path_buf();
-    let index_result = muninn_core::pipeline::index_repo(
-        pool,
-        repo.id,
-        repo_path,
-        embedder,
-        eff.embeddings.batch_size,
-        repo_dim,
-        &eff.exclude,
-        |done, total, file| {
-            let rel = file
-                .strip_prefix(&repo_path_for_progress)
-                .unwrap_or(file);
-            let prefix = format!(
-                "  [{:>width$}/{}] ",
-                done,
-                total,
-                width = total.to_string().len()
+    // Race the index against Ctrl-C. On interrupt, release the lock and mark the
+    // repo as owed a reindex (abort_lock) so the next command isn't blocked by a
+    // corpse lock and resumes a clean reindex. Spec: Muninn.IndexFsm.interrupt.
+    let index_result = tokio::select! {
+        r = muninn_core::pipeline::index_repo(
+            pool,
+            repo.id,
+            repo_path,
+            embedder,
+            eff.embeddings.batch_size,
+            repo_dim,
+            &eff.exclude,
+            |done, total, file| {
+                let rel = file
+                    .strip_prefix(&repo_path_for_progress)
+                    .unwrap_or(file);
+                let prefix = format!(
+                    "  [{:>width$}/{}] ",
+                    done,
+                    total,
+                    width = total.to_string().len()
+                );
+                let mut path = rel.display().to_string();
+                if path.len() > MAX_PROGRESS_PATH_CHARS {
+                    let keep = MAX_PROGRESS_PATH_CHARS.saturating_sub(3);
+                    let suffix: String = path.chars().rev().take(keep).collect();
+                    path = format!("...{}", suffix.chars().rev().collect::<String>());
+                }
+                print!("\r\x1b[K{prefix}{path}");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            },
+        ) => r,
+        _ = tokio::signal::ctrl_c() => {
+            heartbeat.abort();
+            let _ = store::abort_lock(pool, repo.id).await;
+            println!();
+            eprintln!(
+                "Interrupted. Index left incomplete — re-run `muninn configure {p}` \
+                 (or `muninn reindex {p}`) to finish it.",
+                p = repo_path.display()
             );
-            let mut path = rel.display().to_string();
-            if path.len() > MAX_PROGRESS_PATH_CHARS {
-                let keep = MAX_PROGRESS_PATH_CHARS.saturating_sub(3);
-                let suffix: String = path.chars().rev().take(keep).collect();
-                path = format!("...{}", suffix.chars().rev().collect::<String>());
-            }
-            print!("\r\x1b[K{prefix}{path}");
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-        },
-    )
-    .await;
+            std::process::exit(130);
+        }
+    };
 
     heartbeat.abort();
     if let Err(e) = store::release_lock(pool, repo.id).await {
@@ -358,27 +403,37 @@ async fn main() -> anyhow::Result<()> {
                 Ok(())
             })?;
 
-            if validated_content == existing_content {
-                println!("No changes.");
-                return Ok(());
+            let content_changed = validated_content != existing_content;
+
+            if content_changed {
+                std::fs::write(&toml_path, &validated_content)?;
+
+                let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
+                let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
+                if eff.repo_name != repo.name {
+                    sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
+                        .bind(&eff.repo_name)
+                        .bind(repo.id)
+                        .execute(&pool)
+                        .await?;
+                    println!("Renamed: {} → {}", repo.name, eff.repo_name);
+                }
             }
 
-            std::fs::write(&toml_path, &validated_content)?;
-
-            let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
-            let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
-
-            if eff.repo_name != repo.name {
-                sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
-                    .bind(&eff.repo_name)
-                    .bind(repo.id)
-                    .execute(&pool)
-                    .await?;
-                println!("Renamed: {} → {}", repo.name, eff.repo_name);
+            // Whether to reindex is decided from DB state, not just the byte-diff:
+            // reindex if the config changed OR the index is owed (indexed_at NULL —
+            // e.g. an earlier index was interrupted and never finished). This avoids
+            // the dead-end where a saved exclude list is never applied to a stale
+            // index. Spec: Muninn.IndexFsm.configureAction.
+            if content_changed {
+                println!("Saved. Reindexing…");
+                run_foreground_index(&pool, &cfg, &repo_path).await?;
+            } else if repo.indexed_at.is_none() {
+                println!("Config unchanged, but the index is incomplete — reindexing…");
+                run_foreground_index(&pool, &cfg, &repo_path).await?;
+            } else {
+                println!("No changes; index is up to date.");
             }
-
-            println!("Saved. Reindexing…");
-            run_foreground_index(&pool, &cfg, &repo_path).await?;
         }
 
         Commands::Remove { path } => {
@@ -455,8 +510,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Reindex { path, all } => {
+        Commands::Reindex { path, all, background } => {
             if all {
+                // Fleet operation: always background. Visibility comes from `muninn status`.
                 sqlx::query("UPDATE repos SET indexed_at = NULL")
                     .execute(&pool)
                     .await?;
@@ -464,22 +520,30 @@ async fn main() -> anyhow::Result<()> {
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
-                let result =
-                    sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
-                        .bind(resolved.to_string_lossy().as_ref())
-                        .execute(&pool)
-                        .await?;
-                if result.rows_affected() == 0 {
+                if store::get_repo_by_path(&pool, &resolved.to_string_lossy())
+                    .await?
+                    .is_none()
+                {
                     anyhow::bail!(
                         "no registered repo found at '{}' — run `muninn list` to see registered repos",
                         resolved.display()
                     );
                 }
-                store::notify_repos_changed(&pool).await?;
-                println!(
-                    "Marked {} for reindex. The daemon will pick it up shortly.",
-                    resolved.display()
-                );
+                if background {
+                    sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
+                        .bind(resolved.to_string_lossy().as_ref())
+                        .execute(&pool)
+                        .await?;
+                    store::notify_repos_changed(&pool).await?;
+                    println!(
+                        "Marked {} for reindex. The daemon will pick it up shortly.",
+                        resolved.display()
+                    );
+                } else {
+                    // A user-initiated reindex is interactive by default, so the
+                    // user sees progress and excludes taking effect.
+                    run_foreground_index(&pool, &cfg, &resolved).await?;
+                }
             } else {
                 eprintln!("Specify a path or --all");
                 std::process::exit(1);
