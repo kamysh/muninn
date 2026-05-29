@@ -1,24 +1,27 @@
+{-# OPTIONS --safe #-}
 -- spec/Muninn.agda
 -- Formal specification for the Muninn indexed code search MCP server.
 -- This top-level module re-exports all sub-specifications so that importers
 -- get the full specification in one open.
 --
 -- Sub-modules:
---   Muninn.Float      — postulated IEEE 754 Float operations
---   Muninn.IndexFsm   — (--safe) indexing FSM: holder kinds, preemption, configure decision
---   Muninn.Types      — core domain types (Chunk, Repo, SearchResult, …)
---   Muninn.Graph      — symbol kinds, structural edges, and per-repo graph
---   Muninn.Storage    — RepoStorage, UniqueRepoPaths, isolation invariants
---   Muninn.Index      — daemon dispatch, ValidRange, ValidChunk (re-exports IndexFsm)
+--   Muninn.Float        — postulated IEEE 754 Float operations
+--   Muninn.AdvisoryLock — (--safe) the index mutex: advisory lock + preempt signal
+--   Muninn.IndexFsm     — (--safe) index lifecycle FSM + configure decision
+--   Muninn.Types        — core domain types (Chunk, Repo, SearchResult, …)
+--   Muninn.Graph        — symbol kinds, structural edges, and per-repo graph
+--   Muninn.Storage      — RepoStorage, UniqueRepoPaths, isolation invariants
+--   Muninn.Index        — daemon dispatch, ValidRange, ValidChunk (re-exports IndexFsm)
 --   Muninn.Search     — Similarity, RRF scoring, HybridResultBound
 --   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
 --   Muninn.Config     — GlobalConfig, RepoConfig, EffectiveConfig, merge, DimFrozen, discovery
 --   Muninn.Cli        — CLI command AST, argument constraints, pre/postconditions
 --   Muninn.Knowledge     — KnowledgeItem, validity invariants, repo scoping, search bounds
---   Muninn.Concurrency   — heartbeat-based distributed mutex, lock acquisition, watcher eviction
+--   Muninn.Concurrency   — advisory-lock mutex (re-exports AdvisoryLock), watcher eviction
 module Muninn where
 
 open import Muninn.Float        public
+open import Muninn.AdvisoryLock public
 open import Muninn.IndexFsm     public
 open import Muninn.Types        public
 open import Muninn.Graph        public

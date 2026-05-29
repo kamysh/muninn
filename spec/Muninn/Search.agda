@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Search.agda
 -- Query semantics: similarity, RRF scoring, and result bounds.
 module Muninn.Search where

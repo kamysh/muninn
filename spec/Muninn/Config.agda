@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Config.agda
 -- Two-layer configuration: global defaults merged with per-repo overrides.
 -- Specifies merge semantics, repo resolution, and the DimFrozen invariant

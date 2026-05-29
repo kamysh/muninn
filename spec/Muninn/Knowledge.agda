@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Knowledge.agda
 -- Knowledge item storage: free-text notes and lessons attached to a repo.
 -- Knowledge items are distinct from code chunks: they are manually curated,

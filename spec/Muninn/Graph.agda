@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Graph.agda
 -- Symbol types and structural relationship graph used for code navigation.
 module Muninn.Graph where

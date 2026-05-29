@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use muninn_core::{config::GlobalConfig, db, store, types::HolderKind};
+use muninn_core::{config::GlobalConfig, db, store};
 use sqlx::{PgPool, Row};
 use std::io::Write as _;
 
@@ -114,40 +114,29 @@ async fn run_foreground_index(
         );
     }
 
-    // Acquire the lock as a foreground holder. A foreground job always takes
-    // priority: if the background daemon holds the lock, ask it to yield and
-    // wait for it (the daemon polls the preempt flag every ~10 s, so this is
-    // brief). If another foreground process holds it, fail — two interactive
-    // indexers must not race. No fixed timeout: a hung holder eventually goes
-    // stale (2 min) and try_lock_repo steals it via the CAS.
-    if !store::try_lock_repo(pool, repo.id, HolderKind::Fg).await? {
-        let mut requested = false;
-        loop {
-            let cur = store::get_repo_by_path(pool, &repo_path.to_string_lossy())
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("repo not found in database"))?;
-            if cur.is_lock_live() && cur.lock_holder == Some(HolderKind::Fg) {
-                anyhow::bail!(
-                    "repo '{}' is being indexed by another muninn process. \
-                     Wait for it to finish, then try again.",
-                    repo_path.display()
-                );
-            }
-            if !requested {
-                print!("Background indexer holds the lock; asking it to yield…");
-                std::io::stdout().flush()?;
-                store::request_preempt(pool, repo.id).await?;
-                requested = true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if store::try_lock_repo(pool, repo.id, HolderKind::Fg).await? {
-                println!(" done.");
-                break;
-            }
-            print!(".");
+    // Acquire the repo's advisory lock. A foreground job always takes priority:
+    // if anything already holds it (the daemon, or another CLI), ask the holder
+    // to yield — the daemon polls the preempt flag every ~10 s — and block until
+    // it releases. No fixed timeout: a dead holder releases the lock when its
+    // session ends. The returned connection holds the lock for the index's
+    // duration. Spec: Muninn.AdvisoryLock.
+    let mut lock_conn = match store::try_lock(pool, repo.id).await? {
+        Some(conn) => conn,
+        None => {
+            print!("Index in progress; waiting for the lock…");
             std::io::stdout().flush()?;
+            store::request_preempt(pool, repo.id).await?;
+            let conn = store::lock_blocking(pool, repo.id).await?;
+            println!(" acquired.");
+            conn
         }
-    }
+    };
+    store::clear_preempt(pool, repo.id).await?;
+
+    // Mark the index owed before doing any work, so an interruption (Ctrl-C,
+    // crash, or the advisory lock auto-releasing on a dropped connection) leaves
+    // the repo needing a reindex rather than pointing at a half-rebuilt index.
+    store::mark_unindexed(pool, repo.id).await?;
 
     println!(
         "Indexing {} ({} dims, {} backend)…",
@@ -159,23 +148,11 @@ async fn run_foreground_index(
     let started = std::time::Instant::now();
     const MAX_PROGRESS_PATH_CHARS: usize = 80;
 
-    let pool_hb = pool.clone();
-    let hb_repo_id = repo.id;
-    let heartbeat = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            if let Err(e) = store::pulse_heartbeat(&pool_hb, hb_repo_id).await {
-                eprintln!("warning: heartbeat pulse failed: {e}");
-            }
-        }
-    });
-
     let repo_path_for_progress = repo_path.to_path_buf();
-    // Race the index against Ctrl-C. On interrupt, release the lock and mark the
-    // repo as owed a reindex (abort_lock) so the next command isn't blocked by a
-    // corpse lock and resumes a clean reindex. Spec: Muninn.IndexFsm.interrupt.
+    // Race the index against Ctrl-C. On interrupt we just exit: the advisory lock
+    // is released when this process's session ends, and indexed_at is already
+    // NULL (mark_unindexed above), so the next command resumes a clean reindex.
+    // Spec: Muninn.IndexFsm.interrupt.
     let index_result = tokio::select! {
         r = muninn_core::pipeline::index_repo(
             pool,
@@ -207,8 +184,6 @@ async fn run_foreground_index(
             },
         ) => r,
         _ = tokio::signal::ctrl_c() => {
-            heartbeat.abort();
-            let _ = store::abort_lock(pool, repo.id).await;
             println!();
             eprintln!(
                 "Interrupted. Index left incomplete — re-run `muninn configure {p}` \
@@ -219,9 +194,8 @@ async fn run_foreground_index(
         }
     };
 
-    heartbeat.abort();
-    if let Err(e) = store::release_lock(pool, repo.id).await {
-        eprintln!("warning: release_lock failed: {e}");
+    if let Err(e) = store::unlock(&mut lock_conn, repo.id).await {
+        eprintln!("warning: advisory unlock failed: {e}");
     }
     let (outcome, skips) = index_result?;
 
@@ -451,16 +425,19 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            // UnregisterSafe: refuse if an indexer process is actively holding the lock.
-            if let Some(ref r) = repo {
-                if r.is_lock_live() {
-                    anyhow::bail!(
-                        "repo '{}' is currently being indexed (live lock held). \
-                         Wait for indexing to complete or stop the indexer before removing.",
+            // UnregisterSafe: hold the advisory lock across removal so no index
+            // runs concurrently and none can start. Refuse if it's already held.
+            let mut lock_conn = match &repo {
+                Some(r) => match store::try_lock(&pool, r.id).await? {
+                    Some(conn) => Some((conn, r.id)),
+                    None => anyhow::bail!(
+                        "repo '{}' is currently being indexed. Wait for it to \
+                         finish or stop the indexer before removing.",
                         repo_path.display()
-                    );
-                }
-            }
+                    ),
+                },
+                None => None,
+            };
 
             let prompt = if toml_path.exists() {
                 format!(
@@ -492,6 +469,12 @@ async fn main() -> anyhow::Result<()> {
                 store::notify_repos_changed(&pool).await?;
             } else {
                 println!("Aborted.");
+            }
+
+            // Release the advisory lock (keyed on the UUID, independent of the
+            // now-deleted row). Best-effort; the session ends on exit anyway.
+            if let Some((mut conn, id)) = lock_conn {
+                let _ = store::unlock(&mut conn, id).await;
             }
         }
 

@@ -1,13 +1,14 @@
-use crate::types::{Chunk, HolderKind, Repo};
+use crate::types::{Chunk, Repo};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::pool::PoolConnection;
+use sqlx::{PgPool, Postgres, Row};
 use uuid::Uuid;
 
 /// The repo columns selected into a `Repo` by `row_to_repo`. Kept as one
 /// constant so every query stays in sync with the struct.
 const REPO_COLUMNS: &str = "id, path, name, indexed_at, ever_indexed, \
-     embedding_dim, indexing_heartbeat, lock_holder, preempt_requested";
+     embedding_dim, preempt_requested";
 
 /// Derive the per-repo chunks table name from the repo UUID.
 /// Uses the simple (no-hyphen) UUID hex so the name is a valid SQL identifier.
@@ -307,78 +308,63 @@ pub async fn file_paths_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) ->
     Ok(rows.into_iter().filter_map(|r| r.try_get::<String, _>("file_path").ok()).collect())
 }
 
-// ---- indexing lock ----------------------------------------------------------
+// ---- indexing lock (PostgreSQL session-scoped advisory lock) ----------------
+//
+// The mutex is `pg_advisory_lock`, held on a dedicated session (connection) for
+// the index's duration. Liveness is the session itself: if the holder's process
+// dies, PostgreSQL frees the lock automatically — no heartbeat, no staleness
+// window. Spec: Muninn.AdvisoryLock.
 
-/// Atomically acquire the indexing lock for a repo (CAS on indexing_heartbeat),
-/// recording who holds it. Returns true if the lock was acquired, false if held
-/// by a live process. Stale locks (heartbeat > 2 min old) are taken over
-/// automatically. Acquiring clears any pending preempt request — whoever now
-/// holds the lock is the job the waiter was after.
-/// Spec: Muninn.Concurrency.CanAcquire / Muninn.IndexFsm.HolderKind.
-pub async fn try_lock_repo(pool: &PgPool, repo_id: Uuid, holder: HolderKind) -> Result<bool> {
-    let result = sqlx::query(
-        r#"UPDATE repos
-              SET indexing_heartbeat = NOW(),
-                  lock_holder = $2,
-                  preempt_requested = FALSE
-            WHERE id = $1
-              AND (indexing_heartbeat IS NULL
-                   OR indexing_heartbeat < NOW() - INTERVAL '2 minutes')"#,
-    )
-    .bind(repo_id)
-    .bind(holder.as_str())
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected() == 1)
+/// The advisory-lock key for a repo: the first 8 bytes of its UUID as an i64.
+/// Advisory locks are per-database, and muninn/mimir use separate databases, so
+/// there is no cross-tool collision; within muninn's database a 64-bit key from
+/// the UUID is collision-free for any realistic repo count.
+fn advisory_key(repo_id: Uuid) -> i64 {
+    let b = repo_id.as_bytes();
+    i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
-/// Release the indexing lock. Always call this in a finally-equivalent after
-/// index_repo completes (success or failure). Clears holder and preempt flag.
-pub async fn release_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(
-        r#"UPDATE repos
-              SET indexing_heartbeat = NULL, lock_holder = NULL, preempt_requested = FALSE
-            WHERE id = $1"#,
-    )
-    .bind(repo_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+/// Try to acquire the repo's advisory lock without blocking. On success returns
+/// the connection holding it — the lock lives exactly as long as that connection
+/// (release with `unlock`, or implicitly when the process/connection dies). On
+/// contention returns `None` (the probe connection is dropped, holding nothing).
+pub async fn try_lock(pool: &PgPool, repo_id: Uuid) -> Result<Option<PoolConnection<Postgres>>> {
+    let mut conn = pool.acquire().await?;
+    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(advisory_key(repo_id))
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(if got { Some(conn) } else { None })
 }
 
-/// Release the lock AND mark the repo as needing a (re)index (indexed_at = NULL).
-/// Used when a foreground index is interrupted (Ctrl-C): the lock must not be
-/// left held by a dead process, and the half-finished index is owed a redo.
-/// everIndexed is left unchanged. Spec: Muninn.IndexFsm.interrupt.
-pub async fn abort_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(
-        r#"UPDATE repos
-              SET indexing_heartbeat = NULL, lock_holder = NULL,
-                  preempt_requested = FALSE, indexed_at = NULL
-            WHERE id = $1"#,
-    )
-    .bind(repo_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+/// Block until the repo's advisory lock is acquired, then return the connection
+/// holding it. Used by a foreground job after it has set the preempt flag: the
+/// current holder (a daemon reindex, or another CLI) releases and this wakes.
+pub async fn lock_blocking(pool: &PgPool, repo_id: Uuid) -> Result<PoolConnection<Postgres>> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(advisory_key(repo_id))
+        .execute(&mut *conn)
+        .await?;
+    Ok(conn)
 }
 
-/// Yield the lock from a background holder to a waiting foreground job: clear the
-/// heartbeat and holder but KEEP preempt_requested set. This stops the daemon's
-/// scan guard from re-grabbing the repo before the foreground job acquires it
-/// (acquiring clears the flag via try_lock_repo). Spec: Muninn.IndexFsm.yield.
-pub async fn yield_lock(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NULL, lock_holder = NULL WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+/// Release the advisory lock held on `conn`. Call on the normal completion path;
+/// a crash / Ctrl-C releases it automatically when the session ends.
+pub async fn unlock(conn: &mut PoolConnection<Postgres>, repo_id: Uuid) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(advisory_key(repo_id))
+        .execute(&mut **conn)
         .await?;
     Ok(())
 }
 
-/// Pulse the heartbeat to keep the lock live. Call every 60 s while index_repo
-/// is running. Staleness window is 2 min, so two missed pulses = stale.
-pub async fn pulse_heartbeat(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexing_heartbeat = NOW() WHERE id = $1"#)
+/// Mark a repo as owed a (re)index. Called at the START of a foreground index so
+/// that any interruption (Ctrl-C, crash, lock auto-release) leaves indexed_at
+/// NULL — owed — rather than pointing at a stale, partially-rebuilt index.
+/// everIndexed is left unchanged. Spec: Muninn.IndexFsm.interrupt.
+pub async fn mark_unindexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET indexed_at = NULL WHERE id = $1"#)
         .bind(repo_id)
         .execute(pool)
         .await?;
@@ -386,9 +372,19 @@ pub async fn pulse_heartbeat(pool: &PgPool, repo_id: Uuid) -> Result<()> {
 }
 
 /// Signal that a foreground job is waiting for the lock and the current
-/// background holder should yield. Spec: Muninn.IndexFsm.requestPreempt.
+/// background holder should yield. Spec: Muninn.AdvisoryLock preempt.
 pub async fn request_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
     sqlx::query(r#"UPDATE repos SET preempt_requested = TRUE WHERE id = $1"#)
+        .bind(repo_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Clear the preempt flag. Called by a foreground job once it has acquired the
+/// lock (it is the job the waiter was after).
+pub async fn clear_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET preempt_requested = FALSE WHERE id = $1"#)
         .bind(repo_id)
         .execute(pool)
         .await?;
@@ -418,10 +414,6 @@ fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
         indexed_at: row.try_get::<Option<DateTime<Utc>>, _>("indexed_at")?,
         ever_indexed: row.try_get::<bool, _>("ever_indexed")?,
         embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
-        indexing_heartbeat: row.try_get::<Option<DateTime<Utc>>, _>("indexing_heartbeat")?,
-        lock_holder: row
-            .try_get::<Option<String>, _>("lock_holder")?
-            .and_then(|s| HolderKind::from_db(&s)),
         preempt_requested: row.try_get::<bool, _>("preempt_requested")?,
     })
 }

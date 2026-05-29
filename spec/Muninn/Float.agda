@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Float.agda
 -- Float support used throughout the specification.
 -- Uses Agda's built-in IEEE 754 Float primitives directly so the module

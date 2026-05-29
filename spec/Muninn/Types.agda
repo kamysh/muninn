@@ -1,9 +1,9 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Types.agda
 -- Core domain types: identifiers, chunks, repos, and search results.
 module Muninn.Types where
 
 open import Muninn.Float
-open import Muninn.IndexFsm using (HolderKind)
 open import Data.String using (String)
 open import Data.List   using (List)
 open import Data.Bool   using (Bool; true; false)
@@ -43,9 +43,8 @@ record Repo : Set where
         indexedAt         : Maybe String       -- ISO-8601 timestamp; nothing = never indexed
         everIndexed       : Bool               -- true after the first successful index; survives reindex reset
         embeddingDim      : ℕ                 -- VECTOR(n) dimension recorded at registration time
-        indexingHeartbeat : Maybe String       -- NULL = unlocked; just hb = lock held, last heartbeat at hb
-        lockHolder        : Maybe HolderKind   -- who holds the lock; NULL iff indexingHeartbeat NULL
-        preemptRequested  : Bool               -- a foreground waiter has asked a Bg holder to yield
+        preemptRequested  : Bool               -- a foreground job is waiting for the index lock
+                                               -- (the lock itself is a session advisory lock, not a column)
 
 -- A single result returned by a search query.
 record SearchResult : Set where

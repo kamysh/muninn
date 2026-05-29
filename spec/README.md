@@ -22,6 +22,15 @@ This directory contains the Agda formal specification for muninn.
    daemon, which never first-indexes:
    `Unindexed → Indexing Fg → Indexed ⇄ Watching → Stale → Indexing _`
 
+4. **Index mutex** — `Muninn.AdvisoryLock` (`--safe`) models the lock as a
+   PostgreSQL session-scoped advisory lock (a bare `Free`/`Held`, with no holder
+   identity — matching the implementation) plus one `preempt` boolean. Liveness
+   is the session (the DB frees the lock when the holder's process dies), so
+   there is no heartbeat and no stale-held state; mutual exclusion is structural
+   (a single `Lock` value). Safety is proven (`freeWithWaiterOnlyFg`,
+   `noStuckLock`, `handoff`); progress rests on documented environment guarantees
+   (DB release on session end, supervisor restart, fair blocking acquire).
+
 4. **Validity predicates** — `ValidRange` (start ≤ end) and `ValidChunk`
    (content ≢ "").
 

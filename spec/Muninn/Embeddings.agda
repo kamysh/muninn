@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Embeddings.agda
 -- Embedding backend types, canonical dimensions, and the RepoDimMatchesBackend
 -- invariant that ties each repo's stored dimension to its registration backend.

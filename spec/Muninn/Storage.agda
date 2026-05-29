@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Storage.agda
 -- Per-repo storage model and isolation invariants.
 -- Each repo owns a dedicated chunk store and symbol graph; both are created

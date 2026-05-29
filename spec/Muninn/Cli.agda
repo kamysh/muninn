@@ -1,3 +1,4 @@
+{-# OPTIONS --safe #-}
 -- Muninn/Cli.agda
 -- Formal specification of the muninn CLI (crate: muninn).
 -- Covers command syntax, argument constraints, preconditions, postconditions,
@@ -8,6 +9,7 @@ module Muninn.Cli where
 open import Muninn.Types
 open import Muninn.Config
 open import Muninn.Index
+open import Muninn.AdvisoryLock using (Fg)
 open import Data.Nat     using (ℕ)
 open import Data.String  using (String)
 open import Data.Maybe   using (Maybe; just; nothing)
