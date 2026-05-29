@@ -1,7 +1,11 @@
-use clap::{Parser, Subcommand};
-use muninn_core::{config::GlobalConfig, db, store};
+use clap::{Args, Parser, Subcommand};
+use muninn_core::{
+    config::{self, GlobalConfig, RepoConfig},
+    db, store,
+};
 use sqlx::{PgPool, Row};
 use std::io::Write as _;
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager")]
@@ -12,50 +16,171 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create or edit ~/.config/muninn/config.toml and apply DB migrations
-    Config,
-    /// Register a repository, configure it, and run the initial index
-    Add {
-        path: String,
-        #[arg(long)]
-        name: Option<String>,
+    /// Bootstrap the global config (~/.config/muninn/config.toml) and run migrations
+    Init {
+        /// Initial key=value settings (non-interactive); omit to edit in $EDITOR
+        #[arg(value_name = "KEY=VALUE")]
+        set: Vec<String>,
     },
-    /// Edit .muninn.toml, validate it, and reindex if anything changed
-    Configure { path: String },
-    /// Unregister a repository and delete all its index data
-    Remove { path: String },
-    /// List registered repositories and their index status
-    List,
-    /// Re-index a repository in the foreground (or hand it to the daemon with --background)
+    /// Get, set, edit, or unset config keys (--global or --repo <path>)
+    Config {
+        #[command(subcommand)]
+        op: ConfigOp,
+    },
+    /// Register a repository and run its initial index
+    Add {
+        /// Repository path
+        path: String,
+        /// Initial key=value settings for the repo's .muninn.toml
+        #[arg(value_name = "KEY=VALUE")]
+        set: Vec<String>,
+        /// Register without running the initial index
+        #[arg(long)]
+        no_index: bool,
+    },
+    /// Re-index a repository in the foreground (or all repos / detached)
     Reindex {
         path: Option<String>,
         #[arg(long, conflicts_with = "path")]
         all: bool,
-        /// Hand the reindex to the background daemon instead of running it here.
+        /// Hand the reindex to the background daemon instead of running it here
         #[arg(long, conflicts_with = "all")]
-        background: bool,
+        detach: bool,
     },
-    /// Show registered repos and index status
-    Status,
+    /// Pause daemon indexing for a repo (keeps its index data)
+    Pause { path: String },
+    /// Resume daemon indexing for a repo
+    Resume { path: String },
+    /// Unregister a repository and delete all its index data
+    Remove {
+        path: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Show fleet status (no path) or per-repo detail (with a path)
+    Status { path: Option<String> },
     /// Show MCP usage stats from the database
-    Stats {
+    Usage {
         /// How many days back to include
         #[arg(long, default_value_t = 30)]
         days: i64,
     },
 }
 
-/// Open `initial_content` in $EDITOR inside a named temp file (`.muninn.toml` suffix for syntax
-/// highlighting), validate with `check`, and loop until the user produces a valid file or aborts.
-///
-/// Returns the validated TOML content.  The caller writes it to the real destination.
+/// Scope selector for `config`: exactly one of --global or --repo <path>.
+/// There is no cwd default — the repo is always explicit.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct ScopeArgs {
+    /// Target the global config (~/.config/muninn/config.toml)
+    #[arg(long)]
+    global: bool,
+    /// Target a repository's .muninn.toml at this path
+    #[arg(long, value_name = "PATH")]
+    repo: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum ConfigOp {
+    /// Print a key's value (or the whole config if no key given)
+    Get {
+        key: Option<String>,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    /// Set one or more key=value (non-interactive)
+    Set {
+        #[arg(value_name = "KEY=VALUE", required = true)]
+        assignments: Vec<String>,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    /// Open the config in $EDITOR
+    Edit {
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    /// Remove a key
+    Unset {
+        key: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+}
+
+impl ConfigOp {
+    fn scope(&self) -> &ScopeArgs {
+        match self {
+            ConfigOp::Get { scope, .. }
+            | ConfigOp::Set { scope, .. }
+            | ConfigOp::Edit { scope }
+            | ConfigOp::Unset { scope, .. } => scope,
+        }
+    }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Split a `key=value` argument on the first `=`.
+fn parse_assign(s: &str) -> anyhow::Result<(String, String)> {
+    let (k, v) = s
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("expected key=value, got `{}`", s))?;
+    anyhow::ensure!(!k.trim().is_empty(), "empty key in `{}`", s);
+    Ok((k.trim().to_string(), v.to_string()))
+}
+
+/// Apply `key=value` assignments to TOML content (comment-preserving).
+fn apply_assigns(content: &str, assigns: &[String]) -> anyhow::Result<String> {
+    let mut out = content.to_string();
+    for a in assigns {
+        let (k, v) = parse_assign(a)?;
+        out = config::toml_set(&out, &k, &v)?;
+    }
+    Ok(out)
+}
+
+#[cfg(unix)]
+fn set_owner_only(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+#[cfg(not(unix))]
+fn set_owner_only(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+/// Validate per-repo config content: parse, semantic validate, and the DimFrozen
+/// invariant against the repo's registered embedding dimension.
+fn validate_repo_cfg(
+    content: &str,
+    cfg: &GlobalConfig,
+    dir_name: &str,
+    embedding_dim: u32,
+) -> anyhow::Result<()> {
+    let rc = RepoConfig::from_toml_str(content)?;
+    rc.validate()?;
+    let eff = config::EffectiveConfig::merge(cfg, &rc, dir_name);
+    let new_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
+    anyhow::ensure!(
+        new_dim == embedding_dim as usize,
+        "DimFrozen: this repo uses embedding_dim {embedding_dim} but the edited config \
+         yields {new_dim}.\nRemove the [embeddings] section to inherit the global backend, \
+         or `muninn remove` + `muninn add` to re-register.",
+    );
+    Ok(())
+}
+
+/// Open `initial_content` in $EDITOR inside a named temp file, validate with
+/// `check`, and loop until the user produces a valid file or aborts. Returns the
+/// validated content; the caller writes it to the real destination.
 fn edit_toml_in_temp(
     initial_content: &str,
     check: impl Fn(&str) -> anyhow::Result<()>,
 ) -> anyhow::Result<String> {
-    let mut tmp = tempfile::Builder::new()
-        .suffix(".muninn.toml")
-        .tempfile()?;
+    let mut tmp = tempfile::Builder::new().suffix(".muninn.toml").tempfile()?;
     tmp.write_all(initial_content.as_bytes())?;
     tmp.flush()?;
     let tmp_path = tmp.path().to_path_buf();
@@ -81,21 +206,21 @@ fn edit_toml_in_temp(
     }
 }
 
-/// Acquire the distributed lock, run a foreground index with a progress bar, then release the
-/// lock.  Reads the effective config from the repo's `.muninn.toml` on disk (caller must have
-/// written it already).
+/// Acquire the repo's advisory lock, run a foreground index with a progress bar,
+/// then release the lock. Reads the effective config from the repo's
+/// `.muninn.toml` on disk (caller must have written it already).
 async fn run_foreground_index(
     pool: &PgPool,
     cfg: &GlobalConfig,
-    repo_path: &std::path::Path,
+    repo_path: &Path,
 ) -> anyhow::Result<()> {
     let dir_name = repo_path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let repo_cfg = muninn_core::config::RepoConfig::load(repo_path)?;
-    let eff = muninn_core::config::EffectiveConfig::merge(cfg, &repo_cfg, &dir_name);
+    let repo_cfg = RepoConfig::load(repo_path)?;
+    let eff = config::EffectiveConfig::merge(cfg, &repo_cfg, &dir_name);
 
     let embedder: std::sync::Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         std::sync::Arc::from(muninn_core::embeddings::make_backend(&eff.embeddings));
@@ -163,9 +288,7 @@ async fn run_foreground_index(
             repo_dim,
             &eff.exclude,
             |done, total, file| {
-                let rel = file
-                    .strip_prefix(&repo_path_for_progress)
-                    .unwrap_or(file);
+                let rel = file.strip_prefix(&repo_path_for_progress).unwrap_or(file);
                 let prefix = format!(
                     "  [{:>width$}/{}] ",
                     done,
@@ -186,8 +309,7 @@ async fn run_foreground_index(
         _ = tokio::signal::ctrl_c() => {
             println!();
             eprintln!(
-                "Interrupted. Index left incomplete — re-run `muninn configure {p}` \
-                 (or `muninn reindex {p}`) to finish it.",
+                "Interrupted. Index left incomplete — re-run `muninn reindex {p}` to finish it.",
                 p = repo_path.display()
             );
             std::process::exit(130);
@@ -200,10 +322,6 @@ async fn run_foreground_index(
     let (outcome, skips) = index_result?;
 
     println!();
-
-    // Print skipped files after the progress bar (which would otherwise
-    // overwrite them via \r-redraw). Each line has the path relative to the
-    // repo root and the full cause chain.
     if !skips.is_empty() {
         eprintln!("Skipped {} file(s):", skips.len());
         for s in &skips {
@@ -222,280 +340,217 @@ async fn run_foreground_index(
     Ok(())
 }
 
+// ── config handlers ────────────────────────────────────────────────────────
+
+/// `config <op> --global`: edits the global config file directly, then runs
+/// migrations. Does not require an already-loaded config, so it works on a fresh
+/// system (alongside `init`).
+async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
+    let path = GlobalConfig::config_path();
+
+    if let ConfigOp::Get { key, .. } = op {
+        anyhow::ensure!(path.exists(), "no global config at {}", path.display());
+        let content = std::fs::read_to_string(&path)?;
+        match key {
+            Some(k) => match config::toml_get(&content, k)? {
+                Some(v) => println!("{v}"),
+                None => {
+                    eprintln!("(unset) {k}");
+                    std::process::exit(1);
+                }
+            },
+            None => print!("{content}"),
+        }
+        return Ok(());
+    }
+
+    let base = if path.exists() {
+        std::fs::read_to_string(&path)?
+    } else {
+        GlobalConfig::template_content().to_string()
+    };
+    let new = match op {
+        ConfigOp::Set { assignments, .. } => apply_assigns(&base, assignments)?,
+        ConfigOp::Edit { .. } => {
+            println!("Opening {} in $EDITOR…", path.display());
+            edit_toml_in_temp(&base, |c| GlobalConfig::from_toml_str(c)?.validate())?
+        }
+        ConfigOp::Unset { key, .. } => config::toml_unset(&base, key)?,
+        ConfigOp::Get { .. } => unreachable!(),
+    };
+    GlobalConfig::from_toml_str(&new)?.validate()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &new)?;
+    set_owner_only(&path)?;
+    println!("Updated {}", path.display());
+
+    let cfg = GlobalConfig::from_toml_str(&new)?;
+    let pool = db::connect(&cfg.database).await?;
+    db::run_migrations(&pool).await?;
+    Ok(())
+}
+
+/// `config <op> --repo <path>`: edits a repo's `.muninn.toml`, then reindexes in
+/// the foreground if the content changed or the index is owed.
+async fn handle_repo_config(pool: &PgPool, cfg: &GlobalConfig, op: ConfigOp) -> anyhow::Result<()> {
+    let repo_path = match op.scope().repo.as_deref() {
+        Some(p) => muninn_core::repo_resolver::resolve_path(p)?,
+        None => unreachable!("global scope handled before pool load"),
+    };
+    let toml_path = repo_path.join(RepoConfig::FILE_NAME);
+
+    if let ConfigOp::Get { key, .. } = &op {
+        anyhow::ensure!(
+            toml_path.exists(),
+            "no {} at {}",
+            RepoConfig::FILE_NAME,
+            repo_path.display()
+        );
+        let content = std::fs::read_to_string(&toml_path)?;
+        match key {
+            Some(k) => match config::toml_get(&content, k)? {
+                Some(v) => println!("{v}"),
+                None => {
+                    eprintln!("(unset) {k}");
+                    std::process::exit(1);
+                }
+            },
+            None => print!("{content}"),
+        }
+        return Ok(());
+    }
+
+    let repo = store::get_repo_by_path(pool, &repo_path.to_string_lossy())
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "repo not registered: {} — run `muninn add {}` first",
+                repo_path.display(),
+                repo_path.display()
+            )
+        })?;
+    let dir_name = repo_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let existing = std::fs::read_to_string(&toml_path)?;
+
+    let new = match &op {
+        ConfigOp::Set { assignments, .. } => apply_assigns(&existing, assignments)?,
+        ConfigOp::Edit { .. } => {
+            println!("Opening {} in $EDITOR…", toml_path.display());
+            let cfg2 = cfg.clone();
+            let dn = dir_name.clone();
+            let edim = repo.embedding_dim;
+            edit_toml_in_temp(&existing, move |c| validate_repo_cfg(c, &cfg2, &dn, edim))?
+        }
+        ConfigOp::Unset { key, .. } => config::toml_unset(&existing, key)?,
+        ConfigOp::Get { .. } => unreachable!(),
+    };
+    validate_repo_cfg(&new, cfg, &dir_name, repo.embedding_dim)?;
+
+    let changed = new != existing;
+    if changed {
+        std::fs::write(&toml_path, &new)?;
+        let rc = RepoConfig::from_toml_str(&new)?;
+        let eff = config::EffectiveConfig::merge(cfg, &rc, &dir_name);
+        if eff.repo_name != repo.name {
+            sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
+                .bind(&eff.repo_name)
+                .bind(repo.id)
+                .execute(pool)
+                .await?;
+            println!("Renamed: {} → {}", repo.name, eff.repo_name);
+        }
+        println!("Updated {}", toml_path.display());
+    }
+
+    // Reindex from DB state, not just the byte-diff: reindex if the config changed
+    // OR the index is owed (indexed_at NULL). Spec: Muninn.IndexFsm.configureAction.
+    if changed {
+        println!("Reindexing…");
+        run_foreground_index(pool, cfg, &repo_path).await?;
+    } else if repo.indexed_at.is_none() {
+        println!("Config unchanged, but the index is incomplete — reindexing…");
+        run_foreground_index(pool, cfg, &repo_path).await?;
+    } else {
+        println!("No changes; index is up to date.");
+    }
+    Ok(())
+}
+
+// ── main ─────────────────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // `muninn config` runs before loading global config — it is the bootstrap command.
-    if let Commands::Config = &cli.command {
-        let config_path = GlobalConfig::config_path();
-        let is_new = !config_path.exists();
-
-        let initial_content = if is_new {
-            GlobalConfig::template_content().to_string()
-        } else {
-            std::fs::read_to_string(&config_path)?
-        };
-
-        if is_new {
-            println!("Creating: {}", config_path.display());
-        }
-        println!("Opening in $EDITOR… (save and close to finish)");
-
-        let validated = edit_toml_in_temp(&initial_content, |content| {
-            GlobalConfig::from_toml_str(content)?.validate()
-        })?;
-
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&config_path, &validated)?;
-
-        // Restrict permissions to owner-only (config may contain API keys).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))?;
-        }
-
-        let cfg = GlobalConfig::from_toml_str(&validated)?;
-        let pool = db::connect(&cfg.database).await?;
-        println!("Applying database migrations…");
-        db::run_migrations(&pool).await?;
-        println!("Done. Run `muninn add <repo-path>` to add a repository.");
-        return Ok(());
+    // Bootstrap-ish commands manage the global config and do NOT require an
+    // already-loaded config: `init`, and any `config … --global`.
+    match &cli.command {
+        Commands::Init { set } => return handle_init(set).await,
+        Commands::Config { op } if op.scope().global => return handle_global_config(op).await,
+        _ => {}
     }
 
     let cfg = GlobalConfig::load()?;
     let pool = db::connect(&cfg.database).await?;
+    // Self-apply migrations so any command works against a DB that hasn't been
+    // migrated yet (e.g. right after a binary upgrade). Idempotent.
+    db::run_migrations(&pool).await?;
 
     match cli.command {
-        Commands::Add { path, name } => {
+        Commands::Config { op } => handle_repo_config(&pool, &cfg, op).await?,
+
+        Commands::Add { path, set, no_index } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            if !repo_path.exists() {
-                anyhow::bail!("path does not exist: {}", repo_path.display());
-            }
-            if !repo_path.is_dir() {
-                anyhow::bail!("path is not a directory: {}", repo_path.display());
-            }
-
-            // Fail early if the repo is already registered — use `muninn configure` to reconfigure.
-            if store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
-                .await?
-                .is_some()
-            {
-                anyhow::bail!(
-                    "repo '{}' is already registered. \
-                     Use `muninn configure {}` to change its configuration.",
-                    repo_path.display(),
-                    path
-                );
-            }
-
-            let dir_name = name.unwrap_or_else(|| {
-                repo_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            });
-            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
-            let template = muninn_core::config::RepoConfig::template_content(&dir_name);
-
-            println!("Opening in $EDITOR… (save and close to finish)");
-
-            let validated_content = edit_toml_in_temp(&template, |content| {
-                muninn_core::config::RepoConfig::from_toml_str(content)?.validate()
-            })
-            .map_err(|e| {
-                anyhow::anyhow!("{} — {} not registered.", e, repo_path.display())
-            })?;
-
-            std::fs::write(&toml_path, &validated_content)?;
-            println!("Created: {}", toml_path.display());
-
-            let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
-            let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
-            let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
-
-            store::register_repo(
-                &pool,
-                &repo_path.to_string_lossy(),
-                &eff.repo_name,
-                repo_dim,
-            )
-            .await?;
-
-            run_foreground_index(&pool, &cfg, &repo_path).await?;
-        }
-
-        Commands::Configure { path } => {
-            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
-
-            if !toml_path.exists() {
-                anyhow::bail!(
-                    "no {} found at {} — run `muninn add {}` first",
-                    muninn_core::config::RepoConfig::FILE_NAME,
-                    repo_path.display(),
-                    path
-                );
-            }
-
-            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "repo not found in database — run `muninn add {}` first",
-                        repo_path.display()
-                    )
-                })?;
+            anyhow::ensure!(repo_path.exists(), "path does not exist: {}", repo_path.display());
+            anyhow::ensure!(repo_path.is_dir(), "path is not a directory: {}", repo_path.display());
+            anyhow::ensure!(
+                store::get_repo_by_path(&pool, &repo_path.to_string_lossy()).await?.is_none(),
+                "repo '{}' is already registered. Use `muninn config set --repo {} k=v` to change it.",
+                repo_path.display(),
+                path
+            );
 
             let dir_name = repo_path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let existing_content = std::fs::read_to_string(&toml_path)?;
+            let toml_path = repo_path.join(RepoConfig::FILE_NAME);
+            let template = RepoConfig::template_content(&dir_name);
 
-            println!("Opening in $EDITOR… (save and close to finish)");
+            // `add` is non-interactive: write the template with any --set overrides
+            // applied (no --set → defaults, inheriting global). Edit later with
+            // `muninn config edit --repo <path>`.
+            let content = apply_assigns(&template, &set)?;
+            RepoConfig::from_toml_str(&content)?.validate()?;
 
-            let validated_content = edit_toml_in_temp(&existing_content, |content| {
-                let rc = muninn_core::config::RepoConfig::from_toml_str(content)?;
-                rc.validate()?;
-                let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
-                let new_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
-                if new_dim != repo.embedding_dim as usize {
-                    anyhow::bail!(
-                        "DimFrozen: this repo uses embedding_dim {} but the edited config \
-                         yields {}.\nRemove the [embeddings] section to inherit the global \
-                         backend, or:\n  muninn remove {path}\n  muninn add    {path}",
-                        repo.embedding_dim,
-                        new_dim
-                    );
-                }
-                Ok(())
-            })?;
+            std::fs::write(&toml_path, &content)?;
+            println!("Created {}", toml_path.display());
 
-            let content_changed = validated_content != existing_content;
+            let rc = RepoConfig::from_toml_str(&content)?;
+            let eff = config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
+            let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
+            store::register_repo(&pool, &repo_path.to_string_lossy(), &eff.repo_name, repo_dim).await?;
 
-            if content_changed {
-                std::fs::write(&toml_path, &validated_content)?;
-
-                let repo_cfg = muninn_core::config::RepoConfig::from_toml_str(&validated_content)?;
-                let eff = muninn_core::config::EffectiveConfig::merge(&cfg, &repo_cfg, &dir_name);
-                if eff.repo_name != repo.name {
-                    sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
-                        .bind(&eff.repo_name)
-                        .bind(repo.id)
-                        .execute(&pool)
-                        .await?;
-                    println!("Renamed: {} → {}", repo.name, eff.repo_name);
-                }
-            }
-
-            // Whether to reindex is decided from DB state, not just the byte-diff:
-            // reindex if the config changed OR the index is owed (indexed_at NULL —
-            // e.g. an earlier index was interrupted and never finished). This avoids
-            // the dead-end where a saved exclude list is never applied to a stale
-            // index. Spec: Muninn.IndexFsm.configureAction.
-            if content_changed {
-                println!("Saved. Reindexing…");
-                run_foreground_index(&pool, &cfg, &repo_path).await?;
-            } else if repo.indexed_at.is_none() {
-                println!("Config unchanged, but the index is incomplete — reindexing…");
-                run_foreground_index(&pool, &cfg, &repo_path).await?;
-            } else {
-                println!("No changes; index is up to date.");
-            }
-        }
-
-        Commands::Remove { path } => {
-            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            let toml_path = repo_path.join(muninn_core::config::RepoConfig::FILE_NAME);
-            let repo =
-                store::get_repo_by_path(&pool, &repo_path.to_string_lossy()).await?;
-
-            if !toml_path.exists() && repo.is_none() {
+            if no_index {
                 println!(
-                    "No {} or registered repo found at: {}",
-                    muninn_core::config::RepoConfig::FILE_NAME,
-                    repo_path.display()
+                    "Registered (not indexed). Run `muninn reindex {}` to index it.",
+                    path
                 );
-                return Ok(());
-            }
-
-            // UnregisterSafe: hold the advisory lock across removal so no index
-            // runs concurrently and none can start. Refuse if it's already held.
-            let mut lock_conn = match &repo {
-                Some(r) => match store::try_lock(&pool, r.id).await? {
-                    Some(conn) => Some((conn, r.id)),
-                    None => anyhow::bail!(
-                        "repo '{}' is currently being indexed. Wait for it to \
-                         finish or stop the indexer before removing.",
-                        repo_path.display()
-                    ),
-                },
-                None => None,
-            };
-
-            let prompt = if toml_path.exists() {
-                format!(
-                    "Delete {} and remove index data? [y/N] ",
-                    toml_path.display()
-                )
             } else {
-                format!(
-                    "{} not found at {}. Remove index data anyway? [y/N] ",
-                    muninn_core::config::RepoConfig::FILE_NAME,
-                    repo_path.display()
-                )
-            };
-            print!("{prompt}");
-            use std::io::Write;
-            std::io::stdout().flush()?;
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line)?;
-
-            if line.trim().eq_ignore_ascii_case("y") {
-                if toml_path.exists() {
-                    std::fs::remove_file(&toml_path)?;
-                }
-                if let Some(repo) = repo {
-                    store::delete_repo(&pool, repo.id).await?;
-                    println!("Removed index data for: {}", repo_path.display());
-                }
-                println!("Removed: {}", repo_path.display());
-                store::notify_repos_changed(&pool).await?;
-            } else {
-                println!("Aborted.");
-            }
-
-            // Release the advisory lock (keyed on the UUID, independent of the
-            // now-deleted row). Best-effort; the session ends on exit anyway.
-            if let Some((mut conn, id)) = lock_conn {
-                let _ = store::unlock(&mut conn, id).await;
+                run_foreground_index(&pool, &cfg, &repo_path).await?;
             }
         }
 
-        Commands::List => {
-            let repos = store::list_repos(&pool).await?;
-            if repos.is_empty() {
-                println!("No repositories registered.");
-            } else {
-                for repo in repos {
-                    let status = repo
-                        .indexed_at
-                        .map(|t| format!("indexed {}", t.format("%Y-%m-%d %H:%M UTC")))
-                        .unwrap_or_else(|| "not indexed".to_string());
-                    println!("{:24}  {}  [{}]", repo.name, repo.path, status);
-                }
-            }
-        }
-
-        Commands::Reindex { path, all, background } => {
+        Commands::Reindex { path, all, detach } => {
             if all {
-                // Fleet operation: always background. Visibility comes from `muninn status`.
+                // Fleet operation: always detached. Visibility via `muninn status`.
                 sqlx::query("UPDATE repos SET indexed_at = NULL")
                     .execute(&pool)
                     .await?;
@@ -503,16 +558,12 @@ async fn main() -> anyhow::Result<()> {
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
-                if store::get_repo_by_path(&pool, &resolved.to_string_lossy())
-                    .await?
-                    .is_none()
-                {
-                    anyhow::bail!(
-                        "no registered repo found at '{}' — run `muninn list` to see registered repos",
-                        resolved.display()
-                    );
-                }
-                if background {
+                anyhow::ensure!(
+                    store::get_repo_by_path(&pool, &resolved.to_string_lossy()).await?.is_some(),
+                    "no registered repo found at '{}' — run `muninn status` to see registered repos",
+                    resolved.display()
+                );
+                if detach {
                     sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
                         .bind(resolved.to_string_lossy().as_ref())
                         .execute(&pool)
@@ -523,8 +574,6 @@ async fn main() -> anyhow::Result<()> {
                         resolved.display()
                     );
                 } else {
-                    // A user-initiated reindex is interactive by default, so the
-                    // user sees progress and excludes taking effect.
                     run_foreground_index(&pool, &cfg, &resolved).await?;
                 }
             } else {
@@ -533,22 +582,134 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Status => {
-            let repos = store::list_repos(&pool).await?;
-            println!("Registered repos: {}", repos.len());
-            for r in &repos {
-                let status = r
-                    .indexed_at
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "unindexed".to_string());
-                println!("  {} — {} — {}", r.name, r.path, status);
+        Commands::Pause { path } => {
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
+            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
+            store::set_paused(&pool, repo.id, true).await?;
+            store::notify_repos_changed(&pool).await?;
+            println!(
+                "Paused {}. The daemon will stop indexing it; index data is kept.",
+                repo_path.display()
+            );
+        }
+
+        Commands::Resume { path } => {
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
+            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
+            store::set_paused(&pool, repo.id, false).await?;
+            store::notify_repos_changed(&pool).await?;
+            println!("Resumed {}.", repo_path.display());
+        }
+
+        Commands::Remove { path, yes } => {
+            let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
+            let toml_path = repo_path.join(RepoConfig::FILE_NAME);
+            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy()).await?;
+
+            if !toml_path.exists() && repo.is_none() {
+                println!(
+                    "No {} or registered repo found at: {}",
+                    RepoConfig::FILE_NAME,
+                    repo_path.display()
+                );
+                return Ok(());
+            }
+
+            // UnregisterSafe: hold the advisory lock across removal so no index
+            // runs concurrently and none can start. Refuse if it's already held.
+            let lock_conn = match &repo {
+                Some(r) => match store::try_lock(&pool, r.id).await? {
+                    Some(conn) => Some((conn, r.id)),
+                    None => anyhow::bail!(
+                        "repo '{}' is currently being indexed. Wait for it to finish \
+                         or stop the indexer before removing.",
+                        repo_path.display()
+                    ),
+                },
+                None => None,
+            };
+
+            let confirmed = if yes {
+                true
+            } else {
+                let prompt = if toml_path.exists() {
+                    format!("Delete {} and remove index data? [y/N] ", toml_path.display())
+                } else {
+                    format!(
+                        "{} not found at {}. Remove index data anyway? [y/N] ",
+                        RepoConfig::FILE_NAME,
+                        repo_path.display()
+                    )
+                };
+                print!("{prompt}");
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.trim().eq_ignore_ascii_case("y")
+            };
+
+            if confirmed {
+                if toml_path.exists() {
+                    std::fs::remove_file(&toml_path)?;
+                }
+                if let Some(ref r) = repo {
+                    store::delete_repo(&pool, r.id).await?;
+                    println!("Removed index data for: {}", repo_path.display());
+                }
+                println!("Removed: {}", repo_path.display());
+                store::notify_repos_changed(&pool).await?;
+            } else {
+                println!("Aborted.");
+            }
+
+            if let Some((mut conn, id)) = lock_conn {
+                let _ = store::unlock(&mut conn, id).await;
             }
         }
 
-        Commands::Stats { days } => {
-            if days < 0 {
-                anyhow::bail!("days must be non-negative");
+        Commands::Status { path } => match path {
+            None => {
+                let repos = store::list_repos(&pool).await?;
+                println!("Registered repos: {}", repos.len());
+                for r in &repos {
+                    let status = r
+                        .indexed_at
+                        .map(|t| format!("indexed {}", t.format("%Y-%m-%d %H:%M UTC")))
+                        .unwrap_or_else(|| {
+                            if r.ever_indexed {
+                                "reindex pending".to_string()
+                            } else {
+                                "not indexed".to_string()
+                            }
+                        });
+                    let paused = if r.paused { "  [paused]" } else { "" };
+                    println!("  {:24}  {}  [{}]{}", r.name, r.path, status, paused);
+                }
             }
+            Some(p) => {
+                let repo_path = muninn_core::repo_resolver::resolve_path(&p)?;
+                let r = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
+                println!("Repo:         {}", r.name);
+                println!("Path:         {}", r.path);
+                println!(
+                    "Indexed:      {}",
+                    r.indexed_at.map(|t| t.to_string()).unwrap_or_else(|| "no".to_string())
+                );
+                println!("Ever indexed: {}", r.ever_indexed);
+                println!("Embedding:    {} dims", r.embedding_dim);
+                println!("Paused:       {}", r.paused);
+                println!("Reindex owed: {}", r.indexed_at.is_none());
+            }
+        },
+
+        Commands::Usage { days } => {
+            anyhow::ensure!(days >= 0, "days must be non-negative");
             let total = sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM mcp_usage
                  WHERE ts >= now() - ($1::int * interval '1 day')",
@@ -577,8 +738,47 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Config => unreachable!("handled before loading config"),
+        Commands::Init { .. } => unreachable!("handled before config load"),
     }
 
+    Ok(())
+}
+
+/// `muninn init`: bootstrap the global config (template if absent, `--set`/EDITOR
+/// to fill it) and run migrations. Idempotent.
+async fn handle_init(set: &[String]) -> anyhow::Result<()> {
+    let path = GlobalConfig::config_path();
+    let existed = path.exists();
+    let base = if existed {
+        std::fs::read_to_string(&path)?
+    } else {
+        GlobalConfig::template_content().to_string()
+    };
+
+    let content = if !set.is_empty() {
+        let new = apply_assigns(&base, set)?;
+        GlobalConfig::from_toml_str(&new)?.validate()?;
+        new
+    } else if !existed {
+        println!("Creating {} — opening in $EDITOR…", path.display());
+        edit_toml_in_temp(&base, |c| GlobalConfig::from_toml_str(c)?.validate())?
+    } else {
+        base
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &content)?;
+    set_owner_only(&path)?;
+    if !existed || !set.is_empty() {
+        println!("Wrote {}", path.display());
+    }
+
+    let cfg = GlobalConfig::from_toml_str(&content)?;
+    let pool = db::connect(&cfg.database).await?;
+    println!("Applying database migrations…");
+    db::run_migrations(&pool).await?;
+    println!("Done. Run `muninn add <repo-path>` to index a repository.");
     Ok(())
 }

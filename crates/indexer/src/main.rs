@@ -20,6 +20,10 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = GlobalConfig::load()?;
     let pool = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
+    // Self-apply migrations on startup: the daemon may come up (launchd/systemd)
+    // before any CLI command has migrated the DB, and every scan SELECTs the
+    // current repo columns. Idempotent. Spec: schema is current before queries.
+    db::run_migrations(&pool).await?;
 
     // Dedicated connection for LISTEN/NOTIFY.
     // PgListener reconnects automatically; combined with the 60 s fallback poll
@@ -93,6 +97,17 @@ async fn scan_and_dispatch(
     });
 
     for repo in repos {
+        // Paused repos are skipped entirely — no reindex, no watcher — without
+        // dropping data. If a watcher is running for a now-paused repo, evict it.
+        // Spec: Muninn.Index.daemonDecision (paused → Skip).
+        if repo.paused {
+            if let Some(handle) = watched.remove(&repo.id) {
+                handle.abort();
+                tracing::info!("paused {} — stopped its watcher", repo.path);
+            }
+            continue;
+        }
+
         let repo_path = std::path::Path::new(&repo.path);
 
         let dir_name = repo_path

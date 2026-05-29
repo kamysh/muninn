@@ -25,16 +25,18 @@ Everything runs locally. No source code, no file tree structure, no graph data e
 
 ## CLI reference
 
+All config-mutating commands are scriptable (`key=value`); `$EDITOR` opens only for the explicit `config edit`.
+
 | Command | What it does |
 |---|---|
-| `muninn config` | Create or edit `~/.config/muninn/config.toml`; validates and applies DB schema on save |
-| `muninn add <path>` | Register a repo, open editor for per-repo config, run initial index |
-| `muninn configure <path>` | Edit per-repo config; reindexes if anything changed |
-| `muninn remove <path>` | Remove a repo from the index and delete all its data |
-| `muninn list` | List registered repos and index status |
-| `muninn reindex [<path>] [--all]` | Mark repo(s) for re-indexing by the daemon |
-| `muninn status` | Show repos and current index state |
-| `muninn stats [--days N]` | Show MCP tool usage statistics |
+| `muninn init [key=value …]` | Bootstrap `~/.config/muninn/config.toml` and run DB migrations |
+| `muninn config get\|set\|edit\|unset (--global \| --repo <path>) [key=value …]` | Read or change the global or a per-repo config; a repo `set`/`edit` reindexes if needed |
+| `muninn add <path> [key=value …] [--no-index]` | Register a repo (writes `.muninn.toml`) and run its initial index; `--no-index` registers only |
+| `muninn reindex [<path>] [--all] [--detach]` | Re-index a repo in the foreground; `--all`/`--detach` hand it to the daemon |
+| `muninn pause <path>` / `muninn resume <path>` | Pause/resume daemon indexing for a repo (index data is kept) |
+| `muninn remove <path> [--yes]` | Unregister a repo and delete all its index data |
+| `muninn status [<path>]` | Fleet overview, or per-repo detail with a path |
+| `muninn usage [--days N]` | Show MCP tool usage statistics |
 
 ## MCP tools
 

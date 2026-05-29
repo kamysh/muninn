@@ -6,12 +6,12 @@ muninn uses two configuration files:
 
 | File | Scope | Created by |
 |------|-------|-----------|
-| `~/.config/muninn/config.toml` | Global defaults for all repos | `muninn config` |
-| `<repo-root>/.muninn.toml` | Per-repo overrides | `muninn add` / `muninn configure` |
+| `~/.config/muninn/config.toml` | Global defaults for all repos | `muninn init` |
+| `<repo-root>/.muninn.toml` | Per-repo overrides | `muninn add` / `muninn config set --repo <path>` |
 
 When both files exist, the per-repo file overrides settings section by section. If `.muninn.toml` has an `[embeddings]` section, it completely replaces the global `[embeddings]`. Sections not present in `.muninn.toml` inherit from the global config. Individual keys are not merged within a section: if you override `[embeddings]`, all required keys in that section must be present.
 
-The global config file may contain API keys. `muninn config` sets its permissions to `0600` (owner read/write only) automatically.
+The global config file may contain API keys. `muninn init` (and `muninn config set --global`) set its permissions to `0600` (owner read/write only) automatically.
 
 ---
 
@@ -124,7 +124,7 @@ muninn indexes **everything** under a repo root by default — including files t
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `record_usage` | bool | `true` | Record MCP tool call counts — visible via `muninn stats` |
+| `record_usage` | bool | `true` | Record MCP tool call counts — visible via `muninn usage` |
 
 ### `[mcp.logging]`
 
@@ -145,7 +145,7 @@ All sections are optional. An empty file is valid and inherits everything from t
 
 Overridable sections: `[database]`, `[embeddings]`, `[watcher]`, `[index]`. The `[mcp]` section cannot be overridden per-repo.
 
-**Top-level key:** `repo_name` — the display name shown in `muninn list`. Defaults to the directory name.
+**Top-level key:** `repo_name` — the display name shown in `muninn status`. Defaults to the directory name.
 
 ```toml
 # repo_name = "my-project"
@@ -166,6 +166,6 @@ Overridable sections: `[database]`, `[embeddings]`, `[watcher]`, `[index]`. The 
 # exclude = ["target/", "dist/", "**/*.min.js"]
 ```
 
-**Embedding dimension lock:** If you try to change the embedding backend in `.muninn.toml` after the first index, `muninn configure` will reject it. Remove and re-add the repo to switch backends.
+**Embedding dimension lock:** If you try to change the embedding backend in `.muninn.toml` after the first index, `muninn config set --repo <path>` (or `config edit --repo <path>`) will reject it. Remove and re-add the repo to switch backends.
 
 **Unknown keys are errors.** All config structs reject unknown TOML keys. A typo in a key name is reported immediately, not silently ignored.

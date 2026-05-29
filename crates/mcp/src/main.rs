@@ -12,6 +12,9 @@ async fn main() -> anyhow::Result<()> {
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
     let pool = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
+    // Self-apply migrations on startup so the server works against a DB that
+    // hasn't been migrated yet (e.g. right after a binary upgrade). Idempotent.
+    db::run_migrations(&pool).await?;
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);

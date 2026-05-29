@@ -179,7 +179,7 @@ Migrations are SQL files in `migrations/`, numbered sequentially (`001_initial.s
 sqlx::migrate!("../../migrations").run(pool).await?
 ```
 
-Migrations run automatically when `muninn config` is called. Applied migrations are tracked in `_sqlx_migrations`. Migrations are idempotent — re-running is always safe.
+Migrations run automatically the first time any muninn binary connects (the CLI, the daemon, or the MCP server). Applied migrations are tracked in `_sqlx_migrations`. Migrations are idempotent — re-running is always safe.
 
 After adding or changing a `sqlx::query!` macro anywhere in the workspace:
 

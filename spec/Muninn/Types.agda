@@ -45,6 +45,8 @@ record Repo : Set where
         embeddingDim      : ℕ                 -- VECTOR(n) dimension recorded at registration time
         preemptRequested  : Bool               -- a foreground job is waiting for the index lock
                                                -- (the lock itself is a session advisory lock, not a column)
+        paused            : Bool               -- `muninn pause` set this; the daemon skips paused
+                                               -- repos (no reindex, no watcher) without dropping data
 
 -- A single result returned by a search query.
 record SearchResult : Set where

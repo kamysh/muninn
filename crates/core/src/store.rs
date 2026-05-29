@@ -8,7 +8,7 @@ use uuid::Uuid;
 /// The repo columns selected into a `Repo` by `row_to_repo`. Kept as one
 /// constant so every query stays in sync with the struct.
 const REPO_COLUMNS: &str = "id, path, name, indexed_at, ever_indexed, \
-     embedding_dim, preempt_requested";
+     embedding_dim, preempt_requested, paused";
 
 /// Derive the per-repo chunks table name from the repo UUID.
 /// Uses the simple (no-hyphen) UUID hex so the name is a valid SQL identifier.
@@ -371,6 +371,18 @@ pub async fn mark_unindexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// Set or clear a repo's paused flag. When paused, the daemon skips the repo
+/// entirely (no reindex, no watcher) without dropping data. Spec:
+/// Muninn.Index.daemonDecision (paused → Skip).
+pub async fn set_paused(pool: &PgPool, repo_id: Uuid, paused: bool) -> Result<()> {
+    sqlx::query(r#"UPDATE repos SET paused = $2 WHERE id = $1"#)
+        .bind(repo_id)
+        .bind(paused)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Signal that a foreground job is waiting for the lock and the current
 /// background holder should yield. Spec: Muninn.AdvisoryLock preempt.
 pub async fn request_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
@@ -415,5 +427,6 @@ fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
         ever_indexed: row.try_get::<bool, _>("ever_indexed")?,
         embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
         preempt_requested: row.try_get::<bool, _>("preempt_requested")?,
+        paused: row.try_get::<bool, _>("paused")?,
     })
 }

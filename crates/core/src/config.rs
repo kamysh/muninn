@@ -513,6 +513,97 @@ impl EffectiveConfig {
     }
 }
 
+// ── TOML key editing (config get/set/unset) ─────────────────────────────────
+// Comment- and formatting-preserving edits to a TOML config file, keyed by a
+// dotted path (e.g. "database.port", "index.exclude"). Pure content→content so
+// the caller can validate the result (by typed parse) before writing. Used by
+// the unified `muninn config get/set/unset` for both the global config and any
+// per-repo `.muninn.toml`.
+
+/// Set a dotted `key` to a TOML value literal (`value` is parsed as TOML, so
+/// `7432`, `"voyage"`, `["a","b"]`, `true` all work). Intermediate tables are
+/// created as needed. Returns the new file content.
+pub fn toml_set(content: &str, key: &str, value: &str) -> anyhow::Result<String> {
+    use toml_edit::{DocumentMut, Item, Table, Value};
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+    // Parse the value as a TOML literal (number / bool / array / quoted string);
+    // fall back to a bare string when it doesn't parse, so `backend=local` and
+    // `model=voyage-code-3` work without shell-quoting the inner quotes. Type
+    // mismatches are caught by the caller's typed validation after the edit.
+    let val: Value = value.parse().unwrap_or_else(|_| Value::from(value));
+    let segs: Vec<&str> = key.split('.').collect();
+    anyhow::ensure!(
+        !segs.iter().any(|s| s.is_empty()),
+        "invalid config key `{}`",
+        key
+    );
+    let (last, parents) = segs.split_last().unwrap();
+    let mut tbl: &mut Table = doc.as_table_mut();
+    for p in parents {
+        let entry = tbl.entry(p).or_insert(Item::Table(Table::new()));
+        tbl = entry
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("config key `{}`: `{}` is not a table", key, p))?;
+    }
+    tbl.insert(last, Item::Value(val));
+    Ok(doc.to_string())
+}
+
+/// Remove a dotted `key`. Absent keys are a no-op. Returns the new file content.
+pub fn toml_unset(content: &str, key: &str) -> anyhow::Result<String> {
+    use toml_edit::DocumentMut;
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+    let segs: Vec<&str> = key.split('.').collect();
+    let (last, parents) = segs.split_last().unwrap();
+    let mut tbl = doc.as_table_mut();
+    for p in parents {
+        match tbl.get_mut(p).and_then(|i| i.as_table_mut()) {
+            Some(t) => tbl = t,
+            None => return Ok(doc.to_string()),
+        }
+    }
+    tbl.remove(last);
+    Ok(doc.to_string())
+}
+
+/// Read a dotted `key`, returning its rendered TOML value, or None if absent.
+pub fn toml_get(content: &str, key: &str) -> anyhow::Result<Option<String>> {
+    use toml_edit::DocumentMut;
+    let doc: DocumentMut = content
+        .parse()
+        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+    // Navigate with `.get()` (not `&item[seg]`, whose Index impl panics on a
+    // missing or non-table segment). Any absent / through-scalar segment → None.
+    let mut item = doc.as_item();
+    for seg in key.split('.') {
+        match item.as_table_like().and_then(|t| t.get(seg)) {
+            Some(i) => item = i,
+            None => return Ok(None),
+        }
+    }
+    if item.is_none() {
+        return Ok(None);
+    }
+    // Render just the value — never the surrounding decor (a trailing `# comment`
+    // on the source line lives in the value's suffix decor, and `to_string()`
+    // would include it). Strings come out unquoted for clean scripting.
+    let rendered = match item.as_value() {
+        Some(toml_edit::Value::String(s)) => s.value().clone(),
+        Some(v) => {
+            let mut v = v.clone();
+            v.decor_mut().set_prefix("");
+            v.decor_mut().set_suffix("");
+            v.to_string().trim().to_string()
+        }
+        None => item.to_string().trim().to_string(),
+    };
+    Ok(Some(rendered))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +625,33 @@ mod tests {
     fn line_range_inverted_invalid() {
         let r = LineRange { start: 10, end: 5 };
         assert!(!r.is_valid());
+    }
+
+    #[test]
+    fn toml_get_missing_and_nested_does_not_panic() {
+        // Verifier: does chained Item indexing panic on missing / through-scalar keys?
+        assert_eq!(toml_get("a = 1\n", "a.b").unwrap(), None);
+        assert_eq!(toml_get("", "x.y").unwrap(), None);
+        assert_eq!(toml_get("[t]\nk = 1\n", "missing").unwrap(), None);
+        assert_eq!(toml_get("[t]\nk = 1\n", "t.k").unwrap(), Some("1".to_string()));
+        assert_eq!(toml_get("[t]\nk = 1\n", "t.k.deeper").unwrap(), None);
+    }
+
+    #[test]
+    fn toml_set_then_get_roundtrip_and_string_fallback() {
+        let s = toml_set("", "embeddings.backend", "local").unwrap();
+        // strings render unquoted, no decor
+        assert_eq!(toml_get(&s, "embeddings.backend").unwrap(), Some("local".to_string()));
+        let s2 = toml_set(&s, "database.port", "7432").unwrap();
+        assert_eq!(toml_get(&s2, "database.port").unwrap(), Some("7432".to_string()));
+    }
+
+    #[test]
+    fn toml_get_strips_trailing_comment_and_quotes() {
+        let content = "[embeddings]\nbackend = \"local\"           # voyage | openai | local\n";
+        assert_eq!(toml_get(content, "embeddings.backend").unwrap(), Some("local".to_string()));
+        let arr = "[index]\nexclude = [\"a\",\"b\"]  # globs\n";
+        assert_eq!(toml_get(arr, "index.exclude").unwrap(), Some("[\"a\",\"b\"]".to_string()));
     }
 
     #[test]

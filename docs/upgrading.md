@@ -11,12 +11,7 @@ systemctl --user stop muninn-index
 
 macOS (launchd):
 ```bash
-launchctl unload ~/Library/LaunchAgents/org.muninn.index.plist
-```
-
-macOS (background process):
-```bash
-pkill muninn-index
+launchctl bootout gui/$(id -u)/org.muninn.index
 ```
 
 ## Step 2: Replace the binaries
@@ -33,15 +28,21 @@ No `chmod` needed — the extracted files are already executable.
 
 ## Step 3: Apply schema migrations
 
+Migrations apply **automatically** on the first run of any new binary — the
+daemon you restart in the next step does it, as does any `muninn` command. To
+apply them now without waiting:
+
 ```bash
-muninn config
+muninn init
 ```
 
-The editor will open your existing config. Save and close without changes. muninn connects to the database and applies any new migrations. If there are none, it exits immediately. This step is always safe — it never modifies existing index data.
+With no arguments and an existing config, `muninn init` leaves your config
+untouched and just re-runs migrations. They are forward-only and idempotent:
+already-applied ones are skipped and their checksums verified, and they never
+modify existing index data — safe to re-run at any time.
 
-Migrations are idempotent: already-applied ones are skipped, and checksums of applied ones are verified. Safe to re-run at any time.
-
-If `muninn config` reports a migration error, the most common cause is a missing PostgreSQL extension. See `docs/own-database.md` for extension setup instructions.
+If migration reports an error, the most common cause is a missing PostgreSQL
+extension. See `docs/own-database.md` for extension setup instructions.
 
 ## Step 4: Restart the daemon
 
@@ -52,15 +53,10 @@ systemctl --user start muninn-index
 
 macOS (launchd):
 ```bash
-launchctl load ~/Library/LaunchAgents/org.muninn.index.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.muninn.index.plist
 ```
 
-macOS (background process):
-```bash
-muninn-index &
-```
-
-Verify: `muninn list` — all repos should appear with their index status.
+Verify: `muninn status` — all repos should appear with their index status.
 
 ## Step 5 (Docker users only): Update the database image
 
@@ -82,8 +78,8 @@ docker run -d \
   -v muninn_data:/var/lib/postgresql/data \
   kamysh/postgres-ai:latest
 
-# Apply any schema migrations
-muninn config
+# Apply any schema migrations (or just restart the daemon — it self-migrates)
+muninn init
 ```
 
 The `muninn_data` volume is preserved — your indexed data is not lost.

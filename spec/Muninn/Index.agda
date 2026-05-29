@@ -36,6 +36,8 @@ IndexingPre lk = lk ≡ Free
 -- the watch branch out of an in-progress index. This mirrors the branch order in
 -- crates/indexer scan_and_dispatch.
 --
+--   paused = true                               → Skip (`muninn pause`; no reindex,
+--                                                  no watcher, data kept).
 --   indexedAt = just _                          → Watch.
 --   indexedAt = nothing, everIndexed = false    → Skip (never indexed; the
 --                                                  daemon never first-indexes).
@@ -48,12 +50,14 @@ data DaemonAction : Set where
   Watch   : DaemonAction   -- attach a file-change watcher
 
 daemonDecision : Repo → DaemonAction
-daemonDecision repo with Repo.indexedAt repo
-... | just _  = Watch
-... | nothing with Repo.everIndexed repo | Repo.preemptRequested repo
-...             | false | _     = Skip
-...             | true  | true  = Skip
-...             | true  | false = Reindex
+daemonDecision repo with Repo.paused repo
+... | true  = Skip
+... | false with Repo.indexedAt repo
+...           | just _  = Watch
+...           | nothing with Repo.everIndexed repo | Repo.preemptRequested repo
+...                       | false | _     = Skip
+...                       | true  | true  = Skip
+...                       | true  | false = Reindex
 
 -- ─── Daemon Dispatch Idempotency ────────────────────────────────────────────
 -- The daemon's scan loop runs on every NOTIFY and every 60 s poll tick.

@@ -1570,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "muninn"
-version = "0.1.18"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-core"
-version = "0.1.18"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1599,6 +1599,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "toml_edit",
  "tracing",
  "tree-sitter",
  "tree-sitter-javascript",
@@ -1611,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-index"
-version = "0.1.18"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -1628,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-mcp"
-version = "0.1.18"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "muninn-core",

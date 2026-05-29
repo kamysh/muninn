@@ -15,11 +15,12 @@ rely on. Follow this file instead.
 - Destructive operations (dropping a database, removing a container,
   overwriting a file you did not author) require user confirmation.
   Stop and ask, even when a step appears to call for it.
-- Do **not** run `muninn config` or `muninn add` interactively — both
-  open `$EDITOR` and will block your shell indefinitely. Write the
-  config file directly using the template in Step 4. For `muninn add`,
-  pre-create the `.muninn.toml` file in the target repo before running
-  the command (see Step 7).
+- Every config-mutating command is scriptable — none block on `$EDITOR`.
+  Bootstrap with `muninn init key=value …` (Step 4); register repos with
+  `muninn add <path> [key=value …]` (Step 7); change config later with
+  `muninn config set (--global | --repo <path>) key=value …`. `$EDITOR`
+  opens **only** for the explicit `muninn config edit`, which an agent
+  should not use.
 
 ## Variables
 
@@ -61,6 +62,11 @@ Do not try to recover automatically (e.g. do not kill an existing
 container — it may hold data the user cares about).
 
 ## State detection — skip steps already complete
+
+These probes are for a **fresh** install. On a machine that already has muninn
+they all pass — so if the goal is to move an *existing* install to a new
+release, do **not** follow the steps below (they would no-op); jump to
+[Upgrading an existing install](#upgrading-an-existing-install).
 
 Run these probes before doing any work. For each that returns 0, skip
 the corresponding step.
@@ -155,36 +161,39 @@ even though nothing is wrong. Skip the step entirely.
 muninn --help >/dev/null && echo OK
 ```
 
-## Step 4 — Write config (do **not** run `muninn config`)
+## Step 4 — Write config and migrate (`muninn init`)
 
-`muninn config` opens `$EDITOR` and blocks. Write the file directly:
+`muninn init` writes `~/.config/muninn/config.toml` (chmod 600 — it may
+hold an API key) **and** runs the schema migrations, in one
+non-interactive step. Pass settings as `key=value` positional arguments:
+dotted keys, TOML values with a bare-string fallback so `backend=local`
+works without extra quoting.
 
 ```sh
-mkdir -p "$HOME/.config/muninn"
-cat > "$HOME/.config/muninn/config.toml" <<EOF
-[database]
-host   = "localhost"
-port   = ${PORT}
-dbname = "${DB_NAME}"
-user   = "${DB_USER}"
-
-[embeddings]
-backend = "${EMBEDDING_BACKEND}"
-EOF
+muninn init \
+  database.host=localhost \
+  database.port=${PORT} \
+  database.dbname="${DB_NAME}" \
+  database.user="${DB_USER}" \
+  embeddings.backend="${EMBEDDING_BACKEND}"
 ```
 
-If `EMBEDDING_BACKEND` is `voyage` or `openai`, append the model and
-API key:
+For `voyage`/`openai`, also pass the model and key (ask the user for the
+key — do not invent or fish for one from the environment):
 
-```toml
-model   = "voyage-code-3"        # or "text-embedding-3-small" for openai
-api_key = "YOUR_KEY_HERE"
+```sh
+muninn init \
+  database.host=localhost database.port=${PORT} \
+  database.dbname="${DB_NAME}" database.user="${DB_USER}" \
+  embeddings.backend=voyage \
+  embeddings.model=voyage-code-3 \
+  embeddings.api_key="$VOYAGE_KEY"
 ```
 
-For `voyage`/`openai` keys, ask the user — do not invent or fish for
-keys from the environment.
+`init` is idempotent — rerun it to re-apply migrations or change global
+settings (or use `muninn config set --global key=value`).
 
-**Verify:** this triggers the schema migrations on first run.
+**Verify:**
 ```sh
 muninn status >/dev/null && echo OK
 ```
@@ -217,7 +226,7 @@ cat > "$HOME/Library/LaunchAgents/org.muninn.index.plist" <<EOF
 </dict>
 </plist>
 EOF
-launchctl load "$HOME/Library/LaunchAgents/org.muninn.index.plist"
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/org.muninn.index.plist"
 ```
 
 ### Linux (systemd user service)
@@ -272,21 +281,23 @@ crashing on startup. Run `muninn-mcp` directly to see stderr.
 
 ## Step 7 — (Optional) Register the first repository
 
-For each repo the user wants indexed, pre-create a `.muninn.toml` so
-`muninn add` does not open `$EDITOR`:
+`muninn add <path>` registers a repo, writes a default `.muninn.toml`
+(all fields inherit the global config), and runs the initial index —
+non-interactive. Pass per-repo overrides as `key=value`:
 
 ```sh
 REPO=/path/to/repo
-cat > "${REPO}/.muninn.toml" <<EOF
-# Per-repo overrides. All sections optional; absent fields inherit
-# from ~/.config/muninn/config.toml.
-EOF
-EDITOR=true muninn add "$REPO"   # EDITOR=true skips the editor step
+muninn add "$REPO"                                    # defaults; index now
+muninn add "$REPO" index.exclude='["target/","dist/"]'  # with excludes
+muninn add "$REPO" --no-index                         # register only, index later
 ```
+
+Change a repo's config afterward with
+`muninn config set --repo "$REPO" key=value` (reindexes if needed).
 
 **Verify:**
 ```sh
-muninn status | grep -q "$REPO" && echo OK
+muninn status "$REPO" >/dev/null && echo OK
 ```
 
 ## Final verification gate
@@ -305,6 +316,65 @@ pgrep -fl muninn-index >/dev/null                                       && echo 
 claude mcp list 2>&1 | grep -qE '^muninn:.*Connected'                   && echo OK  # 6
 ```
 
+## Upgrading an existing install
+
+The **State detection** probes above are written for a *fresh* install — on a
+machine that already has muninn they all pass, so re-running the steps is a
+no-op. To move an existing install to a new release, do it explicitly. The DB
+container, role, and `config.toml` are already in place; only the binaries and
+the running processes change:
+
+1. **Replace the binaries** — re-run **Step 3**; the tarball overwrites
+   `~/.local/bin/muninn`, `muninn-index`, and `muninn-mcp` in place.
+2. **Restart the daemon** so it execs the new binary:
+   - macOS:  `launchctl kickstart -k gui/$(id -u)/org.muninn.index`
+   - Linux:  `systemctl --user restart muninn-index`
+3. **Pick up the new MCP server** — Claude Code launches `muninn-mcp` on demand
+   from the same path, so a new Claude Code session uses the new binary; no
+   `claude mcp add` is needed.
+
+Schema migrations apply automatically: the first run of any new binary
+(`muninn`, the daemon, or the MCP server) brings the database up to date.
+Migrations are forward-only and idempotent — there is no manual migration step,
+and the existing `config.toml` keeps working unchanged.
+
+**Verify:**
+```sh
+muninn status >/dev/null && echo OK             # CLI talks to the migrated DB
+pgrep -fl muninn-index   >/dev/null && echo OK  # daemon up on the new binary
+```
+
+## Uninstalling muninn
+
+Reverse of the install. **The database / container steps are destructive and
+irreversible — confirm with the user first. If the `postgres-ai` container is
+shared with mimir, do NOT remove the container or volume; drop only muninn's
+database and role.**
+
+1. **Stop and remove the daemon:**
+   - macOS:  `launchctl bootout gui/$(id -u)/org.muninn.index 2>/dev/null; rm -f "$HOME/Library/LaunchAgents/org.muninn.index.plist"`
+   - Linux:  `systemctl --user disable --now muninn-index; rm -f "$HOME/.config/systemd/user/muninn-index.service"; systemctl --user daemon-reload`
+2. **Unregister the MCP server:** `claude mcp remove muninn` (restart Claude Code to apply).
+3. **Remove the binaries:** `rm -f "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"`
+4. **Remove config and state:** `rm -rf "$HOME/.config/muninn" "$HOME/.local/state/muninn"`, and delete muninn's line from `~/.pgpass` (the `localhost:${PORT}:${DB_NAME}:${DB_USER}:…` entry — edit carefully, the file serves all your PostgreSQL connections).
+5. **(Optional) per-repo markers:** each indexed repo has a `.muninn.toml` at its root. Run `muninn remove <path>` *before* step 3 to drop a repo's index data and marker cleanly, or just delete the `.muninn.toml` files. (Moot if you drop the whole database next.)
+6. **Drop the database and role** (confirm first):
+   ```sh
+   docker exec "$CONTAINER" psql -U postgres -c "DROP DATABASE IF EXISTS \"${DB_NAME}\";"
+   docker exec "$CONTAINER" psql -U postgres -c "DROP ROLE IF EXISTS \"${DB_USER}\";"
+   ```
+   Only if the container is muninn-only (**not** shared with mimir) and the user
+   wants it gone entirely:
+   ```sh
+   docker rm -f "$CONTAINER" && docker volume rm "$VOLUME"
+   ```
+
+**Verify removed:**
+```sh
+pgrep muninn       # prints nothing
+command -v muninn  # prints nothing
+```
+
 ## Known errors → fixes
 
 | Error | Cause | Fix |
@@ -319,9 +389,10 @@ claude mcp list 2>&1 | grep -qE '^muninn:.*Connected'                   && echo 
 
 ## Anti-patterns — things NOT to do
 
-- **Do not run `muninn config` or `muninn add` without `EDITOR=true`.**
-  Both open `$EDITOR` and will block until you SIGINT. Write the file
-  directly (Step 4) or pre-create `.muninn.toml` (Step 7).
+- **Do not use `muninn config edit` (it opens `$EDITOR` and blocks).**
+  Use the non-interactive forms: `muninn init key=value …` (Step 4),
+  `muninn add <path> [key=value …]` (Step 7), and `muninn config set
+  (--global | --repo <path>) key=value …` to change config later.
 - **Do not skip Step 5.** The CLI works without the daemon, which makes
   this failure mode invisible until the user notices stale results.
 - **Do not delete or rename existing Docker containers/volumes to free a

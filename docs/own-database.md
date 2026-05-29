@@ -8,7 +8,7 @@ If you already have a PostgreSQL 16+ instance — local, self-hosted, or managed
 - Superuser access for the initial setup only (to install extensions and grant privileges); day-to-day muninn use is as a normal role
 - Three extensions: **pgvector**, **Apache AGE**, **pgcrypto**
 
-The first migration (run automatically by `muninn config`) checks that all three extensions are installed and that your user has the necessary permissions. It will print a clear error if anything is missing.
+The first migration (run automatically the first time any muninn binary connects — e.g. `muninn init`) checks that all three extensions are installed and that your user has the necessary permissions. It will print a clear error if anything is missing.
 
 ---
 
@@ -266,7 +266,7 @@ chmod 600 ~/.pgpass
 
 ## Configure and connect muninn
 
-Run `muninn config`. When the editor opens, update the `[database]` section:
+Run `muninn init` (no arguments opens the template in `$EDITOR`; or pass `key=value` settings non-interactively). Set the `[database]` section to point at your instance:
 
 ```toml
 [database]

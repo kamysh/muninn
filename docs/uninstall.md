@@ -15,7 +15,7 @@ This deletes `.muninn.toml` from the repo root and removes all index data for th
 To see all registered repos:
 
 ```bash
-muninn list
+muninn status
 ```
 
 ## Stop and disable the daemon
@@ -27,7 +27,7 @@ systemctl --user disable --now muninn-index
 
 macOS (launchd):
 ```bash
-launchctl unload ~/Library/LaunchAgents/org.muninn.index.plist
+launchctl bootout gui/$(id -u)/org.muninn.index
 rm ~/Library/LaunchAgents/org.muninn.index.plist
 ```
 
@@ -67,20 +67,28 @@ Remove the muninn line from `~/.pgpass` (edit the file — the line looks like `
 
 ## Remove all index data from the database
 
-**Docker users:**
+> **Sharing with mimir?** If your `postgres-ai` container also hosts
+> [mimir](https://github.com/kamysh/mimir), do **not** remove the container or
+> volume — that would destroy mimir's data too. Drop only muninn's database and
+> role (the `DROP DATABASE` / `DROP ROLE` commands below), and stop here.
+
+**Docker users** (replace `<container>` and `<volume>` with the names you chose
+at install time):
 ```bash
-# Connect inside the container
-docker exec -it muninn-postgres psql -U postgres
+# Drop muninn's database and role
+docker exec -it <container> psql -U postgres
 ```
 ```sql
-DROP DATABASE muninn;
+DROP DATABASE IF EXISTS muninn;
+DROP ROLE IF EXISTS muninn;   -- the role you created for muninn
 \q
 ```
 
-Then stop and remove the container and volume:
+Then, **only if the container is muninn-only** (not shared with mimir) and you
+want it gone entirely:
 ```bash
-docker rm -f muninn-postgres
-docker volume rm muninn_data
+docker rm -f <container>
+docker volume rm <volume>
 ```
 
 **Own-database users:**
@@ -88,9 +96,8 @@ docker volume rm muninn_data
 psql -h localhost -U postgres  # or however you connect as superuser
 ```
 ```sql
-DROP DATABASE muninn;
--- Also remove the muninn role if you created one:
-DROP ROLE alice;
+DROP DATABASE IF EXISTS muninn;
+DROP ROLE IF EXISTS muninn;    -- the muninn role, if you created one
 ```
 
 ## Verify nothing is left

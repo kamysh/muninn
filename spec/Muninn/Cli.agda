@@ -1,169 +1,184 @@
 {-# OPTIONS --safe #-}
 -- Muninn/Cli.agda
--- Formal specification of the muninn CLI (crate: muninn).
--- Covers command syntax, argument constraints, preconditions, postconditions,
--- and the ordering invariant that separates the bootstrap command (config init)
--- from all commands that require a loaded GlobalConfig.
+-- Formal spec of the muninn CLI: command AST, config-scope model, argument
+-- constraints, pre/postconditions, and the index-transition connection.
+--
+-- Redesigned surface (breaking; no back-compat). A single unified `config` verb
+-- edits BOTH the global and any per-repo config with the same grammar:
+--   config get/set/edit/unset  with scope = --global | <path>.
+-- The repo scope is an EXPLICIT path — the CLI never resolves a repo from the
+-- cwd (error-prone). `key=value` is always a positional assignment (never a
+-- `--set` flag), and the same assignment grammar is reused by `init` and `add`.
+-- Other verbs: `init` (bootstrap global config + migrate), `add` (register +
+-- first index), `reindex`, `pause`/`resume` (daemon-skip without dropping data),
+-- `remove`, `status` (fleet overview, merges the old `list`), `usage` (telemetry).
 module Muninn.Cli where
 
 open import Muninn.Types
-open import Muninn.Config
 open import Muninn.Index
 open import Muninn.AdvisoryLock using (Fg)
 open import Data.Nat     using (ℕ)
 open import Data.String  using (String)
+open import Data.List    using (List)
 open import Data.Maybe   using (Maybe; just; nothing)
+open import Data.Bool    using (Bool; true; false)
 open import Data.Product using (_×_)
-open import Data.Sum     using (_⊎_)
-open import Data.Unit    using (⊤; tt)
+open import Data.Unit    using (⊤)
 open import Data.Empty   using (⊥)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_)
 open import Relation.Nullary using (¬_)
 
--- ─── Runtime predicates (postulated; truth determined at runtime) ─────────────
-
+-- ─── Runtime predicates ──────────────────────────────────────────────────────
 -- Abstract evidence types: inhabited iff the runtime filesystem confirms the fact.
-record PathExists         (p : FilePath) : Set where
-record HasDotMuninnToml   (p : FilePath) : Set where
+record PathExists       (p : FilePath) : Set where
+record HasDotMuninnToml (p : FilePath) : Set where
 record GlobalConfigExists : Set where
-record GlobalConfigAbsent : Set where
+
+-- ─── Config scope + assignments ──────────────────────────────────────────────
+-- Exactly one scope per invocation — the old clap `conflicts_with` mutual
+-- exclusion is structural here (a single Scope value). The repo scope takes an
+-- EXPLICIT path: there is no cwd default (the CLI never guesses the repo from the
+-- working directory — error-prone). A bare `config` with no scope is a usage
+-- error (the AST always carries a Scope).
+data Scope : Set where
+  Global : Scope               -- --global
+  AtRepo : FilePath → Scope    -- <path> (explicit; required)
+
+-- A single `key=value` assignment: the unified set-grammar shared by
+-- `config set`, `init`, and `add`. One syntax learned once.
+record Assign : Set where
+  field key   : String
+        value : String
+
+-- The unified config operation, identical across both scopes.
+-- (`SetKeys`, not `Set` — `Set` is Agda's type universe.)
+data ConfigOp : Set where
+  Get     : ConfigOp               -- read (optionally one key)
+  SetKeys : List Assign → ConfigOp  -- key=value … (non-interactive, scriptable)
+  Edit    : ConfigOp               -- open $EDITOR (interactive)
+  Unset   : ConfigOp
 
 -- ─── Command AST ─────────────────────────────────────────────────────────────
-
--- The subcommand under `muninn config`.
-data ConfigSubCmd : Set where
-  Init : ConfigSubCmd   -- create ~/.config/muninn/config.toml
-
--- Target for `muninn reindex`: either a specific repo path or all repos.
+-- Target for `reindex`: a specific repo (explicit path) or all repos.
+-- OneRepo/AllRepos are structurally exclusive (no separate validity predicate).
 data ReindexTarget : Set where
-  OneRepo : FilePath → ReindexTarget   -- muninn reindex <path>
-  AllRepos : ReindexTarget             -- muninn reindex --all
+  OneRepo  : FilePath → ReindexTarget   -- explicit path
+  AllRepos : ReindexTarget
 
--- The full set of top-level CLI commands.
+-- Per-repo commands take an EXPLICIT FilePath — no cwd default. The sole
+-- `Maybe FilePath` is `status`, where `nothing` means the FLEET overview (all
+-- repos), not the cwd repo.
 data Command : Set where
-  CmdConfig     : ConfigSubCmd  → Command        -- muninn config <subcmd>
-  CmdRegister   : FilePath → Maybe String → Command  -- muninn register <path> [--name <n>]
-  CmdIndex      : FilePath → Command             -- muninn index <path>
-  CmdUnregister : FilePath → Command             -- muninn unregister <path>
-  CmdList       : Command                        -- muninn list
-  CmdReindex    : ReindexTarget → Command        -- muninn reindex (<path>|--all)
-  CmdStatus     : Command                        -- muninn status
-  CmdStats      : Maybe ℕ → Command             -- muninn stats [--days N]; nothing = default (30)
+  CmdInit    : List Assign → Command                  -- muninn init [k=v…]
+  CmdConfig  : Scope → ConfigOp → Command             -- muninn config <op> (--global | <path>)
+  CmdAdd     : FilePath → List Assign → Bool → Command -- path, initial k=v…, noIndex
+  CmdReindex : ReindexTarget → Bool → Command         -- target, detach
+  CmdPause   : FilePath → Command
+  CmdResume  : FilePath → Command
+  CmdRemove  : FilePath → Command
+  CmdStatus  : Maybe FilePath → Command               -- nothing = fleet overview; just p = detail
+  CmdUsage   : Maybe ℕ → Command                     -- nothing = default window
 
 -- ─── Bootstrap invariant ─────────────────────────────────────────────────────
--- `muninn config init` is the only command that runs before GlobalConfig is
--- loaded — it is the command that creates the config.  All other commands
--- require a successfully loaded GlobalConfig.
-
+-- `muninn init` is the only command that runs before the global config exists —
+-- it creates it (and runs migrations). Everything else requires a loaded config.
 IsBootstrap : Command → Set
-IsBootstrap (CmdConfig Init) = ⊤
-IsBootstrap _                = ⊥
+IsBootstrap (CmdInit _) = ⊤
+IsBootstrap _           = ⊥
 
 RequiresGlobalConfig : Command → Set
-RequiresGlobalConfig cmd with IsBootstrap cmd
-... | _ = ¬ IsBootstrap cmd
-
--- ─── Argument constraints ─────────────────────────────────────────────────────
-
--- `reindex` accepts exactly one of: a path argument, or the --all flag.
--- This is the mutual-exclusion invariant enforced by clap's `conflicts_with`.
-data ReindexArgValid : ReindexTarget → Set where
-  reindexOnePath : ∀ (p : FilePath)  → ReindexArgValid (OneRepo p)
-  reindexAll     :                      ReindexArgValid AllRepos
+RequiresGlobalConfig cmd = ¬ IsBootstrap cmd
 
 -- ─── Preconditions ───────────────────────────────────────────────────────────
 
--- config init: global config must not already exist.
-ConfigInitPre : Set
-ConfigInitPre = GlobalConfigAbsent
+-- init: idempotent bootstrap (safe to rerun — writes config if absent, migrates).
+InitPre : Set
+InitPre = ⊤
 
--- register <path> [--name]: path must name an existing directory.
-RegisterPre : FilePath → Set
-RegisterPre path = PathExists path
+-- add <path>: the path must name an existing directory.
+AddPre : FilePath → Set
+AddPre path = PathExists path
 
--- index <path>: path must exist AND contain .muninn.toml (i.e. be registered).
-IndexPre : FilePath → Set
-IndexPre path = PathExists path × HasDotMuninnToml path
-
--- unregister, list, reindex, status: no per-argument path constraints beyond
--- the GlobalConfig requirement captured by RequiresGlobalConfig.
+-- config: a repo scope requires the repo registered; the global scope requires
+-- the global config to exist.
+ConfigPre : Scope → Set
+ConfigPre Global       = GlobalConfigExists
+ConfigPre (AtRepo p)   = HasDotMuninnToml p
 
 -- ─── Postconditions ──────────────────────────────────────────────────────────
 
--- After `config init` the global config file exists.
-ConfigInitPost : Set
-ConfigInitPost = GlobalConfigExists
+InitPost : Set
+InitPost = GlobalConfigExists
 
--- After `register <path>` the path has a .muninn.toml.
-RegisterPost : FilePath → Set
-RegisterPost path = HasDotMuninnToml path
+-- add: the repo is registered (has a .muninn.toml).
+AddPost : FilePath → Set
+AddPost path = HasDotMuninnToml path
 
--- After `index <path>` the repo's indexedAt field is set (not nothing).
--- Encoded as: the resulting Repo has indexedAt ≢ nothing.
-IndexPost : Repo → Set
-IndexPost repo = Repo.indexedAt repo ≢ nothing
+-- add without --no-index leaves the repo indexed; with --no-index, registered
+-- but owed an index.
+AddIndexed : Bool → Repo → Set
+AddIndexed false repo = Repo.indexedAt repo ≢ nothing
+AddIndexed true  repo = Repo.indexedAt repo ≡ nothing
 
--- After `unregister <path>` (confirmed) the .muninn.toml is gone.
-UnregisterPost : FilePath → Set
-UnregisterPost path = ¬ HasDotMuninnToml path
+-- remove: the .muninn.toml is gone and all index data dropped.
+RemovePost : FilePath → Set
+RemovePost path = ¬ HasDotMuninnToml path
 
--- After `reindex AllRepos` every repo in the DB has indexedAt = nothing
--- (daemon will re-index on next run).
-ReindexAllPost : Repo → Set
-ReindexAllPost repo = Repo.indexedAt repo ≡ nothing
+-- pause / resume toggle the daemon-skip flag without dropping data.
+PausePost : Repo → Set
+PausePost repo = Repo.paused repo ≡ true
 
--- After `reindex (OneRepo p)` the specific repo has indexedAt = nothing.
-ReindexOnePost : Repo → Set
-ReindexOnePost repo = Repo.indexedAt repo ≡ nothing
+ResumePost : Repo → Set
+ResumePost repo = Repo.paused repo ≡ false
+
+-- reindex: a foreground run (detach = false) leaves the repo indexed; a detached
+-- run, and `--all`, reset indexedAt = nothing for the daemon to pick up.
+ReindexPost : Bool → Repo → Set
+ReindexPost false repo = Repo.indexedAt repo ≢ nothing
+ReindexPost true  repo = Repo.indexedAt repo ≡ nothing
+
+-- ─── Config-edit reindex side-effect ──────────────────────────────────────────
+-- A `config set`/`edit` on a repo scope reindexes per Muninn.IndexFsm: reindex
+-- iff content changed OR the index is owed (configureAction, re-exported via
+-- Muninn.Index). A `--global` set/edit runs migrations instead. The shared
+-- --no-apply flag suppresses the side-effect; not modelled here.
 
 -- ─── State-machine connection ─────────────────────────────────────────────────
--- `muninn index` drives the repo through: Unindexed → Indexing Fg → Indexed.
--- `muninn reindex` re-drives a previously-indexed repo: Indexed → Indexing Fg.
--- Both are foreground (CLI) transitions; see Muninn.IndexFsm.Step.
-
+-- `add`/`reindex` drive a foreground index: Unindexed → Indexing Fg → Indexed,
+-- and Indexed → Indexing Fg. See Muninn.IndexFsm.Step.
 IndexTransitionsCorrect : Set
 IndexTransitionsCorrect =
-  -- index moves an unindexed repo to Indexed via a foreground index
   (Step Unindexed (Indexing Fg) × Step (Indexing Fg) Indexed) ×
-  -- reindex re-drives a previously-indexed repo into a foreground index
   Step Indexed (Indexing Fg)
 
--- ─── Register idempotency ────────────────────────────────────────────────────
--- Running `register` on a path that already has a .muninn.toml is a no-op:
--- the file is not overwritten (create_template returns the existing path).
--- Postcondition is the same whether or not the file pre-existed.
-RegisterIdempotent : FilePath → Set
-RegisterIdempotent path = HasDotMuninnToml path → RegisterPost path
-
--- ─── Summary: per-command specification bundle ───────────────────────────────
-
+-- ─── Per-command specification bundle ─────────────────────────────────────────
 record CommandSpec : Set₁ where
-  field
-    pre  : Set    -- precondition (⊤ if unconditional)
-    post : Set    -- postcondition (⊤ if side-effect free / display only)
+  field pre  : Set
+        post : Set
 
-configInitSpec : CommandSpec
-configInitSpec = record { pre = ConfigInitPre ; post = ConfigInitPost }
+initSpec : CommandSpec
+initSpec = record { pre = InitPre ; post = InitPost }
 
-registerSpec : FilePath → CommandSpec
-registerSpec path = record { pre = RegisterPre path ; post = RegisterPost path }
+addSpec : FilePath → CommandSpec
+addSpec path = record { pre = AddPre path ; post = AddPost path }
 
-indexSpec : FilePath → Repo → CommandSpec
-indexSpec path repo = record { pre = IndexPre path ; post = IndexPost repo }
+configSpec : Scope → CommandSpec
+configSpec sc = record { pre = ConfigPre sc ; post = ⊤ }
 
-unregisterSpec : FilePath → CommandSpec
-unregisterSpec path = record { pre = ⊤ ; post = UnregisterPost path }
+reindexSpec : Bool → Repo → CommandSpec
+reindexSpec detach repo = record { pre = ⊤ ; post = ReindexPost detach repo }
 
-listSpec : CommandSpec
-listSpec = record { pre = ⊤ ; post = ⊤ }
+pauseSpec : Repo → CommandSpec
+pauseSpec repo = record { pre = ⊤ ; post = PausePost repo }
 
-reindexSpec : ReindexTarget → Repo → CommandSpec
-reindexSpec (OneRepo _) repo = record { pre = ⊤ ; post = ReindexOnePost repo }
-reindexSpec AllRepos    repo = record { pre = ⊤ ; post = ReindexAllPost  repo }
+resumeSpec : Repo → CommandSpec
+resumeSpec repo = record { pre = ⊤ ; post = ResumePost repo }
+
+removeSpec : FilePath → CommandSpec
+removeSpec path = record { pre = ⊤ ; post = RemovePost path }
 
 statusSpec : CommandSpec
 statusSpec = record { pre = ⊤ ; post = ⊤ }
 
--- stats [--days N]: read-only diagnostic; no preconditions or postconditions.
-statsSpec : CommandSpec
-statsSpec = record { pre = ⊤ ; post = ⊤ }
+usageSpec : CommandSpec
+usageSpec = record { pre = ⊤ ; post = ⊤ }

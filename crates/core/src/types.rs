@@ -30,6 +30,9 @@ pub struct Repo {
     /// (daemon) holder to yield. Spec: Muninn.AdvisoryLock. The lock itself is a
     /// PostgreSQL session-scoped advisory lock, not a column.
     pub preempt_requested: bool,
+    /// Set by `muninn pause`; the daemon skips paused repos (no reindex, no
+    /// watcher) without dropping data. Cleared by `muninn resume`.
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

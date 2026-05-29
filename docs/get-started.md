@@ -197,13 +197,18 @@ If you get "command not found", `~/.local/bin` is not on your `PATH`. Add `expor
 
 ## Step 4: Configure muninn
 
-`muninn config` opens a configuration file in your editor. You need to fill in two things: your database username and your choice of embedding backend.
+`muninn init` creates your global config and applies the database schema. Run it
+with no arguments to fill the config in interactively (it opens the template in
+`$EDITOR`), or pass `key=value` settings to do it non-interactively. Either way
+you need two things: your database username and your choice of embedding backend.
 
 ```bash
-muninn config
+muninn init                                              # interactive (opens $EDITOR)
+# …or non-interactive:
+muninn init database.user=alice embeddings.backend=local
 ```
 
-You will see:
+Run interactively, you will see:
 
 ```toml
 # ~/.config/muninn/config.toml — muninn global configuration
@@ -327,7 +332,7 @@ cat > ~/Library/LaunchAgents/org.muninn.index.plist <<EOF
 </dict>
 </plist>
 EOF
-launchctl load ~/Library/LaunchAgents/org.muninn.index.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.muninn.index.plist
 ```
 
 The agent will auto-start every time you log in.
@@ -378,7 +383,7 @@ Five `OK`s = good to go. Any failure means that piece is broken; fix it before m
 muninn add /path/to/your/repo
 ```
 
-This opens your editor with a per-repo configuration file. For most repos, just save and close without changes — all settings are inherited from the global config. Muninn will then index the repo (you will see a progress bar).
+This registers the repo — writing a default `.muninn.toml` that inherits everything from the global config — and indexes it (you will see a progress bar). No editor opens. To set per-repo overrides, pass them inline (`muninn add /path/to/your/repo index.exclude='["dist/"]'`), use `--no-index` to register without indexing yet, or change them later with `muninn config set --repo /path/to/your/repo …`.
 
 When indexing completes, open Claude Code and ask something like "What does function X do?" or "Find all callers of Y" — muninn will search the repo and give Claude Code the context to answer.
 
@@ -425,9 +430,10 @@ Restart Claude Code for the hooks to take effect.
 
 The daemon watches for file changes and re-indexes automatically. You do not have to do anything after this.
 
-- `muninn list` shows all registered repos and their index status.
+- `muninn status` shows all registered repos and their index status.
 - `muninn add <path>` to add more repos.
 - When a new muninn release comes out, see [docs/upgrading.md](upgrading.md).
+- To remove a repo or uninstall muninn entirely, see [docs/uninstall.md](uninstall.md).
 
 ## Sharing the database with mimir
 
