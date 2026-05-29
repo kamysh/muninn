@@ -47,6 +47,44 @@ IsolatedGraph s =
     sym ∈ SymbolGraph.symbols (RepoStorage.graph s) →
     ChunkExists (Symbol.chunkId sym) (RepoStorage.chunks s)
 
+-- GRAPH-WRITE TIMEOUT (Tier 2 safety net in the Rust pipeline)
+-- ------------------------------------------------------------
+-- Each call to the `muninn_cypher` SQL wrapper runs inside a transaction with
+-- `SET LOCAL statement_timeout = graph_timeout_secs` (default 60 s). On
+-- Postgres error 57014 (canceling statement due to statement timeout) the Rust
+-- side rolls back, logs a structured warning naming the file, and continues
+-- without propagating the error. The file's CHUNKS remain indexed (text and
+-- semantic search keep working); the SYMBOL graph for that file is partial or
+-- empty. The defence-in-depth motivation is that the AGE engine has been
+-- observed to take 40+ minutes on a single MERGE/MATCH against an unindexed
+-- per-label table at scale; the per-statement timeout prevents any future
+-- regression from silently hanging an end-user's index.
+--
+-- IsolatedGraph IS PRESERVED unconditionally under any partial write. The
+-- predicate quantifies over `SymbolGraph.symbols (RepoStorage.graph s)` — the
+-- symbols actually stored in the graph — not over the symbols the pipeline
+-- intended to write. Since the pipeline writes chunks BEFORE symbols (the
+-- existing ordering discipline `index_file` follows), any symbol that lands in
+-- the graph references a chunk that was persisted in a prior step. The set of
+-- symbols that did NOT land for a timed-out file is simply absent from
+-- `SymbolGraph.symbols`, so the ∀ never visits them. The reverse direction —
+-- chunks without all their intended symbols — is the new accepted reality and
+-- is NOT an invariant violation: there is no spec-level claim that every chunk
+-- has corresponding graph nodes (structural search degrades gracefully for
+-- those files, returning fewer results; full-text and semantic search are
+-- unaffected). This is captured trivially below: any subset of a graph that
+-- satisfies IsolatedGraph still satisfies the predicate over that subset.
+
+IsolatedGraph-subset :
+  ∀ (s : RepoStorage) (subset : List Symbol) →
+  (∀ sym → sym ∈ subset →
+    sym ∈ SymbolGraph.symbols (RepoStorage.graph s)) →
+  IsolatedGraph s →
+  ∀ (sym : Symbol) → sym ∈ subset →
+  ChunkExists (Symbol.chunkId sym) (RepoStorage.chunks s)
+IsolatedGraph-subset s subset subset⊆ iso sym sym∈subset =
+  iso sym (subset⊆ sym sym∈subset)
+
 -- ─── File Path Validity ───────────────────────────────────────────────────────
 
 -- A file path used in chunk storage or deletion must not be the empty string.

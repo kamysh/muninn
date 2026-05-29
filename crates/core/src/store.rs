@@ -109,6 +109,52 @@ pub async fn register_repo(
         .await?;
     }
 
+    // Ensure the four known vertex labels exist and have property indexes on
+    // `chunk_id` (MERGE hot path in upsert_symbol_nodes) and `file_path` (MATCH
+    // hot path in delete_file_symbols). Without these the per-row property
+    // lookup degraded to a seq scan of the label table — for files with many
+    // symbols the cumulative cost grew until a single reindex step could hang
+    // for tens of minutes (issue #5). This block is idempotent and mirrors
+    // migration 014, so a freshly registered repo gets the fast lookups
+    // without depending on a future migration run. Spec: Muninn.Storage
+    // (IsolatedGraph + timeout addendum).
+    sqlx::query(&format!(
+        r#"
+        DO $do$
+        DECLARE
+            lbl    TEXT;
+            labels TEXT[] := ARRAY['Function', 'Class', 'Import', 'Module'];
+        BEGIN
+            FOREACH lbl IN ARRAY labels LOOP
+                BEGIN
+                    PERFORM ag_catalog.create_vlabel('{gname}', lbl);
+                EXCEPTION WHEN others THEN NULL;
+                END;
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_class c
+                    JOIN pg_namespace n ON c.relnamespace = n.oid
+                    WHERE n.nspname = '{gname}' AND c.relname = lbl
+                ) THEN
+                    EXECUTE format(
+                        'CREATE INDEX IF NOT EXISTS %I ON %I.%I USING btree '
+                        '((properties -> ''"chunk_id"''::ag_catalog.agtype))',
+                        lbl || '_chunk_id_idx', '{gname}', lbl
+                    );
+                    EXECUTE format(
+                        'CREATE INDEX IF NOT EXISTS %I ON %I.%I USING btree '
+                        '((properties -> ''"file_path"''::ag_catalog.agtype))',
+                        lbl || '_file_path_idx', '{gname}', lbl
+                    );
+                END IF;
+            END LOOP;
+        END
+        $do$;
+        "#
+    ))
+    .execute(pool)
+    .await?;
+
     Ok(repo)
 }
 

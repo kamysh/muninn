@@ -4,6 +4,65 @@ use anyhow::Result;
 use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
 use crate::store::graph_name;
 
+// ─── Per-statement graph-write timeout (Tier 2 safety net) ───────────────────
+//
+// Each `muninn_cypher` write runs inside a transaction with `SET LOCAL
+// statement_timeout`, so any single AGE operation that gets pathologically slow
+// (see issue #5) aborts after `GRAPH_STATEMENT_TIMEOUT_SECS`. On timeout the
+// helper logs a structured warning and returns `Ok(())` — the file's chunks
+// remain indexed (full-text + semantic search work); only the symbol-graph
+// portion for that op is partial or missing.
+// Spec: Muninn.Storage (IsolatedGraph + timeout addendum).
+const GRAPH_STATEMENT_TIMEOUT_SECS: u64 = 60;
+
+fn is_statement_timeout(err: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = err {
+        db_err.code().as_deref() == Some("57014")
+    } else {
+        false
+    }
+}
+
+async fn exec_cypher_with_timeout(
+    pool: &PgPool,
+    gname: &str,
+    cypher: &str,
+    params: &str,
+    op: &'static str,
+    context: &str,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(&format!(
+        "SET LOCAL statement_timeout = '{}s'",
+        GRAPH_STATEMENT_TIMEOUT_SECS
+    ))
+    .execute(&mut *tx)
+    .await?;
+    let result = sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
+        .bind(gname)
+        .bind(cypher)
+        .bind(params)
+        .execute(&mut *tx)
+        .await;
+    match result {
+        Ok(_) => {
+            tx.commit().await?;
+            Ok(())
+        }
+        Err(e) if is_statement_timeout(&e) => {
+            let _ = tx.rollback().await;
+            tracing::warn!(
+                op = op,
+                context = context,
+                timeout_secs = GRAPH_STATEMENT_TIMEOUT_SECS,
+                "graph write timed out — chunks remain indexed; symbol graph for this op is partial or missing. Consider tightening `[index].exclude` for very large or symbol-dense files."
+            );
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Input for one symbol node in a batch upsert.
 pub struct SymbolNodeInput {
     pub chunk_id: Uuid,
@@ -78,12 +137,15 @@ pub async fn upsert_symbol_nodes(
                    n.end_line = r.end_line"#,
             label = label,
         );
-        sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-            .bind(&gname)
-            .bind(&cypher)
-            .bind(params.to_string())
-            .execute(pool)
-            .await?;
+        exec_cypher_with_timeout(
+            pool,
+            &gname,
+            &cypher,
+            &params.to_string(),
+            "upsert_symbol_nodes",
+            label,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -115,12 +177,15 @@ pub async fn upsert_edges(pool: &PgPool, repo_id: Uuid, edges: &[StructuralEdge]
                MERGE (a)-[:{rel}]->(b)"#,
             rel = rel,
         );
-        sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-            .bind(&gname)
-            .bind(&cypher)
-            .bind(params.to_string())
-            .execute(pool)
-            .await?;
+        exec_cypher_with_timeout(
+            pool,
+            &gname,
+            &cypher,
+            &params.to_string(),
+            "upsert_edges",
+            rel,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -140,12 +205,15 @@ pub async fn delete_file_symbols(pool: &PgPool, repo_id: Uuid, file_path: &str) 
     let gname = graph_name(repo_id);
     let params = serde_json::json!({ "sym_file_path": file_path });
     let cypher = r#"MATCH (n {file_path: $sym_file_path}) DETACH DELETE n"#;
-    sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-        .bind(&gname)
-        .bind(cypher)
-        .bind(params.to_string())
-        .execute(pool)
-        .await?;
+    exec_cypher_with_timeout(
+        pool,
+        &gname,
+        cypher,
+        &params.to_string(),
+        "delete_file_symbols",
+        file_path,
+    )
+    .await?;
     Ok(())
 }
 
