@@ -29,10 +29,13 @@ rely on. Follow this file instead.
 1. **Docker container name** — the local name for the postgres-ai container
    (e.g. `local-postgres-ai`). Check `docker ps -a` and suggest a name that
    doesn't collide. The Docker image is always `kamysh/postgres-ai`.
-2. **Port** — the host port to expose PostgreSQL on (default `5432`; check
+2. **Docker volume name** — the named volume for postgres data
+   (e.g. `local-postgres-ai-data`). If sharing a container with mimir, confirm
+   the existing volume name rather than inventing one.
+3. **Port** — the host port to expose PostgreSQL on (default `5432`; check
    `lsof -nP -iTCP -sTCP:LISTEN` for conflicts).
-3. **DB user** — the PostgreSQL role to create for muninn (default `muninn`).
-4. **DB name** — the database to create (default `muninn`; usually matches the user).
+4. **DB user** — the PostgreSQL role to create for muninn (default `muninn`).
+5. **DB name** — the database to create (default `muninn`; usually matches the user).
 
 If muninn is being installed alongside mimir (see "Companion tool" at the end),
 also confirm whether they share one container or use separate ones.
@@ -169,6 +172,11 @@ non-interactive step. Pass settings as `key=value` positional arguments:
 dotted keys, TOML values with a bare-string fallback so `backend=local`
 works without extra quoting.
 
+Check for an existing config first — if `~/.config/muninn/config.toml` is
+already present (the **State detection** probe covers this), read it and
+confirm the values match your variables instead of re-running `init`. Do
+**not** overwrite a config you did not author without user confirmation.
+
 ```sh
 muninn init \
   database.host=localhost \
@@ -206,27 +214,51 @@ error to grep for, so this is the most common silent failure.
 
 ### macOS (launchd)
 
+**Plist location depends on where `$HOME` lives.** When the user's home directory
+is on an external volume (`$HOME` starts with `/Volumes/`), launchd silently
+refuses to load plists from `~/Library/LaunchAgents` — both at login scan and
+via `launchctl bootstrap`. In that case the plist must go in `/Library/LaunchAgents`
+(the system-wide agents directory on the internal volume). The service still runs
+as the user, not as root.
+
+Detect and set variables first:
+
 ```sh
-mkdir -p "$HOME/Library/LaunchAgents"
-cat > "$HOME/Library/LaunchAgents/org.muninn.index.plist" <<EOF
+case "$HOME" in
+  /Volumes/*) PLIST_DIR="/Library/LaunchAgents"; NEEDS_SUDO=1 ;;
+  *)           PLIST_DIR="$HOME/Library/LaunchAgents"; NEEDS_SUDO=0 ;;
+esac
+```
+
+Write the plist (keep it minimal — extra keys like `EnvironmentVariables` or
+`StandardOutPath` are not needed and can cause silent failures on some setups):
+
+```sh
+[ "$NEEDS_SUDO" = 1 ] && WRITE_CMD="sudo tee" || WRITE_CMD="tee"
+$WRITE_CMD "$PLIST_DIR/org.muninn.index.plist" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>org.muninn.index</string>
+  <key>Label</key>
+  <string>org.muninn.index</string>
   <key>ProgramArguments</key>
-  <array><string>${HOME}/.local/bin/muninn-index</string></array>
-  <key>EnvironmentVariables</key>
-  <dict><key>RUST_LOG</key><string>info</string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/muninn-index.log</string>
-  <key>StandardErrorPath</key><string>/tmp/muninn-index.log</string>
+  <array>
+    <string>${HOME}/.local/bin/muninn-index</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
 </dict>
 </plist>
 EOF
-launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/org.muninn.index.plist"
+[ "$NEEDS_SUDO" = 1 ] && sudo chown "$(id -un)" "$PLIST_DIR/org.muninn.index.plist"
+[ "$NEEDS_SUDO" = 1 ] && sudo chmod 600 "$PLIST_DIR/org.muninn.index.plist" \
+                      || chmod 600 "$PLIST_DIR/org.muninn.index.plist"
+[ "$NEEDS_SUDO" = 1 ] \
+  && sudo launchctl bootstrap gui/$(id -u) "$PLIST_DIR/org.muninn.index.plist" \
+  || launchctl bootstrap gui/$(id -u) "$PLIST_DIR/org.muninn.index.plist"
 ```
 
 ### Linux (systemd user service)
@@ -259,7 +291,7 @@ pgrep -fl muninn-index >/dev/null && echo OK
 ```
 
 Logs:
-- macOS: `tail -f /tmp/muninn-index.log`
+- macOS (if plist has `StandardOutPath`): `tail -f /tmp/muninn-index.log`; otherwise check `log show --predicate 'process == "muninn-index"' --last 5m`
 - Linux: `journalctl --user -u muninn-index -f`
 
 ## Step 6 — Register MCP server with Claude Code
@@ -352,7 +384,7 @@ shared with mimir, do NOT remove the container or volume; drop only muninn's
 database and role.**
 
 1. **Stop and remove the daemon:**
-   - macOS:  `launchctl bootout gui/$(id -u)/org.muninn.index 2>/dev/null; rm -f "$HOME/Library/LaunchAgents/org.muninn.index.plist"`
+   - macOS:  `launchctl bootout gui/$(id -u)/org.muninn.index 2>/dev/null; rm -f "$HOME/Library/LaunchAgents/org.muninn.index.plist"; sudo rm -f "/Library/LaunchAgents/org.muninn.index.plist"` (the `sudo` path only applies when home is on an external volume — see Step 5)
    - Linux:  `systemctl --user disable --now muninn-index; rm -f "$HOME/.config/systemd/user/muninn-index.service"; systemctl --user daemon-reload`
 2. **Unregister the MCP server:** `claude mcp remove muninn` (restart Claude Code to apply).
 3. **Remove the binaries:** `rm -f "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"`
@@ -386,6 +418,8 @@ command -v muninn  # prints nothing
 | `~/.pgpass` ignored | Wrong permissions. | `chmod 600 ~/.pgpass`. |
 | `muninn status` succeeds but search results are stale | Indexer daemon is not running. | Re-do Step 5. Check the verify line passes. |
 | MCP server shows `Failed to connect` | `muninn-mcp` crashing on startup. | Run `muninn-mcp` directly in a shell; the panic/error message goes to stderr. Usually a DB connectivity or config issue. |
+| `launchctl bootstrap` returns `Bootstrap failed: 5: Input/output error` | Home directory is on an external volume (`$HOME` starts with `/Volumes/`). launchd refuses to load plists from external volumes. | Use `/Library/LaunchAgents` instead of `~/Library/LaunchAgents` — see the `NEEDS_SUDO` path in Step 5. |
+| launchd plist present but daemon silently not loaded at login | Plist permissions are not `600`, or plist is in `~/Library/LaunchAgents` on an external volume. | `chmod 600` the plist; if home is on an external volume, move plist to `/Library/LaunchAgents` per Step 5. |
 
 ## Anti-patterns — things NOT to do
 
@@ -405,6 +439,9 @@ command -v muninn  # prints nothing
   Skip the step.
 - **Do not invent API keys** for `voyage`/`openai` embedding backends.
   Ask the user, or default `EMBEDDING_BACKEND=local`.
+- **Do not overwrite existing config files** (`~/.config/muninn/config.toml`)
+  without reading them first. An existing config may have valid settings — check
+  before clobbering. See Step 4.
 - **Do not declare install complete** before running the **Final
   verification gate** above and seeing six `OK` lines.
 
