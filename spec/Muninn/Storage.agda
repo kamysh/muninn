@@ -85,6 +85,24 @@ IsolatedGraph-subset :
 IsolatedGraph-subset s subset subset⊆ iso sym sym∈subset =
   iso sym (subset⊆ sym sym∈subset)
 
+-- PER-FILE INDEX TIMEOUT (file-level safety net in `pipeline::index_repo`)
+-- ------------------------------------------------------------------------
+-- Above and beyond the per-cypher GRAPH-WRITE timeout, `index_repo` wraps the
+-- entire per-file pipeline (`index_file`) in `tokio::time::timeout(
+-- FILE_INDEX_TIMEOUT_SECS, …)`. If any single file's parse + edge-extract +
+-- chunking + embed + DB writes together exceed the watchdog, the loop records
+-- a `SkipRecord` with reason "file timed out", emits a structured warning, and
+-- moves to the next file. This addresses any failure mode that lives entirely
+-- outside the AGE-cypher path — most notably the tree-sitter `collect_callees_rec`
+-- recursion hangs observed on dense TypeScript .d.ts files (see issue #6).
+--
+-- IsolatedGraph IS PRESERVED, again unconditionally. The per-file timeout
+-- fires BEFORE the file's chunks are written (the pipeline writes chunks then
+-- symbols, so an early timeout means neither was written). The set of symbols
+-- in the graph is therefore unchanged for that file — there is nothing new to
+-- check the predicate against. Same argument as the per-cypher timeout above,
+-- a degree more conservative.
+
 -- ─── File Path Validity ───────────────────────────────────────────────────────
 
 -- A file path used in chunk storage or deletion must not be the empty string.

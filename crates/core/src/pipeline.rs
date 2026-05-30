@@ -14,6 +14,29 @@ use std::path::Path;
 /// Files larger than this are skipped during indexing (see `index_file`).
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
 
+/// Files larger than this still get **text-indexed** (chunked + embedded) but
+/// the symbol-extraction + structural-edge passes (`parse_file`,
+/// `extract_edges`, the recursive walks in `parser.rs` like
+/// `collect_callees_rec`) are skipped. Those passes are O(AST-node-count) and
+/// bundled megafiles like TypeScript's `typescript.js` (~9 MB / 190 k lines)
+/// blow that up to millions of nodes — minutes per file. Above this threshold
+/// the file remains searchable via full-text + semantic vectors; only
+/// structural search (callers / callees / imports / defines) is unavailable
+/// for that file. See issue #6.
+const MAX_PARSER_BYTES: u64 = 1 * 1024 * 1024; // 1 MiB
+
+/// Per-file watchdog for `index_repo`'s inner loop. If a single file's full
+/// pipeline (parse + edge extract + chunking + embed + DB writes) takes
+/// longer than this, the file is skipped with a structured warning and a
+/// `SkipRecord`. End-users can therefore never be silently hung by a single
+/// file regardless of the failure mode (parser recursion, embedding stall,
+/// network flake, etc.) — this is the file-level analogue of the per-cypher
+/// `statement_timeout` in `graph.rs` (see issue #6 for the TypeScript .d.ts
+/// parser-hang that motivated this). Spec: `Muninn.Storage` — IsolatedGraph
+/// holds vacuously when a file is skipped (no chunks written → no symbols
+/// referencing them either).
+const FILE_INDEX_TIMEOUT_SECS: u64 = 120;
+
 pub async fn index_file(
     pool: &PgPool,
     repo_id: Uuid,
@@ -42,7 +65,26 @@ pub async fn index_file(
         Err(_) => return Ok(()), // Non-UTF-8 encoding — skip silently
     };
 
-    let language = detect_language(&file_path);
+    let detected_language = detect_language(&file_path);
+    // Gate the symbol-graph path on file size: above MAX_PARSER_BYTES we force
+    // language to None so `parse_file`, `extract_edges`, and the symbol-graph
+    // writes are all skipped — the file is still chunked + embedded + stored
+    // for full-text / semantic search. Avoids the parser-recursion cost on
+    // bundled megafiles (issue #6) up front, instead of relying on the per-
+    // file timeout as a safety net.
+    let language = if detected_language.is_some()
+        && (source.len() as u64) > MAX_PARSER_BYTES
+    {
+        tracing::info!(
+            file = %file_path,
+            size_bytes = source.len(),
+            threshold_bytes = MAX_PARSER_BYTES,
+            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
+        );
+        None
+    } else {
+        detected_language
+    };
     let symbols = match &language {
         Some(lang) => parse_file(&source, *lang).unwrap_or_default(),
         None => vec![],
@@ -284,7 +326,19 @@ pub async fn index_repo(
         // embedding per ~symbol-sized span rather than one blurred vector per
         // huge file. model2vec mean-pools over all tokens (no context-window
         // truncation), so this is a quality knob, not a hard limit.
-        match index_file(
+        //
+        // Per-file watchdog: `index_file` runs entirely inside one
+        // `tokio::time::timeout`. If a single file's parse + edge-extract +
+        // chunking + graph write together exceed `FILE_INDEX_TIMEOUT_SECS`, we
+        // log a warning, record a SkipRecord with reason "file timed out",
+        // and move on. This is the file-level analogue of the per-cypher
+        // statement_timeout in `graph.rs` (issue #5) and addresses the parser
+        // hang on dense TypeScript .d.ts files (issue #6). NOTE: tokio's
+        // `timeout` does not cancel a blocking sub-task — if the work was
+        // pinned inside `tokio::task::spawn_blocking` on a CPU-bound parser
+        // recursion, that thread keeps running until it returns; the index
+        // loop is unblocked regardless.
+        let work = index_file(
             pool,
             repo_id,
             file,
@@ -292,15 +346,32 @@ pub async fn index_repo(
             1500,
             embed_batch_size,
             expected_dim,
+        );
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(FILE_INDEX_TIMEOUT_SECS),
+            work,
         )
         .await
         {
-            Ok(()) => any_succeeded = true,
-            Err(e) => {
+            Ok(Ok(())) => any_succeeded = true,
+            Ok(Err(e)) => {
                 // Render the full cause chain once, both for the tracing
                 // warning (daemon log) and for the structured record (CLI).
                 let reason = format!("{:#}", e);
                 tracing::warn!("skipping {}: {}", file.display(), reason);
+                skips.push(SkipRecord { path: file.clone(), reason });
+            }
+            Err(_elapsed) => {
+                let reason = format!(
+                    "file index timed out after {FILE_INDEX_TIMEOUT_SECS}s — likely \
+                     pathological parser recursion (see issue #6). Skipped; chunks \
+                     and symbols for this file are absent."
+                );
+                tracing::warn!(
+                    file = %file.display(),
+                    timeout_secs = FILE_INDEX_TIMEOUT_SECS,
+                    "file index timed out — skipping"
+                );
                 skips.push(SkipRecord { path: file.clone(), reason });
             }
         }
