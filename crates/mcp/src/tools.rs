@@ -57,8 +57,15 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    let semantic = search::semantic_search(&ctx.pool, &query_vec, repo.id, limit * 2).await?;
-    let fulltext = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit * 2).await?;
+    // Fetch many more candidates than the final limit. RRF needs broad recall
+    // from each leg so that cross-list boosts can surface the best matches.
+    // With limit*2=20 candidates, a relevant file at semantic rank 21 (pushed
+    // down by a large node_modules corpus) never participates in the merge and
+    // gets no boost from its fulltext rank. 10× gives 100 candidates for the
+    // typical limit=10 request, which is the standard RRF operating range.
+    let candidate = (limit * 10).min(search::MAX_LIMIT);
+    let semantic = search::semantic_search(&ctx.pool, &query_vec, repo.id, candidate).await?;
+    let fulltext = search::fulltext_search(&ctx.pool, &params.query, repo.id, candidate).await?;
     let merged = search::rrf_merge(semantic, fulltext, limit as usize);
 
     Ok(SearchResponse {

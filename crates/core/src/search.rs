@@ -79,6 +79,7 @@ pub async fn semantic_search(
                (1 - (embedding <=> $1::vector))::float4 AS score
         FROM "{table}"
         WHERE embedding IS NOT NULL
+          AND (1 - (embedding <=> $1::vector)) > 0.0
         ORDER BY embedding <=> $1::vector
         LIMIT $2
         "#
