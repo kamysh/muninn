@@ -1,5 +1,11 @@
 mod tools;
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(name = "muninn-mcp", about = "muninn MCP server", version)]
+struct Cli {}
+
 use muninn_core::{config::GlobalConfig, db, embeddings::{make_backend, expected_dimension}};
 use std::{path::{Path, PathBuf}, sync::Arc, time::{Duration, SystemTime}};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -9,6 +15,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _cli = Cli::parse();
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
     let pool = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;

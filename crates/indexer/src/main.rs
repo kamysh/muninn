@@ -1,5 +1,6 @@
 mod watcher;
 
+use clap::Parser;
 use muninn_core::{
     config::{GlobalConfig, RepoConfig, EffectiveConfig},
     db,
@@ -14,8 +15,13 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+#[derive(Parser)]
+#[command(name = "muninn-index", about = "muninn indexer daemon", version)]
+struct Cli {}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _cli = Cli::parse();
     tracing_subscriber::fmt::init();
 
     let cfg = GlobalConfig::load()?;

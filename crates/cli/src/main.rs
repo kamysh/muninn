@@ -8,7 +8,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 #[derive(Parser)]
-#[command(name = "muninn", about = "muninn repository index manager")]
+#[command(name = "muninn", about = "muninn repository index manager", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

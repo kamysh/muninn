@@ -1,6 +1,6 @@
 [package]
 name = "muninn-index"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 
 [[bin]]
@@ -8,6 +8,7 @@ name = "muninn-index"
 path = "src/main.rs"
 
 [dependencies]
+clap = { workspace = true }
 muninn-core = { path = "../core" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
