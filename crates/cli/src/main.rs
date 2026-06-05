@@ -588,6 +588,11 @@ async fn main() -> anyhow::Result<()> {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
             store::set_paused(&pool, repo.id, true).await?;
+            // Preempt any in-flight pass so indexing stops now, not just on the
+            // next daemon cycle — otherwise `pause` reports "stopped" while a
+            // running pass keeps holding the advisory lock. The flag is cleared
+            // on resume (or by a remove / foreground index that takes the lock).
+            store::request_preempt(&pool, repo.id).await?;
             store::notify_repos_changed(&pool).await?;
             println!(
                 "Paused {}. The daemon will stop indexing it; index data is kept.",
@@ -601,6 +606,9 @@ async fn main() -> anyhow::Result<()> {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
             store::set_paused(&pool, repo.id, false).await?;
+            // Clear any preempt request left by `pause`, so the resumed repo
+            // isn't told to yield the instant the daemon tries to reindex it.
+            store::clear_preempt(&pool, repo.id).await?;
             store::notify_repos_changed(&pool).await?;
             println!("Resumed {}.", repo_path.display());
         }
@@ -620,16 +628,27 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // UnregisterSafe: hold the advisory lock across removal so no index
-            // runs concurrently and none can start. Refuse if it's already held.
+            // runs concurrently and none can start. If the daemon (or another
+            // CLI) currently holds it, preempt the holder and block until it
+            // yields — the same priority pattern the foreground index uses —
+            // rather than refusing. A dead holder releases the lock when its
+            // session ends, so there is no timeout.
             let lock_conn = match &repo {
-                Some(r) => match store::try_lock(&pool, r.id).await? {
-                    Some(conn) => Some((conn, r.id)),
-                    None => anyhow::bail!(
-                        "repo '{}' is currently being indexed. Wait for it to finish \
-                         or stop the indexer before removing.",
-                        repo_path.display()
-                    ),
-                },
+                Some(r) => {
+                    let conn = match store::try_lock(&pool, r.id).await? {
+                        Some(conn) => conn,
+                        None => {
+                            print!("Index in progress; waiting for the lock…");
+                            std::io::stdout().flush()?;
+                            store::request_preempt(&pool, r.id).await?;
+                            let conn = store::lock_blocking(&pool, r.id).await?;
+                            println!(" acquired.");
+                            conn
+                        }
+                    };
+                    store::clear_preempt(&pool, r.id).await?;
+                    Some((conn, r.id))
+                }
                 None => None,
             };
 
