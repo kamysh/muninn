@@ -33,10 +33,12 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("muninn-index started — watching all repos registered in the database");
 
-    // Map from repo_id to the running watcher task handle.
-    // Storing the handle (not just the id) lets us abort the watcher before a
-    // full reindex so both cannot mutate the same chunks table concurrently.
-    let mut watched: HashMap<Uuid, JoinHandle<()>> = HashMap::new();
+    // Map from repo_id to the running watcher task handle and the exclude
+    // glob list it was started with. Storing the handle lets us abort the
+    // watcher before a full reindex; storing the exclude list lets us detect
+    // config changes and restart the watcher so newly-excluded paths stop
+    // being re-indexed by a stale watcher after a foreground CLI reindex.
+    let mut watched: HashMap<Uuid, (JoinHandle<()>, Vec<String>)> = HashMap::new();
     // Track repos with a reindex in flight to prevent duplicate spawns.
     let reindexing: Arc<Mutex<std::collections::HashSet<Uuid>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
@@ -71,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
 async fn scan_and_dispatch(
     cfg: &GlobalConfig,
     pool: &sqlx::PgPool,
-    watched: &mut HashMap<Uuid, JoinHandle<()>>,
+    watched: &mut HashMap<Uuid, (JoinHandle<()>, Vec<String>)>,
     reindexing: &Arc<Mutex<std::collections::HashSet<Uuid>>>,
 ) {
     let repos = match store::list_repos(pool).await {
@@ -86,7 +88,7 @@ async fn scan_and_dispatch(
     // longer registered.  Without this, an unregistered repo's watcher keeps
     // running and tries to write into a dropped chunks table.
     let live_ids: std::collections::HashSet<Uuid> = repos.iter().map(|r| r.id).collect();
-    watched.retain(|id, handle| {
+    watched.retain(|id, (handle, _)| {
         if live_ids.contains(id) {
             true
         } else {
@@ -101,7 +103,7 @@ async fn scan_and_dispatch(
         // dropping data. If a watcher is running for a now-paused repo, evict it.
         // Spec: Muninn.Index.daemonDecision (paused → Skip).
         if repo.paused {
-            if let Some(handle) = watched.remove(&repo.id) {
+            if let Some((handle, _)) = watched.remove(&repo.id) {
                 handle.abort();
                 tracing::info!("paused {} — stopped its watcher", repo.path);
             }
@@ -163,7 +165,7 @@ async fn scan_and_dispatch(
 
             // Abort the watcher if one is running, to prevent it from racing
             // with index_repo (both would delete-and-reinsert chunks).
-            if let Some(handle) = watched.remove(&repo.id) {
+            if let Some((handle, _)) = watched.remove(&repo.id) {
                 handle.abort();
                 tracing::info!(
                     "paused watcher for {} to run full reindex",
@@ -277,9 +279,21 @@ async fn scan_and_dispatch(
             continue;
         }
 
-        // indexed_at IS NOT NULL — start watcher if not already watching.
-        if watched.contains_key(&repo.id) {
-            continue;
+        // indexed_at IS NOT NULL — start watcher if not already watching, or
+        // restart it if the exclude config has changed (e.g. a foreground CLI
+        // reindex pruned newly-excluded chunks but left the old watcher running
+        // with the stale exclude list, which would re-index those paths on the
+        // next filesystem event).
+        if let Some((handle, running_exclude)) = watched.get(&repo.id) {
+            if *running_exclude == eff.exclude {
+                continue; // watcher is running with the correct exclude config
+            }
+            handle.abort();
+            watched.remove(&repo.id);
+            tracing::info!(
+                "restarting watcher for {} (exclude config changed)",
+                repo.path
+            );
         }
 
         // DaemonMayWatch: a foreground/CLI reindex sets indexed_at = NULL for its
@@ -309,6 +323,6 @@ async fn scan_and_dispatch(
             }
         });
 
-        watched.insert(repo.id, handle);
+        watched.insert(repo.id, (handle, eff.exclude.clone()));
     }
 }
