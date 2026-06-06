@@ -17,7 +17,7 @@ rely on. Follow this file instead.
   Stop and ask, even when a step appears to call for it.
 - Every config-mutating command is scriptable — none block on `$EDITOR`.
   Bootstrap with `muninn init key=value …` (Step 4); register repos with
-  `muninn add <path> [key=value …]` (Step 7); change config later with
+  `muninn add <path> [key=value …]` (Step 8); change config later with
   `muninn config set (--global | --repo <path>) key=value …`. `$EDITOR`
   opens **only** for the explicit `muninn config edit`, which an agent
   should not use.
@@ -94,6 +94,13 @@ pgrep -fl muninn-index >/dev/null
 
 # Step 6 — MCP registered with Claude Code
 claude mcp list 2>&1 | grep -E '^muninn:.*Connected' >/dev/null
+
+# Step 7 — skill + hooks installed for Claude Code
+[ -f "$HOME/.claude/skills/muninn/SKILL.md" ] \
+  && jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
+       "$HOME/.claude/settings.json" >/dev/null \
+  && jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
+       "$HOME/.claude/settings.json" >/dev/null
 ```
 
 ## Step 1 — Start postgres
@@ -311,7 +318,79 @@ claude mcp list 2>&1 | grep -E '^muninn:.*Connected' && echo OK
 If status is anything other than `Connected`, the MCP server is
 crashing on startup. Run `muninn-mcp` directly to see stderr.
 
-## Step 7 — (Optional) Register the first repository
+## Step 7 — Install the muninn skill and Claude Code hooks
+
+The skill at `~/.claude/skills/muninn/SKILL.md` teaches Claude Code how
+to use muninn's tools — which search to pick, when to record knowledge,
+how it relates to its other memory tools. The skill on its own is not
+enough: its first paragraph asserts *"the `UserPromptSubmit` hook fires
+`search_hybrid` before every message"* — without that hook, the
+documented loop never starts, and without a `SessionStart` hook the
+skill itself is loaded only opportunistically. Install all three pieces
+together.
+
+### 7a — Drop the skill file in place
+
+The canonical source is `skill/SKILL.md` in this repo. Download it
+straight from `main` so the installed file is byte-identical to the
+source — re-running the command later overwrites any drift.
+
+```sh
+mkdir -p "$HOME/.claude/skills/muninn"
+curl -fsSL https://raw.githubusercontent.com/kamysh/muninn/main/skill/SKILL.md \
+  -o "$HOME/.claude/skills/muninn/SKILL.md"
+```
+
+### 7b — Wire the SessionStart and UserPromptSubmit hooks
+
+Merge two hook entries into `~/.claude/settings.json` with `jq`. The
+merge is idempotent: each hook is keyed by a unique substring of its
+command (`mcp__muninn__search_hybrid` for the prompt hook,
+`muninn skill` for the session hook), and re-running the block is a
+no-op once both are installed. Other entries (e.g. mimir's own hooks)
+are preserved untouched as separate array elements.
+
+```sh
+SETTINGS="$HOME/.claude/settings.json"
+mkdir -p "$(dirname "$SETTINGS")"
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+
+PROMPT_CMD='echo "Before acting: query muninn for relevant code knowledge (mcp__muninn__search_hybrid). Do this BEFORE reading files or writing code."'
+SESSION_CMD='echo "mcp__muninn tools are available. Invoke the muninn skill now to load the code search protocol for this session."'
+
+tmp=$(mktemp)
+jq --arg p "$PROMPT_CMD" --arg s "$SESSION_CMD" '
+  .hooks //= {}
+  | .hooks.UserPromptSubmit //= []
+  | .hooks.SessionStart      //= []
+  | (if any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == $p) then .
+     else .hooks.UserPromptSubmit += [{matcher: "", hooks: [{type: "command", command: $p}]}]
+     end)
+  | (if any(.hooks.SessionStart[]?.hooks[]?;      .command == $s) then .
+     else .hooks.SessionStart      += [{hooks: [{type: "command", command: $s}]}]
+     end)
+' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+chmod 600 "$SETTINGS"
+```
+
+Restart Claude Code (close and reopen any active sessions) for the
+hooks to take effect — they fire on session start and on each user
+message, neither of which Claude can trigger retroactively.
+
+**Verify** (skill file matches `main`, both hooks present):
+```sh
+[ -f "$HOME/.claude/skills/muninn/SKILL.md" ] && echo OK
+local=$(shasum -a 256 "$HOME/.claude/skills/muninn/SKILL.md" | cut -d' ' -f1)
+remote=$(curl -fsSL https://raw.githubusercontent.com/kamysh/muninn/main/skill/SKILL.md \
+         | shasum -a 256 | cut -d' ' -f1)
+[ "$local" = "$remote" ] && echo OK
+jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
+  "$HOME/.claude/settings.json" >/dev/null && echo OK
+jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
+  "$HOME/.claude/settings.json" >/dev/null && echo OK
+```
+
+## Step 8 — (Optional) Register the first repository
 
 `muninn add <path>` registers a repo, writes a default `.muninn.toml`
 (all fields inherit the global config), and runs the initial index —
@@ -334,7 +413,7 @@ muninn status "$REPO" >/dev/null && echo OK
 
 ## Final verification gate
 
-All six lines must print `OK`. If any fails, fix that step before
+All nine lines must print `OK`. If any fails, fix that step before
 declaring the install complete.
 
 ```sh
@@ -346,6 +425,11 @@ pgrep -fl muninn-index >/dev/null                                       && echo 
 { launchctl list 2>/dev/null | grep -q org.muninn.index; } \
   || { systemctl --user is-active muninn-index >/dev/null 2>&1; }       && echo OK  # 5
 claude mcp list 2>&1 | grep -qE '^muninn:.*Connected'                   && echo OK  # 6
+[ -f "$HOME/.claude/skills/muninn/SKILL.md" ]                           && echo OK  # 7
+jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
+  "$HOME/.claude/settings.json" >/dev/null                              && echo OK  # 8
+jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
+  "$HOME/.claude/settings.json" >/dev/null                              && echo OK  # 9
 ```
 
 ## Upgrading an existing install
@@ -425,7 +509,7 @@ command -v muninn  # prints nothing
 
 - **Do not use `muninn config edit` (it opens `$EDITOR` and blocks).**
   Use the non-interactive forms: `muninn init key=value …` (Step 4),
-  `muninn add <path> [key=value …]` (Step 7), and `muninn config set
+  `muninn add <path> [key=value …]` (Step 8), and `muninn config set
   (--global | --repo <path>) key=value …` to change config later.
 - **Do not skip Step 5.** The CLI works without the daemon, which makes
   this failure mode invisible until the user notices stale results.
