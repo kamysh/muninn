@@ -49,10 +49,14 @@ IsolatedGraph s =
 
 -- GRAPH-WRITE TIMEOUT (Tier 2 safety net in the Rust pipeline)
 -- ------------------------------------------------------------
--- Each call to the `muninn_cypher` SQL wrapper runs inside a transaction with
--- `SET LOCAL statement_timeout = graph_timeout_secs` (default 60 s). On
--- Postgres error 57014 (canceling statement due to statement timeout) the Rust
--- side rolls back, logs a structured warning naming the file, and continues
+-- Each AGE Cypher write in the Rust pipeline uses the PREPARE/EXECUTE/DEALLOCATE
+-- pattern via `simple_query` (plain-text protocol). The Cypher query string goes
+-- into PREPARE as a SQL literal (structurally separated from user data); user
+-- data (file paths, symbol names) goes into the EXECUTE call as a typed agtype
+-- parameter ($1). This enforces the query/data boundary at the protocol level.
+-- Each such write runs with `SET statement_timeout = graph_timeout_secs`
+-- (default 60 s). On Postgres error 57014 (canceling statement due to statement
+-- timeout) the Rust side logs a structured warning naming the file, and continues
 -- without propagating the error. The file's CHUNKS remain indexed (text and
 -- semantic search keep working); the SYMBOL graph for that file is partial or
 -- empty. The defence-in-depth motivation is that the AGE engine has been

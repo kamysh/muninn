@@ -166,6 +166,31 @@ pub async fn register_repo(
         )
         .await?;
 
+    // Ensure the four known edge labels exist (idempotent).
+    // AGE requires explicit create_elabel before MERGE can create edges of that type.
+    client
+        .execute(
+            &format!(
+                r#"
+        DO $do$
+        DECLARE
+            lbl TEXT;
+            labels TEXT[] := ARRAY['CALLS', 'IMPORTS', 'DEFINES', 'INHERITS_FROM'];
+        BEGIN
+            FOREACH lbl IN ARRAY labels LOOP
+                BEGIN
+                    PERFORM ag_catalog.create_elabel('{gname}', lbl);
+                EXCEPTION WHEN others THEN NULL;
+                END;
+            END LOOP;
+        END
+        $do$;
+        "#
+            ),
+            &[],
+        )
+        .await?;
+
     Ok(repo)
 }
 

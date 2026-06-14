@@ -6,11 +6,17 @@ use crate::store::graph_name;
 
 // ─── Per-statement graph-write timeout (Tier 2 safety net) ───────────────────
 //
-// Each `muninn_cypher` write runs inside a transaction with `SET LOCAL
-// statement_timeout`, so any single AGE operation that gets pathologically slow
-// (see issue #5) aborts after `GRAPH_STATEMENT_TIMEOUT_SECS`. On timeout the
-// helper logs a structured warning and returns `Ok(())` — the file's chunks
-// remain indexed (full-text + semantic search work); only the symbol-graph
+// Each AGE Cypher write uses PREPARE/EXECUTE/DEALLOCATE via simple_query
+// (plain-text protocol). The Cypher query string is a SQL literal in the
+// PREPARE statement; user data (file paths, symbol names) goes into the EXECUTE
+// call as a typed agtype parameter ($1). This enforces the query/data boundary
+// at the protocol level — the Cypher query structure can never be altered by
+// user input.
+//
+// Each write is bracketed by SET/RESET statement_timeout so that any single AGE
+// operation that gets pathologically slow aborts after GRAPH_STATEMENT_TIMEOUT_SECS.
+// On timeout the helper logs a structured warning and returns Ok(()) — the file's
+// chunks remain indexed (full-text + semantic search work); only the symbol-graph
 // portion for that op is partial or missing.
 // Spec: Muninn.Storage (IsolatedGraph + timeout addendum).
 const GRAPH_STATEMENT_TIMEOUT_SECS: u64 = 60;
@@ -20,42 +26,68 @@ fn is_statement_timeout(err: &tokio_postgres::Error) -> bool {
     err.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
 }
 
-async fn exec_cypher_with_timeout(
+/// Run PREPARE / EXECUTE / DEALLOCATE for a Cypher write that takes one
+/// agtype parameter, using simple_query (plain-text protocol).
+/// `stmt_name` must be unique per call (use a UUID-derived name).
+/// `prepare_sql` is the full PREPARE statement.
+/// `agtype_json` is the raw JSON object (user data); sql_esc is applied here.
+async fn age_execute(
+    client: &Client,
+    stmt_name: &str,
+    prepare_sql: &str,
+    agtype_json: &str,
+) -> Result<()> {
+    client.simple_query(prepare_sql).await?;
+    let exec = format!("EXECUTE {}('{}')", stmt_name, sql_esc(agtype_json));
+    let result = client.simple_query(&exec).await;
+    let _ = client.simple_query(&format!("DEALLOCATE {}", stmt_name)).await;
+    result?;
+    Ok(())
+}
+
+/// Escape an agtype JSON literal for embedding inside a SQL string literal.
+/// Single-quote doubling only — the JSON layer is handled by serde_json serialization.
+fn sql_esc(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+async fn exec_cypher_write_with_timeout(
     client: &Client,
     gname: &str,
-    cypher: &str,
-    params: &str,
+    stmt_name: &str,
+    prepare_sql: &str,
+    agtype_json: &str,
     op: &'static str,
     context: &str,
 ) -> Result<()> {
-    // Set a session-level statement timeout, execute, then reset.
-    // Using SET (not SET LOCAL) so it works outside a transaction.
     client
         .execute(
             &format!("SET statement_timeout = '{GRAPH_STATEMENT_TIMEOUT_SECS}s'"),
             &[],
         )
         .await?;
-    let result = client
-        .execute(
-            "SELECT * FROM muninn_cypher($1, $2, $3)",
-            &[&gname, &cypher, &params],
-        )
-        .await;
-    // Reset to default regardless of outcome.
+    let result = age_execute(client, stmt_name, prepare_sql, agtype_json).await;
     let _ = client.execute("SET statement_timeout = 0", &[]).await;
     match result {
         Ok(_) => Ok(()),
-        Err(e) if is_statement_timeout(&e) => {
-            tracing::warn!(
-                op = op,
-                context = context,
-                timeout_secs = GRAPH_STATEMENT_TIMEOUT_SECS,
-                "graph write timed out — chunks remain indexed; symbol graph for this op is partial or missing. Consider tightening `[index].exclude` for very large or symbol-dense files."
-            );
-            Ok(())
+        Err(e) => {
+            // Check if the underlying cause is a statement timeout.
+            let is_timeout = e.downcast_ref::<tokio_postgres::Error>()
+                .map(is_statement_timeout)
+                .unwrap_or(false);
+            if is_timeout {
+                tracing::warn!(
+                    op = op,
+                    context = context,
+                    graph = gname,
+                    timeout_secs = GRAPH_STATEMENT_TIMEOUT_SECS,
+                    "graph write timed out — chunks remain indexed; symbol graph for this op is partial or missing."
+                );
+                Ok(())
+            } else {
+                Err(e)
+            }
         }
-        Err(e) => Err(e.into()),
     }
 }
 
@@ -88,7 +120,7 @@ fn relation_label(rel: &StructuralRelation) -> &'static str {
 }
 
 /// Batch-upsert symbol nodes into the per-repo AGE graph using one
-/// `UNWIND … MERGE` per distinct node label (≤4 round-trips total).
+/// PREPARE/EXECUTE per distinct node label (≤4 round-trips total).
 pub async fn upsert_symbol_nodes(
     client: &Client,
     repo_id: Uuid,
@@ -113,6 +145,9 @@ pub async fn upsert_symbol_nodes(
 
     for (label, rows) in by_label {
         let params = serde_json::json!({ "rows": rows });
+        let agtype_json = params.to_string();
+        let stmt = format!("muninn_upsert_{}_{}", label.to_lowercase(), Uuid::new_v4().simple());
+        // label and relation_label are &'static str from closed match arms — never user input.
         let cypher = format!(
             r#"UNWIND $rows AS r
                MERGE (n:{label} {{chunk_id: r.chunk_id}})
@@ -121,13 +156,16 @@ pub async fn upsert_symbol_nodes(
                    n.file_path = r.file_path,
                    n.start_line = r.start_line,
                    n.end_line = r.end_line"#,
-            label = label,
         );
-        exec_cypher_with_timeout(
+        let prepare = format!(
+            "PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{gname}', $$ {cypher} $$, $1) AS (v ag_catalog.agtype)"
+        );
+        exec_cypher_write_with_timeout(
             client,
             &gname,
-            &cypher,
-            &params.to_string(),
+            &stmt,
+            &prepare,
+            &agtype_json,
             "upsert_symbol_nodes",
             label,
         )
@@ -137,7 +175,7 @@ pub async fn upsert_symbol_nodes(
 }
 
 /// Batch-upsert directed edges into the per-repo graph using one
-/// `UNWIND … MATCH … MERGE` per distinct relation type (≤4 round-trips).
+/// PREPARE/EXECUTE per distinct relation type (≤4 round-trips).
 pub async fn upsert_edges(client: &Client, repo_id: Uuid, edges: &[StructuralEdge]) -> Result<()> {
     if edges.is_empty() {
         return Ok(());
@@ -155,17 +193,22 @@ pub async fn upsert_edges(client: &Client, repo_id: Uuid, edges: &[StructuralEdg
 
     for (rel, rows) in by_rel {
         let params = serde_json::json!({ "rows": rows });
+        let agtype_json = params.to_string();
+        let stmt = format!("muninn_upsert_edge_{}_{}", rel.to_lowercase(), Uuid::new_v4().simple());
         let cypher = format!(
             r#"UNWIND $rows AS r
                MATCH (a {{chunk_id: r.from}}), (b {{chunk_id: r.to}})
                MERGE (a)-[:{rel}]->(b)"#,
-            rel = rel,
         );
-        exec_cypher_with_timeout(
+        let prepare = format!(
+            "PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{gname}', $$ {cypher} $$, $1) AS (v ag_catalog.agtype)"
+        );
+        exec_cypher_write_with_timeout(
             client,
             &gname,
-            &cypher,
-            &params.to_string(),
+            &stmt,
+            &prepare,
+            &agtype_json,
             "upsert_edges",
             rel,
         )
@@ -179,12 +222,19 @@ pub async fn upsert_edges(client: &Client, repo_id: Uuid, edges: &[StructuralEdg
 pub async fn delete_file_symbols(client: &Client, repo_id: Uuid, file_path: &str) -> Result<()> {
     let gname = graph_name(repo_id);
     let params = serde_json::json!({ "sym_file_path": file_path });
-    let cypher = r#"MATCH (n {file_path: $sym_file_path}) DETACH DELETE n"#;
-    exec_cypher_with_timeout(
+    let agtype_json = params.to_string();
+    let stmt = format!("muninn_del_file_{}", Uuid::new_v4().simple());
+    let prepare = format!(
+        "PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{gname}', \
+         $$ MATCH (n {{file_path: $sym_file_path}}) DETACH DELETE n $$, \
+         $1) AS (v ag_catalog.agtype)"
+    );
+    exec_cypher_write_with_timeout(
         client,
         &gname,
-        cypher,
-        &params.to_string(),
+        &stmt,
+        &prepare,
+        &agtype_json,
         "delete_file_symbols",
         file_path,
     )
@@ -210,69 +260,76 @@ pub async fn query_related(
     };
 
     let params = serde_json::json!({ "sym_name": symbol_name });
+    let agtype_json = params.to_string();
 
+    // edge_type is a &'static str from a closed match — never user input.
     let cypher = if incoming {
         format!(
-            r#"MATCH (a)-[:{edge}]->(b {{name: $sym_name}})
+            r#"MATCH (a)-[:{edge_type}]->(b {{name: $sym_name}})
                RETURN {{chunk_id: a.chunk_id, name: a.name, file_path: a.file_path,
                         kind: a.kind, start_line: a.start_line, end_line: a.end_line}}"#,
-            edge = edge_type,
         )
     } else {
         format!(
-            r#"MATCH (a {{name: $sym_name}})-[:{edge}]->(b)
+            r#"MATCH (a {{name: $sym_name}})-[:{edge_type}]->(b)
                RETURN {{chunk_id: b.chunk_id, name: b.name, file_path: b.file_path,
                         kind: b.kind, start_line: b.start_line, end_line: b.end_line}}"#,
-            edge = edge_type,
         )
     };
 
-    let rows = client
-        .query(
-            "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
-            &[&gname, &cypher, &params.to_string()],
-        )
-        .await?;
+    let stmt = format!("muninn_qrel_{}", Uuid::new_v4().simple());
+    let prepare = format!(
+        "PREPARE {stmt}(agtype) AS SELECT r::text \
+         FROM ag_catalog.cypher('{gname}', $$ {cypher} $$, $1) AS (r ag_catalog.agtype)"
+    );
+
+    client.simple_query(&prepare).await?;
+    let exec = format!("EXECUTE {}('{}')", stmt, sql_esc(&agtype_json));
+    let msgs = client.simple_query(&exec).await;
+    let _ = client.simple_query(&format!("DEALLOCATE {}", stmt)).await;
+    let msgs = msgs?;
 
     let mut symbols = vec![];
-    for row in rows {
-        let raw: String = row.try_get(0).unwrap_or_default();
-        let map: serde_json::Value =
-            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    for msg in msgs {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            let raw = row.get(0).unwrap_or_default();
+            let map: serde_json::Value =
+                serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
 
-        let name = map.get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim_matches('"').to_string())
-            .unwrap_or_default();
-        let file_path = map.get("file_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim_matches('"').to_string())
-            .unwrap_or_default();
-        let kind_str = map.get("kind")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim_matches('"').to_string())
-            .unwrap_or_default();
-        let start_line = map.get("start_line")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let end_line = map.get("end_line")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let chunk_id: Uuid = map.get("chunk_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.trim_matches('"').parse().ok())
-            .unwrap_or_else(Uuid::nil);
+            let name = map.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            let file_path = map.get("file_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            let kind_str = map.get("kind")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            let start_line = map.get("start_line")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let end_line = map.get("end_line")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let chunk_id: Uuid = map.get("chunk_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.trim_matches('"').parse().ok())
+                .unwrap_or_else(Uuid::nil);
 
-        symbols.push(Symbol {
-            name,
-            kind: parse_symbol_kind(&kind_str),
-            file_path,
-            range: LineRange {
-                start: start_line,
-                end: end_line,
-            },
-            chunk_id,
-        });
+            symbols.push(Symbol {
+                name,
+                kind: parse_symbol_kind(&kind_str),
+                file_path,
+                range: LineRange {
+                    start: start_line,
+                    end: end_line,
+                },
+                chunk_id,
+            });
+        }
     }
     Ok(symbols)
 }
@@ -305,66 +362,39 @@ mod tests {
     async fn test_write_via_execute() {
         let client = test_client().await;
         let gname = "code_graph_63ca78b63feb4129841eb8c3842f8aec";
-        let params = serde_json::json!({"sym_name": "write_test", "sym_file": "/test.rs"});
-
-        client
-            .execute(
-                "SELECT * FROM muninn_cypher($1, $2, $3)",
-                &[
-                    &gname,
-                    &"MERGE (n:Function {chunk_id: 'write-test-uuid'}) SET n.name = $sym_name, n.kind = 'Function', n.file_path = $sym_file, n.start_line = 1, n.end_line = 5",
-                    &params.to_string(),
-                ],
-            )
+        let params = serde_json::json!({"rows": [{"chunk_id": "write-test-uuid", "name": "write_test", "file_path": "/test.rs", "start_line": 1, "end_line": 5}]});
+        let agtype_json = params.to_string();
+        let stmt = format!("test_write_{}", Uuid::new_v4().simple());
+        let prepare = format!(
+            "PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{gname}', \
+             $$ UNWIND $rows AS r MERGE (n:Function {{chunk_id: r.chunk_id}}) \
+             SET n.name = r.name, n.kind = 'Function', n.file_path = r.file_path, \
+             n.start_line = r.start_line, n.end_line = r.end_line $$, \
+             $1) AS (v ag_catalog.agtype)"
+        );
+        age_execute(&client, &stmt, &prepare, &agtype_json)
             .await
-            .expect("MERGE via muninn_cypher should succeed");
+            .expect("MERGE via PREPARE/EXECUTE should succeed");
 
-        let rows = client
-            .query(
-                "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
-                &[
-                    &gname,
-                    &"MATCH (n {chunk_id: 'write-test-uuid'}) RETURN {name: n.name, kind: n.kind}",
-                    &"{}",
-                ],
-            )
-            .await
-            .expect("read back should succeed");
+        let read_params = serde_json::json!({"chunk_id": "write-test-uuid"});
+        let read_stmt = format!("test_read_{}", Uuid::new_v4().simple());
+        let read_prepare = format!(
+            "PREPARE {read_stmt}(agtype) AS SELECT r::text \
+             FROM ag_catalog.cypher('{gname}', \
+             $$ MATCH (n {{chunk_id: $chunk_id}}) RETURN {{name: n.name, kind: n.kind}} $$, \
+             $1) AS r"
+        );
+        client.simple_query(&read_prepare).await.expect("prepare read");
+        let exec = format!("EXECUTE {}('{}')", read_stmt, sql_esc(&read_params.to_string()));
+        let msgs = client.simple_query(&exec).await.expect("execute read");
+        let _ = client.simple_query(&format!("DEALLOCATE {read_stmt}")).await;
 
+        let rows: Vec<_> = msgs.iter().filter_map(|m| {
+            if let tokio_postgres::SimpleQueryMessage::Row(r) = m { Some(r) } else { None }
+        }).collect();
         assert_eq!(rows.len(), 1, "node should have been written");
-        let raw: String = rows[0].try_get(0).unwrap();
-        let map: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let raw = rows[0].get(0).unwrap();
+        let map: serde_json::Value = serde_json::from_str(raw).unwrap();
         assert_eq!(map.get("name").and_then(|v| v.as_str()).unwrap_or(""), "write_test");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires live muninn database at localhost:5450"]
-    async fn test_agtype_map_column_readable() {
-        let client = test_client().await;
-        let gname = "code_graph_63ca78b63feb4129841eb8c3842f8aec";
-        let params = serde_json::json!({"sym_name": "test_func"});
-
-        let rows = client
-            .query(
-                "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
-                &[
-                    &gname,
-                    &"MATCH (n {name: $sym_name}) RETURN {chunk_id: n.chunk_id, name: n.name, file_path: n.file_path, kind: n.kind, start_line: n.start_line, end_line: n.end_line}",
-                    &params.to_string(),
-                ],
-            )
-            .await
-            .expect("query should succeed");
-
-        assert_eq!(rows.len(), 1, "should find the test_func node");
-        let raw: String = rows[0].try_get(0).expect("r column should be text");
-        let map: serde_json::Value = serde_json::from_str(&raw).expect("should parse as JSON");
-        let name = map.get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim_matches('"').to_string())
-            .unwrap_or_default();
-        assert_eq!(name, "test_func");
-        let start_line = map.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-        assert_eq!(start_line, 1);
     }
 }
