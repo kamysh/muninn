@@ -246,16 +246,9 @@ mod tests {
     #[test]
     fn expected_dimensions_match_spec() {
         use crate::config::{EmbeddingConfig, EmbeddingBackend};
-        let mut cfg = EmbeddingConfig::default();
-
-        cfg.backend = EmbeddingBackend::Voyage;
-        assert_eq!(expected_dimension(&cfg), 1024);
-
-        cfg.backend = EmbeddingBackend::OpenAI;
-        assert_eq!(expected_dimension(&cfg), 1536);
-
-        cfg.backend = EmbeddingBackend::Local;
-        assert_eq!(expected_dimension(&cfg), LOCAL_DIM);
+        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::Voyage, ..Default::default() }), 1024);
+        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::OpenAI, ..Default::default() }), 1536);
+        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::Local, ..Default::default() }), LOCAL_DIM);
     }
 
     #[tokio::test]
@@ -283,15 +276,13 @@ mod tests {
 
     #[test]
     fn make_backend_local_returns_512() {
-        let mut cfg = crate::config::EmbeddingConfig::default();
-        cfg.backend = crate::config::EmbeddingBackend::Local;
+        let cfg = crate::config::EmbeddingConfig { backend: crate::config::EmbeddingBackend::Local, ..Default::default() };
         assert_eq!(super::expected_dimension(&cfg), LOCAL_DIM);
     }
 
     #[test]
     fn make_backend_openai_returns_1536() {
-        let mut cfg = crate::config::EmbeddingConfig::default();
-        cfg.backend = crate::config::EmbeddingBackend::OpenAI;
+        let cfg = crate::config::EmbeddingConfig { backend: crate::config::EmbeddingBackend::OpenAI, ..Default::default() };
         assert_eq!(super::expected_dimension(&cfg), 1536);
     }
 

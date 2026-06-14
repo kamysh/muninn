@@ -1,9 +1,10 @@
 use crate::types::{Chunk, SearchResult, LineRange};
 use crate::store::chunks_table;
-use sqlx::PgPool;
+use tokio_postgres::Client;
 use uuid::Uuid;
 use anyhow::Result;
 use std::collections::HashMap;
+use pgvector::Vector;
 
 /// Server-enforced ceiling on query limits (spec: Muninn.Search.MAX_LIMIT).
 /// Without this, a caller supplying limit=10⁹ would attempt a billion-row fetch.
@@ -17,16 +18,17 @@ fn validate_limit(limit: i64) -> Result<()> {
 }
 
 pub async fn fulltext_search(
-    pool: &PgPool,
+    client: &Client,
     query: &str,
     repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
-    use sqlx::Row;
     let table = chunks_table(repo_id);
-    let rows = sqlx::query(&format!(
-        r#"
+    let rows = client
+        .query(
+            &format!(
+                r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
                ts_rank(ts_vector, plainto_tsquery('english', $1)) AS score
         FROM "{table}"
@@ -34,77 +36,76 @@ pub async fn fulltext_search(
         ORDER BY score DESC
         LIMIT $2
         "#
-    ))
-    .bind(query)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+            ),
+            &[&query, &limit],
+        )
+        .await?;
 
-    rows.into_iter().map(|row| {
-        Ok(SearchResult {
-            score: row.try_get::<f32, _>("score")?,
-            chunk: Chunk {
-                id: row.try_get("id")?,
-                repo_id: row.try_get("repo_id")?,
-                file_path: row.try_get("file_path")?,
-                range: LineRange {
-                    start: row.try_get::<i32, _>("start_line")? as u32,
-                    end: row.try_get::<i32, _>("end_line")? as u32,
+    rows.into_iter()
+        .map(|row| {
+            Ok(SearchResult {
+                score: row.try_get::<_, f32>("score")?,
+                chunk: Chunk {
+                    id: row.try_get("id")?,
+                    repo_id: row.try_get("repo_id")?,
+                    file_path: row.try_get("file_path")?,
+                    range: LineRange {
+                        start: row.try_get::<_, i32>("start_line")? as u32,
+                        end: row.try_get::<_, i32>("end_line")? as u32,
+                    },
+                    content: row.try_get("content")?,
+                    embedding: None,
                 },
-                content: row.try_get("content")?,
-                embedding: None,
-            },
+            })
         })
-    }).collect()
+        .collect()
 }
 
 pub async fn semantic_search(
-    pool: &PgPool,
+    client: &Client,
     query_embedding: &[f32],
     repo_id: Uuid,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
-    use sqlx::Row;
     let table = chunks_table(repo_id);
-    // Format embedding as pgvector literal: '[f1,f2,...]'
-    let vec_literal = format!(
-        "[{}]",
-        query_embedding.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",")
-    );
+    let vec = Vector::from(query_embedding.to_vec());
 
-    let rows = sqlx::query(&format!(
-        r#"
+    let rows = client
+        .query(
+            &format!(
+                r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
-               (1 - (embedding <=> $1::vector))::float4 AS score
+               (1 - (embedding <=> $1))::float4 AS score
         FROM "{table}"
         WHERE embedding IS NOT NULL
-          AND (1 - (embedding <=> $1::vector)) > 0.0
-        ORDER BY embedding <=> $1::vector
+          AND (1 - (embedding <=> $1)) > 0.0
+        ORDER BY embedding <=> $1
         LIMIT $2
         "#
-    ))
-    .bind(vec_literal)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+            ),
+            &[&vec, &limit],
+        )
+        .await?;
 
-    rows.into_iter().map(|row| {
-        Ok(SearchResult {
-            score: row.try_get::<f32, _>("score")?,
-            chunk: Chunk {
-                id: row.try_get("id")?,
-                repo_id: row.try_get("repo_id")?,
-                file_path: row.try_get("file_path")?,
-                range: LineRange {
-                    start: row.try_get::<i32, _>("start_line")? as u32,
-                    end: row.try_get::<i32, _>("end_line")? as u32,
+    rows.into_iter()
+        .map(|row| {
+            Ok(SearchResult {
+                score: row.try_get::<_, f32>("score")?,
+                chunk: Chunk {
+                    id: row.try_get("id")?,
+                    repo_id: row.try_get("repo_id")?,
+                    file_path: row.try_get("file_path")?,
+                    range: LineRange {
+                        start: row.try_get::<_, i32>("start_line")? as u32,
+                        end: row.try_get::<_, i32>("end_line")? as u32,
+                    },
+                    content: row.try_get("content")?,
+                    embedding: None,
                 },
-                content: row.try_get("content")?,
-                embedding: None,
-            },
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Reciprocal Rank Fusion merge of two ranked result lists.
@@ -131,7 +132,13 @@ pub fn rrf_merge(
     let mut results: Vec<(f32, SearchResult)> = scores.into_values().collect();
     results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(limit);
-    results.into_iter().map(|(score, mut r)| { r.score = score; r }).collect()
+    results
+        .into_iter()
+        .map(|(score, mut r)| {
+            r.score = score;
+            r
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -160,14 +167,12 @@ mod tests {
         let id_b = Uuid::new_v4();
         let id_c = Uuid::new_v4();
 
-        // id_a appears in both lists → higher combined RRF score
         let list1 = vec![make_result(id_a, 0.9), make_result(id_b, 0.8)];
         let list2 = vec![make_result(id_a, 0.7), make_result(id_c, 0.6)];
 
         let merged = rrf_merge(list1, list2, 3);
 
         assert_eq!(merged.len(), 3);
-        // id_a should rank first (appears in both lists)
         assert_eq!(merged[0].chunk.id, id_a);
     }
 
@@ -190,7 +195,6 @@ mod tests {
         let ids: Vec<_> = (0..5).map(|_| uuid::Uuid::new_v4()).collect();
         let list: Vec<_> = ids.iter().map(|&id| make_result(id, 0.9)).collect();
         let merged = rrf_merge(list, vec![], 5);
-        // all items present
         assert_eq!(merged.len(), 5);
     }
 
@@ -217,12 +221,15 @@ mod tests {
 
     #[test]
     fn rrf_first_rank_uses_zero_based_index() {
-        // spec: rrfScore 0 = 1 / (60 + 0) = 1/60
         let id = uuid::Uuid::new_v4();
         let merged = rrf_merge(vec![make_result(id, 1.0)], vec![], 1);
         let expected = 1.0_f32 / 60.0;
-        assert!((merged[0].score - expected).abs() < 1e-6,
-            "score {} != expected {}", merged[0].score, expected);
+        assert!(
+            (merged[0].score - expected).abs() < 1e-6,
+            "score {} != expected {}",
+            merged[0].score,
+            expected
+        );
     }
 
     use quickcheck::quickcheck;
@@ -253,12 +260,10 @@ mod tests {
 
         fn prop_rrf_merge_no_duplicates(n: u8) -> bool {
             let n = (n as usize).min(20);
-            // same items in both lists → deduplication
             let ids: Vec<Uuid> = (0..n).map(|_| Uuid::new_v4()).collect();
             let list_a: Vec<_> = ids.iter().map(|&id| arb_result(id)).collect();
             let list_b: Vec<_> = ids.iter().map(|&id| arb_result(id)).collect();
             let merged = rrf_merge(list_a, list_b, n + 1);
-            // no duplicate chunk ids
             let mut seen = std::collections::HashSet::new();
             merged.iter().all(|r| seen.insert(r.chunk.id))
         }

@@ -25,17 +25,22 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cfg = GlobalConfig::load()?;
-    let pool = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
+    let client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
     // Self-apply migrations on startup: the daemon may come up (launchd/systemd)
     // before any CLI command has migrated the DB, and every scan SELECTs the
     // current repo columns. Idempotent. Spec: schema is current before queries.
-    db::run_migrations(&pool).await?;
+    let mut migrate_client =
+        db::connect_with_app_name(&cfg.database, "muninn-index-migrate").await?;
+    db::run_migrations(&mut migrate_client).await?;
+    drop(migrate_client);
 
     // Dedicated connection for LISTEN/NOTIFY.
-    // PgListener reconnects automatically; combined with the 60 s fallback poll
-    // this means no notifications are permanently lost.
-    let mut listener = db::connect_listener(&cfg.database).await?;
-    listener.listen("muninn_repos_changed").await?;
+    // The spawned task drives the connection; notifications arrive via the channel.
+    // Combined with the 60 s fallback poll, no notifications are permanently lost.
+    let (listen_client, mut notify_rx) = db::connect_listener(&cfg.database).await?;
+    listen_client
+        .execute("LISTEN muninn_repos_changed", &[])
+        .await?;
 
     tracing::info!("muninn-index started — watching all repos registered in the database");
 
@@ -50,15 +55,15 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Initial scan
-    scan_and_dispatch(&cfg, &pool, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
 
     loop {
         // Wait for a NOTIFY or fall back to a 60 s poll for resilience.
         tokio::select! {
-            result = listener.recv() => {
-                match result {
-                    Ok(_) => tracing::debug!("received muninn_repos_changed notification"),
-                    Err(e) => tracing::warn!("PgListener error (will reconnect): {}", e),
+            msg = notify_rx.recv() => {
+                match msg {
+                    Some(_) => tracing::debug!("received muninn_repos_changed notification"),
+                    None => tracing::warn!("LISTEN channel closed — continuing on poll"),
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
@@ -69,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
         }
-        scan_and_dispatch(&cfg, &pool, &mut watched, &reindexing).await;
+        scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
     }
 
     Ok(())
@@ -78,11 +83,11 @@ async fn main() -> anyhow::Result<()> {
 /// Query the repos table and dispatch watcher / reindex tasks as needed.
 async fn scan_and_dispatch(
     cfg: &GlobalConfig,
-    pool: &sqlx::PgPool,
+    client: &tokio_postgres::Client,
     watched: &mut HashMap<Uuid, (JoinHandle<()>, Vec<String>)>,
     reindexing: &Arc<Mutex<std::collections::HashSet<Uuid>>>,
 ) {
-    let repos = match store::list_repos(pool).await {
+    let repos = match store::list_repos(client).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("failed to list repos: {}", e);
@@ -91,7 +96,7 @@ async fn scan_and_dispatch(
     };
 
     // WatchedSubsetOfLive: abort and evict watcher handles for repos that are no
-    // longer registered.  Without this, an unregistered repo's watcher keeps
+    // longer registered. Without this, an unregistered repo's watcher keeps
     // running and tries to write into a dropped chunks table.
     let live_ids: std::collections::HashSet<Uuid> = repos.iter().map(|r| r.id).collect();
     watched.retain(|id, (handle, _)| {
@@ -139,7 +144,9 @@ async fn scan_and_dispatch(
             tracing::error!(
                 "repo {} stored embedding_dim {} but configured backend yields {}; \
                  unregister + re-index to switch backends",
-                repo.path, repo.embedding_dim, repo_dim
+                repo.path,
+                repo.embedding_dim,
+                repo_dim
             );
             continue;
         }
@@ -173,15 +180,12 @@ async fn scan_and_dispatch(
             // with index_repo (both would delete-and-reinsert chunks).
             if let Some((handle, _)) = watched.remove(&repo.id) {
                 handle.abort();
-                tracing::info!(
-                    "paused watcher for {} to run full reindex",
-                    repo.path
-                );
+                tracing::info!("paused watcher for {} to run full reindex", repo.path);
             }
 
             // IndexingPre: acquire the repo's advisory lock as the background
             // holder. If someone else holds it, skip — they will NOTIFY when done.
-            let lock_conn = match store::try_lock(pool, repo.id).await {
+            let lock_conn = match store::try_lock(&cfg.database, repo.id).await {
                 Ok(Some(conn)) => conn,
                 Ok(None) => {
                     tracing::debug!(
@@ -196,10 +200,9 @@ async fn scan_and_dispatch(
                 }
             };
 
-            // Spawn background full reindex.  After success, notify the daemon so
+            // Spawn background full reindex. After success, notify the daemon so
             // it re-scans and re-attaches the watcher.
             reindexing.lock().await.insert(repo.id);
-            let pool2 = pool.clone();
             let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
                 Arc::from(make_backend(&eff.embeddings));
             let batch_size = eff.embeddings.batch_size;
@@ -208,29 +211,53 @@ async fn scan_and_dispatch(
             let repo_path_owned = repo_path.to_path_buf();
             let repo_path_str = repo.path.clone();
             let reindexing2 = Arc::clone(reindexing);
+            let db_cfg = cfg.database.clone();
             tokio::spawn(async move {
-                let mut lock_conn = lock_conn; // hold the advisory lock for the index's duration
+                // Open a dedicated client for this background reindex task.
+                let index_client =
+                    match db::connect_with_app_name(&db_cfg, "muninn-index-reindex").await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!(
+                                "failed to open reindex client for {}: {}",
+                                repo_path_str,
+                                e
+                            );
+                            reindexing2.lock().await.remove(&repo_id);
+                            return;
+                        }
+                    };
+
                 // Run the index while polling the preempt flag every 10 s. If a
                 // foreground job requests the lock, abort (drop the index future)
                 // and yield by releasing the advisory lock — the foreground job's
                 // blocking acquire then wakes. Spec: Muninn.AdvisoryLock.
                 let index_fut = index_repo(
-                    &pool2, repo_id, &repo_path_owned, embedder,
-                    batch_size, repo_dim, &exclude, |_, _, _| {},
+                    &index_client,
+                    repo_id,
+                    &repo_path_owned,
+                    embedder,
+                    batch_size,
+                    repo_dim,
+                    &exclude,
+                    |_, _, _| {},
                 );
                 tokio::pin!(index_fut);
-                let mut ticker =
-                    tokio::time::interval(std::time::Duration::from_secs(10));
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
                 ticker.tick().await; // consume the immediate first tick
 
                 let finished = loop {
                     tokio::select! {
                         r = &mut index_fut => break Some(r),
                         _ = ticker.tick() => {
-                            match store::is_preempt_requested(&pool2, repo_id).await {
+                            match store::is_preempt_requested(&index_client, repo_id).await {
                                 Ok(true) => break None,
                                 Ok(false) => {}
-                                Err(e) => tracing::warn!("preempt check failed for {}: {}", repo_id, e),
+                                Err(e) => tracing::warn!(
+                                    "preempt check failed for {}: {}",
+                                    repo_id,
+                                    e
+                                ),
                             }
                         }
                     }
@@ -238,7 +265,7 @@ async fn scan_and_dispatch(
 
                 match finished {
                     Some(result) => {
-                        if let Err(e) = store::unlock(&mut lock_conn, repo_id).await {
+                        if let Err(e) = store::unlock(&lock_conn, repo_id).await {
                             tracing::warn!("unlock for {} failed: {}", repo_path_str, e);
                         }
                         match result {
@@ -254,15 +281,20 @@ async fn scan_and_dispatch(
                                 }
                                 // mark_indexed was called inside index_repo; now notify
                                 // so the daemon re-scans and re-attaches the watcher.
-                                if let Err(e) = store::notify_repos_changed(&pool2).await {
+                                if let Err(e) =
+                                    store::notify_repos_changed(&index_client).await
+                                {
                                     tracing::warn!(
                                         "reindex of {} complete but notify failed: {}",
-                                        repo_path_str, e
+                                        repo_path_str,
+                                        e
                                     );
                                 }
                             }
                             Err(e) => tracing::error!(
-                                "reindex of {} failed: {}", repo_path_str, e
+                                "reindex of {} failed: {}",
+                                repo_path_str,
+                                e
                             ),
                         }
                     }
@@ -272,11 +304,16 @@ async fn scan_and_dispatch(
                         // waiting foreground job acquires it; leave preempt_requested
                         // set so the daemon's scan guard does not re-grab before the
                         // foreground job clears it on acquire.
-                        if let Err(e) = store::unlock(&mut lock_conn, repo_id).await {
-                            tracing::warn!("unlock (yield) for {} failed: {}", repo_path_str, e);
+                        if let Err(e) = store::unlock(&lock_conn, repo_id).await {
+                            tracing::warn!(
+                                "unlock (yield) for {} failed: {}",
+                                repo_path_str,
+                                e
+                            );
                         }
                         tracing::info!(
-                            "yielded {} to a waiting foreground job", repo_path_str
+                            "yielded {} to a waiting foreground job",
+                            repo_path_str
                         );
                     }
                 }
@@ -286,10 +323,7 @@ async fn scan_and_dispatch(
         }
 
         // indexed_at IS NOT NULL — start watcher if not already watching, or
-        // restart it if the exclude config has changed (e.g. a foreground CLI
-        // reindex pruned newly-excluded chunks but left the old watcher running
-        // with the stale exclude list, which would re-index those paths on the
-        // next filesystem event).
+        // restart it if the exclude config has changed.
         if let Some((handle, running_exclude)) = watched.get(&repo.id) {
             if *running_exclude == eff.exclude {
                 continue; // watcher is running with the correct exclude config
@@ -307,7 +341,6 @@ async fn scan_and_dispatch(
         // the lock; it is safe to attach a watcher.
         tracing::info!("starting watcher for {}", repo.path);
 
-        let pool2 = pool.clone();
         let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
             Arc::from(make_backend(&eff.embeddings));
         let debounce = eff.watcher.debounce_ms;
@@ -316,12 +349,28 @@ async fn scan_and_dispatch(
         let id = repo.id;
         let repo_path_owned = repo_path.to_path_buf();
         let initial_state = Arc::new(Mutex::new(IndexState::Watching));
+        let db_cfg = cfg.database.clone();
 
         let handle = tokio::spawn(async move {
+            // Open a dedicated client for this watcher task.
+            let watcher_client =
+                match db::connect_with_app_name(&db_cfg, "muninn-index-watcher").await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("failed to open watcher client: {}", e);
+                        return;
+                    }
+                };
             if let Err(e) = watcher::watch_repo(
-                pool2, id, repo_path_owned, embedder,
-                debounce, initial_state,
-                batch_size, repo_dim, exclude,
+                Arc::new(watcher_client),
+                id,
+                repo_path_owned,
+                embedder,
+                debounce,
+                initial_state,
+                batch_size,
+                repo_dim,
+                exclude,
             )
             .await
             {

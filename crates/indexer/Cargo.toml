@@ -1,6 +1,6 @@
 [package]
 name = "muninn-index"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 
 [[bin]]
@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 muninn-core = { path = "../core" }
-sqlx = { workspace = true }
+tokio-postgres = { workspace = true }
 uuid = { workspace = true }
 ignore = "0.4"
 tokio = { workspace = true }

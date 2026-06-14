@@ -3,9 +3,9 @@ use muninn_core::{
     config::{self, GlobalConfig, RepoConfig},
     db, store,
 };
-use sqlx::{PgPool, Row};
 use std::io::Write as _;
 use std::path::Path;
+use tokio_postgres::Client;
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager", version)]
@@ -210,7 +210,7 @@ fn edit_toml_in_temp(
 /// then release the lock. Reads the effective config from the repo's
 /// `.muninn.toml` on disk (caller must have written it already).
 async fn run_foreground_index(
-    pool: &PgPool,
+    client: &Client,
     cfg: &GlobalConfig,
     repo_path: &Path,
 ) -> anyhow::Result<()> {
@@ -226,7 +226,7 @@ async fn run_foreground_index(
         std::sync::Arc::from(muninn_core::embeddings::make_backend(&eff.embeddings));
     let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
 
-    let repo = store::get_repo_by_path(pool, &repo_path.to_string_lossy())
+    let repo = store::get_repo_by_path(client, &repo_path.to_string_lossy())
         .await?
         .ok_or_else(|| anyhow::anyhow!("repo not found in database"))?;
 
@@ -245,23 +245,23 @@ async fn run_foreground_index(
     // it releases. No fixed timeout: a dead holder releases the lock when its
     // session ends. The returned connection holds the lock for the index's
     // duration. Spec: Muninn.AdvisoryLock.
-    let mut lock_conn = match store::try_lock(pool, repo.id).await? {
+    let lock_conn = match store::try_lock(&cfg.database, repo.id).await? {
         Some(conn) => conn,
         None => {
             print!("Index in progress; waiting for the lock…");
             std::io::stdout().flush()?;
-            store::request_preempt(pool, repo.id).await?;
-            let conn = store::lock_blocking(pool, repo.id).await?;
+            store::request_preempt(client, repo.id).await?;
+            let conn = store::lock_blocking(&cfg.database, repo.id).await?;
             println!(" acquired.");
             conn
         }
     };
-    store::clear_preempt(pool, repo.id).await?;
+    store::clear_preempt(client, repo.id).await?;
 
     // Mark the index owed before doing any work, so an interruption (Ctrl-C,
     // crash, or the advisory lock auto-releasing on a dropped connection) leaves
     // the repo needing a reindex rather than pointing at a half-rebuilt index.
-    store::mark_unindexed(pool, repo.id).await?;
+    store::mark_unindexed(client, repo.id).await?;
 
     println!(
         "Indexing {} ({} dims, {} backend)…",
@@ -280,7 +280,7 @@ async fn run_foreground_index(
     // Spec: Muninn.IndexFsm.interrupt.
     let index_result = tokio::select! {
         r = muninn_core::pipeline::index_repo(
-            pool,
+            client,
             repo.id,
             repo_path,
             embedder,
@@ -316,7 +316,7 @@ async fn run_foreground_index(
         }
     };
 
-    if let Err(e) = store::unlock(&mut lock_conn, repo.id).await {
+    if let Err(e) = store::unlock(&lock_conn, repo.id).await {
         eprintln!("warning: advisory unlock failed: {e}");
     }
     let (outcome, skips) = index_result?;
@@ -335,7 +335,7 @@ async fn run_foreground_index(
         muninn_core::types::BatchOutcome::SomeSucceeded => " (see skipped files above)",
     };
     println!("Done in {:.1}s.{note}", started.elapsed().as_secs_f64());
-    store::notify_repos_changed(pool).await?;
+    store::notify_repos_changed(client).await?;
 
     Ok(())
 }
@@ -387,17 +387,21 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
     println!("Updated {}", path.display());
 
     let cfg = GlobalConfig::from_toml_str(&new)?;
-    let pool = db::connect(&cfg.database).await?;
-    db::run_migrations(&pool).await?;
+    let mut client = db::connect(&cfg.database).await?;
+    db::run_migrations(&mut client).await?;
     Ok(())
 }
 
 /// `config <op> --repo <path>`: edits a repo's `.muninn.toml`, then reindexes in
 /// the foreground if the content changed or the index is owed.
-async fn handle_repo_config(pool: &PgPool, cfg: &GlobalConfig, op: ConfigOp) -> anyhow::Result<()> {
+async fn handle_repo_config(
+    client: &Client,
+    cfg: &GlobalConfig,
+    op: ConfigOp,
+) -> anyhow::Result<()> {
     let repo_path = match op.scope().repo.as_deref() {
         Some(p) => muninn_core::repo_resolver::resolve_path(p)?,
-        None => unreachable!("global scope handled before pool load"),
+        None => unreachable!("global scope handled before client load"),
     };
     let toml_path = repo_path.join(RepoConfig::FILE_NAME);
 
@@ -422,7 +426,7 @@ async fn handle_repo_config(pool: &PgPool, cfg: &GlobalConfig, op: ConfigOp) -> 
         return Ok(());
     }
 
-    let repo = store::get_repo_by_path(pool, &repo_path.to_string_lossy())
+    let repo = store::get_repo_by_path(client, &repo_path.to_string_lossy())
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -458,10 +462,11 @@ async fn handle_repo_config(pool: &PgPool, cfg: &GlobalConfig, op: ConfigOp) -> 
         let rc = RepoConfig::from_toml_str(&new)?;
         let eff = config::EffectiveConfig::merge(cfg, &rc, &dir_name);
         if eff.repo_name != repo.name {
-            sqlx::query("UPDATE repos SET name = $1 WHERE id = $2")
-                .bind(&eff.repo_name)
-                .bind(repo.id)
-                .execute(pool)
+            client
+                .execute(
+                    "UPDATE repos SET name = $1 WHERE id = $2",
+                    &[&eff.repo_name, &repo.id],
+                )
                 .await?;
             println!("Renamed: {} → {}", repo.name, eff.repo_name);
         }
@@ -472,10 +477,10 @@ async fn handle_repo_config(pool: &PgPool, cfg: &GlobalConfig, op: ConfigOp) -> 
     // OR the index is owed (indexed_at NULL). Spec: Muninn.IndexFsm.configureAction.
     if changed {
         println!("Reindexing…");
-        run_foreground_index(pool, cfg, &repo_path).await?;
+        run_foreground_index(client, cfg, &repo_path).await?;
     } else if repo.indexed_at.is_none() {
         println!("Config unchanged, but the index is incomplete — reindexing…");
-        run_foreground_index(pool, cfg, &repo_path).await?;
+        run_foreground_index(client, cfg, &repo_path).await?;
     } else {
         println!("No changes; index is up to date.");
     }
@@ -497,20 +502,22 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = GlobalConfig::load()?;
-    let pool = db::connect(&cfg.database).await?;
+    let client = db::connect(&cfg.database).await?;
     // Self-apply migrations so any command works against a DB that hasn't been
     // migrated yet (e.g. right after a binary upgrade). Idempotent.
-    db::run_migrations(&pool).await?;
+    let mut migrate_client = db::connect(&cfg.database).await?;
+    db::run_migrations(&mut migrate_client).await?;
+    drop(migrate_client);
 
     match cli.command {
-        Commands::Config { op } => handle_repo_config(&pool, &cfg, op).await?,
+        Commands::Config { op } => handle_repo_config(&client, &cfg, op).await?,
 
         Commands::Add { path, set, no_index } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
             anyhow::ensure!(repo_path.exists(), "path does not exist: {}", repo_path.display());
             anyhow::ensure!(repo_path.is_dir(), "path is not a directory: {}", repo_path.display());
             anyhow::ensure!(
-                store::get_repo_by_path(&pool, &repo_path.to_string_lossy()).await?.is_none(),
+                store::get_repo_by_path(&client, &repo_path.to_string_lossy()).await?.is_none(),
                 "repo '{}' is already registered. Use `muninn config set --repo {} k=v` to change it.",
                 repo_path.display(),
                 path
@@ -524,9 +531,6 @@ async fn main() -> anyhow::Result<()> {
             let toml_path = repo_path.join(RepoConfig::FILE_NAME);
             let template = RepoConfig::template_content(&dir_name);
 
-            // `add` is non-interactive: write the template with any --set overrides
-            // applied (no --set → defaults, inheriting global). Edit later with
-            // `muninn config edit --repo <path>`.
             let content = apply_assigns(&template, &set)?;
             RepoConfig::from_toml_str(&content)?.validate()?;
 
@@ -536,7 +540,8 @@ async fn main() -> anyhow::Result<()> {
             let rc = RepoConfig::from_toml_str(&content)?;
             let eff = config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
-            store::register_repo(&pool, &repo_path.to_string_lossy(), &eff.repo_name, repo_dim).await?;
+            store::register_repo(&client, &repo_path.to_string_lossy(), &eff.repo_name, repo_dim)
+                .await?;
 
             if no_index {
                 println!(
@@ -544,37 +549,39 @@ async fn main() -> anyhow::Result<()> {
                     path
                 );
             } else {
-                run_foreground_index(&pool, &cfg, &repo_path).await?;
+                run_foreground_index(&client, &cfg, &repo_path).await?;
             }
         }
 
         Commands::Reindex { path, all, detach } => {
             if all {
                 // Fleet operation: always detached. Visibility via `muninn status`.
-                sqlx::query("UPDATE repos SET indexed_at = NULL")
-                    .execute(&pool)
+                client
+                    .execute("UPDATE repos SET indexed_at = NULL", &[])
                     .await?;
-                store::notify_repos_changed(&pool).await?;
+                store::notify_repos_changed(&client).await?;
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
                 anyhow::ensure!(
-                    store::get_repo_by_path(&pool, &resolved.to_string_lossy()).await?.is_some(),
+                    store::get_repo_by_path(&client, &resolved.to_string_lossy()).await?.is_some(),
                     "no registered repo found at '{}' — run `muninn status` to see registered repos",
                     resolved.display()
                 );
                 if detach {
-                    sqlx::query("UPDATE repos SET indexed_at = NULL WHERE path = $1")
-                        .bind(resolved.to_string_lossy().as_ref())
-                        .execute(&pool)
+                    client
+                        .execute(
+                            "UPDATE repos SET indexed_at = NULL WHERE path = $1",
+                            &[&resolved.to_string_lossy().as_ref()],
+                        )
                         .await?;
-                    store::notify_repos_changed(&pool).await?;
+                    store::notify_repos_changed(&client).await?;
                     println!(
                         "Marked {} for reindex. The daemon will pick it up shortly.",
                         resolved.display()
                     );
                 } else {
-                    run_foreground_index(&pool, &cfg, &resolved).await?;
+                    run_foreground_index(&client, &cfg, &resolved).await?;
                 }
             } else {
                 eprintln!("Specify a path or --all");
@@ -584,16 +591,12 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Pause { path } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+            let repo = store::get_repo_by_path(&client, &repo_path.to_string_lossy())
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
-            store::set_paused(&pool, repo.id, true).await?;
-            // Preempt any in-flight pass so indexing stops now, not just on the
-            // next daemon cycle — otherwise `pause` reports "stopped" while a
-            // running pass keeps holding the advisory lock. The flag is cleared
-            // on resume (or by a remove / foreground index that takes the lock).
-            store::request_preempt(&pool, repo.id).await?;
-            store::notify_repos_changed(&pool).await?;
+            store::set_paused(&client, repo.id, true).await?;
+            store::request_preempt(&client, repo.id).await?;
+            store::notify_repos_changed(&client).await?;
             println!(
                 "Paused {}. The daemon will stop indexing it; index data is kept.",
                 repo_path.display()
@@ -602,21 +605,19 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Resume { path } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+            let repo = store::get_repo_by_path(&client, &repo_path.to_string_lossy())
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
-            store::set_paused(&pool, repo.id, false).await?;
-            // Clear any preempt request left by `pause`, so the resumed repo
-            // isn't told to yield the instant the daemon tries to reindex it.
-            store::clear_preempt(&pool, repo.id).await?;
-            store::notify_repos_changed(&pool).await?;
+            store::set_paused(&client, repo.id, false).await?;
+            store::clear_preempt(&client, repo.id).await?;
+            store::notify_repos_changed(&client).await?;
             println!("Resumed {}.", repo_path.display());
         }
 
         Commands::Remove { path, yes } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
             let toml_path = repo_path.join(RepoConfig::FILE_NAME);
-            let repo = store::get_repo_by_path(&pool, &repo_path.to_string_lossy()).await?;
+            let repo = store::get_repo_by_path(&client, &repo_path.to_string_lossy()).await?;
 
             if !toml_path.exists() && repo.is_none() {
                 println!(
@@ -628,25 +629,21 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // UnregisterSafe: hold the advisory lock across removal so no index
-            // runs concurrently and none can start. If the daemon (or another
-            // CLI) currently holds it, preempt the holder and block until it
-            // yields — the same priority pattern the foreground index uses —
-            // rather than refusing. A dead holder releases the lock when its
-            // session ends, so there is no timeout.
+            // runs concurrently and none can start.
             let lock_conn = match &repo {
                 Some(r) => {
-                    let conn = match store::try_lock(&pool, r.id).await? {
+                    let conn = match store::try_lock(&cfg.database, r.id).await? {
                         Some(conn) => conn,
                         None => {
                             print!("Index in progress; waiting for the lock…");
                             std::io::stdout().flush()?;
-                            store::request_preempt(&pool, r.id).await?;
-                            let conn = store::lock_blocking(&pool, r.id).await?;
+                            store::request_preempt(&client, r.id).await?;
+                            let conn = store::lock_blocking(&cfg.database, r.id).await?;
                             println!(" acquired.");
                             conn
                         }
                     };
-                    store::clear_preempt(&pool, r.id).await?;
+                    store::clear_preempt(&client, r.id).await?;
                     Some((conn, r.id))
                 }
                 None => None,
@@ -676,23 +673,23 @@ async fn main() -> anyhow::Result<()> {
                     std::fs::remove_file(&toml_path)?;
                 }
                 if let Some(ref r) = repo {
-                    store::delete_repo(&pool, r.id).await?;
+                    store::delete_repo(&client, r.id).await?;
                     println!("Removed index data for: {}", repo_path.display());
                 }
                 println!("Removed: {}", repo_path.display());
-                store::notify_repos_changed(&pool).await?;
+                store::notify_repos_changed(&client).await?;
             } else {
                 println!("Aborted.");
             }
 
-            if let Some((mut conn, id)) = lock_conn {
-                let _ = store::unlock(&mut conn, id).await;
+            if let Some((conn, id)) = lock_conn {
+                let _ = store::unlock(&conn, id).await;
             }
         }
 
         Commands::Status { path } => match path {
             None => {
-                let repos = store::list_repos(&pool).await?;
+                let repos = store::list_repos(&client).await?;
                 println!("Registered repos: {}", repos.len());
                 for r in &repos {
                     let status = r
@@ -711,9 +708,11 @@ async fn main() -> anyhow::Result<()> {
             }
             Some(p) => {
                 let repo_path = muninn_core::repo_resolver::resolve_path(&p)?;
-                let r = store::get_repo_by_path(&pool, &repo_path.to_string_lossy())
+                let r = store::get_repo_by_path(&client, &repo_path.to_string_lossy())
                     .await?
-                    .ok_or_else(|| anyhow::anyhow!("no registered repo at {}", repo_path.display()))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no registered repo at {}", repo_path.display())
+                    })?;
                 println!("Repo:         {}", r.name);
                 println!("Path:         {}", r.path);
                 println!(
@@ -729,26 +728,27 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Usage { days } => {
             anyhow::ensure!(days >= 0, "days must be non-negative");
-            let total = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM mcp_usage
-                 WHERE ts >= now() - ($1::int * interval '1 day')",
-            )
-            .bind(days)
-            .fetch_one(&pool)
-            .await?;
+            let total: i64 = client
+                .query_one(
+                    "SELECT COUNT(*) FROM mcp_usage \
+                     WHERE ts >= now() - ($1::int * interval '1 day')",
+                    &[&days],
+                )
+                .await?
+                .get(0);
 
             println!("MCP usage (last {days} days): {total}");
 
-            let rows = sqlx::query(
-                "SELECT tool, COUNT(*) AS count
-                 FROM mcp_usage
-                 WHERE ts >= now() - ($1::int * interval '1 day')
-                 GROUP BY tool
-                 ORDER BY count DESC",
-            )
-            .bind(days)
-            .fetch_all(&pool)
-            .await?;
+            let rows = client
+                .query(
+                    "SELECT tool, COUNT(*) AS count \
+                     FROM mcp_usage \
+                     WHERE ts >= now() - ($1::int * interval '1 day') \
+                     GROUP BY tool \
+                     ORDER BY count DESC",
+                    &[&days],
+                )
+                .await?;
 
             for row in rows {
                 let tool: String = row.try_get("tool")?;
@@ -795,9 +795,9 @@ async fn handle_init(set: &[String]) -> anyhow::Result<()> {
     }
 
     let cfg = GlobalConfig::from_toml_str(&content)?;
-    let pool = db::connect(&cfg.database).await?;
+    let mut client = db::connect(&cfg.database).await?;
     println!("Applying database migrations…");
-    db::run_migrations(&pool).await?;
+    db::run_migrations(&mut client).await?;
     println!("Done. Run `muninn add <repo-path>` to index a repository.");
     Ok(())
 }

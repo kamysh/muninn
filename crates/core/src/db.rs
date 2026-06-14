@@ -1,150 +1,211 @@
-use sqlx::{PgPool, postgres::{PgConnectOptions, PgListener, PgPoolOptions, PgSslMode}};
 use anyhow::Result;
-use std::str::FromStr;
+use include_dir::{include_dir, Dir};
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_postgres::{AsyncMessage, Client, NoTls};
 
 use crate::config::{DatabaseConfig, SslMode};
 
 // search_path for all muninn connections:
 //   public     — default schema; unqualified table creates land here
 //   ag_catalog — needed for AGE operator resolution (agtype @>, etc.)
-//
-// Operator resolution requires ag_catalog to be in the path but NOT necessarily first.
-// public must come first so that CREATE TABLE without schema qualification targets public,
-// not ag_catalog (where muninn has no CREATE privilege).
 const SEARCH_PATH: &str = "public,ag_catalog";
 
-/// Connect using the given config.  Password is never stored in config —
-/// sqlx reads it from ~/.pgpass after parsing the URL.
-pub async fn connect(cfg: &DatabaseConfig) -> Result<PgPool> {
+// Embed the entire migrations directory at compile time.
+// include_dir! embeds all files recursively; we iterate .files() sorted by name.
+static MIGRATIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../migrations");
+
+const RECEIPT_JSON: &str =
+    include_str!("../../../migrations/.kryzhen-import-receipt.json");
+
+fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
+    // Collect .sql files sorted by name (001_, 002_, … ordering).
+    let mut files: Vec<_> = MIGRATIONS_DIR
+        .files()
+        .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("sql"))
+        .collect();
+    files.sort_by_key(|f| f.path());
+
+    let mut all = Vec::new();
+    for file in files {
+        let label = file
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown.sql");
+        let text = file
+            .contents_utf8()
+            .ok_or_else(|| anyhow::anyhow!("migration {label} is not valid UTF-8"))?;
+        let blocks = kryzhen::parser::parse_file(text, label)?;
+        all.extend(kryzhen::file::apply_implicit_deps(blocks));
+    }
+    Ok(all)
+}
+
+/// Read password for (host, port, dbname, user) from ~/.pgpass.
+fn pgpass_lookup(host: &str, port: u16, dbname: &str, user: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::Path::new(&home).join(".pgpass");
+    let content = std::fs::read_to_string(path).ok()?;
+    let port_s = port.to_string();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(5, ':').collect();
+        if parts.len() != 5 {
+            continue;
+        }
+        let m = |pat: &str, val: &str| pat == "*" || pat == val;
+        if m(parts[0], host) && m(parts[1], &port_s) && m(parts[2], dbname) && m(parts[3], user)
+        {
+            return Some(parts[4].to_owned());
+        }
+    }
+    None
+}
+
+fn make_pg_config(cfg: &DatabaseConfig) -> tokio_postgres::Config {
+    let mut c = tokio_postgres::Config::new();
+    c.host(&cfg.host);
+    c.port(cfg.port);
+    c.user(&cfg.user);
+    c.dbname(&cfg.dbname);
+    c.options(format!("-c search_path={SEARCH_PATH}"));
+    if let Some(secs) = cfg.connect_timeout {
+        c.connect_timeout(std::time::Duration::from_secs(secs));
+    }
+    if let Some(pw) = pgpass_lookup(&cfg.host, cfg.port, &cfg.dbname, &cfg.user) {
+        c.password(pw);
+    }
+    c
+}
+
+async fn connect_with_config(
+    pg_cfg: tokio_postgres::Config,
+    ssl_mode: Option<SslMode>,
+    ssl_root_cert: Option<&str>,
+    ssl_client_cert: Option<&str>,
+    ssl_client_key: Option<&str>,
+) -> Result<Client> {
+    match ssl_mode {
+        None | Some(SslMode::Disable) | Some(SslMode::Allow) | Some(SslMode::Prefer) => {
+            let (client, conn) = pg_cfg.connect(NoTls).await?;
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    tracing::warn!("db connection error: {e}");
+                }
+            });
+            Ok(client)
+        }
+        Some(mode) => {
+            let mut builder = TlsConnector::builder();
+            if matches!(mode, SslMode::Require) {
+                builder.danger_accept_invalid_certs(true);
+            }
+            if let Some(path) = ssl_root_cert {
+                let pem = std::fs::read(path)?;
+                let cert = native_tls::Certificate::from_pem(&pem)?;
+                builder.add_root_certificate(cert);
+            }
+            if let (Some(cert_path), Some(key_path)) = (ssl_client_cert, ssl_client_key) {
+                let cert_pem = std::fs::read(cert_path)?;
+                let key_pem = std::fs::read(key_path)?;
+                let identity = native_tls::Identity::from_pkcs8(&cert_pem, &key_pem)?;
+                builder.identity(identity);
+            }
+            let tls = MakeTlsConnector::new(builder.build()?);
+            let (client, conn) = pg_cfg.connect(tls).await?;
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    tracing::warn!("db connection error: {e}");
+                }
+            });
+            Ok(client)
+        }
+    }
+}
+
+/// Connect using the given config.
+pub async fn connect(cfg: &DatabaseConfig) -> Result<Client> {
     connect_internal(cfg, None).await
 }
 
 /// Connect with an explicit application name shown in pg_stat_activity.
-/// The provided name takes priority over `cfg.application_name`.
-pub async fn connect_with_app_name(cfg: &DatabaseConfig, app_name: &str) -> Result<PgPool> {
+pub async fn connect_with_app_name(cfg: &DatabaseConfig, app_name: &str) -> Result<Client> {
     connect_internal(cfg, Some(app_name)).await
 }
 
-async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>) -> Result<PgPool> {
-    // Build PgConnectOptions.  If dsn_override is set, use it for host/port/user/dbname;
-    // otherwise build a properly-encoded URL so that ~/.pgpass lookup works correctly
-    // (PgConnectOptions::from_str applies pgpass after parsing, unlike ::new() which
-    // runs it at construction time before builder values take effect).
-    let mut opts = if let Some(ref dsn) = cfg.dsn_override {
-        PgConnectOptions::from_str(dsn)?
-    } else {
-        let url = pg_url(cfg)?;
-        let mut o = PgConnectOptions::from_str(&url)?;
-
-        if let Some(mode) = cfg.ssl_mode {
-            o = o.ssl_mode(to_pg_ssl_mode(mode));
-        }
-        if let Some(ref path) = cfg.ssl_root_cert {
-            o = o.ssl_root_cert(path);
-        }
-        if let Some(ref path) = cfg.ssl_client_cert {
-            o = o.ssl_client_cert(path);
-        }
-        if let Some(ref path) = cfg.ssl_client_key {
-            o = o.ssl_client_key(path);
-        }
-
-        o = o.statement_cache_capacity(1024);
-        o
-    };
-
-    opts = opts.options([("search_path", SEARCH_PATH)]);
-
+async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>) -> Result<Client> {
+    let mut pg_cfg = make_pg_config(cfg);
     let app_name = override_app_name.or(cfg.application_name.as_deref());
     if let Some(name) = app_name {
-        opts = opts.application_name(name);
+        pg_cfg.application_name(name);
     }
-
-    let max_connections = cfg.max_connections.unwrap_or(10);
-    let mut pool_opts = PgPoolOptions::new().max_connections(max_connections);
-    if let Some(secs) = cfg.connect_timeout {
-        pool_opts = pool_opts.acquire_timeout(std::time::Duration::from_secs(secs));
-    }
-
-    Ok(pool_opts.connect_with(opts).await?)
+    connect_with_config(
+        pg_cfg,
+        cfg.ssl_mode,
+        cfg.ssl_root_cert.as_deref(),
+        cfg.ssl_client_cert.as_deref(),
+        cfg.ssl_client_key.as_deref(),
+    )
+    .await
 }
 
-/// Apply all pending migrations embedded at compile time.
-/// Safe to call repeatedly — sqlx tracks applied migrations in `_sqlx_migrations`.
-pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::migrate!("../../migrations").run(pool).await?;
+/// Apply all pending migrations (embedded at compile time via include_dir!).
+/// Safe to call repeatedly — kryzhen tracks applied migrations in its own table.
+/// If `_sqlx_migrations` still exists, runs sqlx_import first to transfer the
+/// history into kryzhen's table.
+pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
+    let migrations = embedded_migrations()?;
+    let receipt: kryzhen::sqlx_import::Receipt = serde_json::from_str(RECEIPT_JSON)?;
+    kryzhen::sqlx_import::import(client, &receipt, &migrations)
+        .await
+        .map_err(anyhow::Error::from)?;
+    kryzhen::migrate(client, &migrations, false).await?;
     Ok(())
 }
 
-/// Create a `PgListener` connected to the given database.
-/// Uses a dedicated internal pool (max 2 connections) so the caller does not need to
-/// manage a separate pool — PgListener clones the pool Arc internally.
-pub async fn connect_listener(cfg: &DatabaseConfig) -> Result<PgListener> {
-    let opts = pg_connect_options(cfg)?;
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect_with(opts)
-        .await?;
-    let listener = PgListener::connect_with(&pool).await?;
-    Ok(listener)
-    // `pool` goes out of scope here, but PgListener clones the Arc<Pool> internally
-    // and keeps it alive as long as the listener is alive.
+/// Open a dedicated connection for LISTEN/NOTIFY.
+/// Returns the `Client` (used for the LISTEN command) and a channel that
+/// delivers notifications as they arrive. The connection is driven on a
+/// spawned task for its lifetime.
+pub async fn connect_listener(
+    cfg: &DatabaseConfig,
+) -> Result<(Client, mpsc::UnboundedReceiver<tokio_postgres::Notification>)> {
+    let mut pg_cfg = make_pg_config(cfg);
+    pg_cfg.application_name("muninn-index-listener");
+
+    let (client, mut conn) = pg_cfg.connect(NoTls).await?;
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            match std::future::poll_fn(|cx| conn.poll_message(cx)).await {
+                Some(Ok(AsyncMessage::Notification(n))) => {
+                    let _ = tx.send(n);
+                }
+                Some(Ok(_)) => {}
+                Some(Err(e)) => {
+                    tracing::warn!("listener connection error: {e}");
+                    break;
+                }
+                None => break,
+            }
+        }
+    });
+
+    Ok((client, rx))
 }
 
-/// Build a `PgConnectOptions` suitable for use with `PgListener`.
-/// PgListener requires its own dedicated connection (cannot share the pool).
-pub fn pg_connect_options(cfg: &DatabaseConfig) -> Result<PgConnectOptions> {
-    let mut opts = if let Some(ref dsn) = cfg.dsn_override {
-        PgConnectOptions::from_str(dsn)?
-    } else {
-        let url = pg_url(cfg)?;
-        let mut o = PgConnectOptions::from_str(&url)?;
-        if let Some(mode) = cfg.ssl_mode {
-            o = o.ssl_mode(to_pg_ssl_mode(mode));
-        }
-        if let Some(ref path) = cfg.ssl_root_cert {
-            o = o.ssl_root_cert(path);
-        }
-        if let Some(ref path) = cfg.ssl_client_cert {
-            o = o.ssl_client_cert(path);
-        }
-        if let Some(ref path) = cfg.ssl_client_key {
-            o = o.ssl_client_key(path);
-        }
-        o
-    };
-    opts = opts.options([("search_path", SEARCH_PATH)]);
-    if let Some(name) = cfg.application_name.as_deref() {
-        opts = opts.application_name(name);
-    }
-    Ok(opts)
-}
-
-/// Build a properly percent-encoded postgres:// URL from config fields.
-/// No password: sqlx reads it from ~/.pgpass after URL parsing.
-fn pg_url(cfg: &DatabaseConfig) -> Result<String> {
-    let mut url = url::Url::parse("postgres://placeholder/placeholder")
-        .expect("static URL is valid");
-    url.set_username(&cfg.user)
-        .map_err(|()| anyhow::anyhow!("invalid postgres username: {:?}", cfg.user))?;
-    url.set_host(Some(&cfg.host))
-        .map_err(|e| anyhow::anyhow!("invalid postgres host {:?}: {e}", cfg.host))?;
-    url.set_port(Some(cfg.port))
-        .map_err(|()| anyhow::anyhow!("invalid postgres port: {}", cfg.port))?;
-    url.path_segments_mut()
-        .map_err(|()| anyhow::anyhow!("cannot build URL path"))?
-        .clear()
-        .push(&cfg.dbname);
-    Ok(url.to_string())
-}
-
-fn to_pg_ssl_mode(mode: SslMode) -> PgSslMode {
-    match mode {
-        SslMode::Disable    => PgSslMode::Disable,
-        SslMode::Allow      => PgSslMode::Allow,
-        SslMode::Prefer     => PgSslMode::Prefer,
-        SslMode::Require    => PgSslMode::Require,
-        SslMode::VerifyCa   => PgSslMode::VerifyCa,
-        SslMode::VerifyFull => PgSslMode::VerifyFull,
-    }
+/// Open a dedicated `Client` for holding a PostgreSQL advisory lock.
+/// The lock lives as long as the returned `Arc<Client>` has references.
+/// When all references drop, the TCP connection closes and PostgreSQL frees
+/// the lock automatically.
+pub async fn connect_for_lock(cfg: &DatabaseConfig) -> Result<Arc<Client>> {
+    let client = connect_internal(cfg, Some("muninn-advisory-lock")).await?;
+    Ok(Arc::new(client))
 }

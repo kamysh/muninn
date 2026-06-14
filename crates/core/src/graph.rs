@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use tokio_postgres::Client;
 use uuid::Uuid;
 use anyhow::Result;
 use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
@@ -15,42 +15,38 @@ use crate::store::graph_name;
 // Spec: Muninn.Storage (IsolatedGraph + timeout addendum).
 const GRAPH_STATEMENT_TIMEOUT_SECS: u64 = 60;
 
-fn is_statement_timeout(err: &sqlx::Error) -> bool {
-    if let sqlx::Error::Database(db_err) = err {
-        db_err.code().as_deref() == Some("57014")
-    } else {
-        false
-    }
+fn is_statement_timeout(err: &tokio_postgres::Error) -> bool {
+    // SQLSTATE 57014 = query_canceled (covers statement_timeout and lock_timeout)
+    err.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
 }
 
 async fn exec_cypher_with_timeout(
-    pool: &PgPool,
+    client: &Client,
     gname: &str,
     cypher: &str,
     params: &str,
     op: &'static str,
     context: &str,
 ) -> Result<()> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(&format!(
-        "SET LOCAL statement_timeout = '{}s'",
-        GRAPH_STATEMENT_TIMEOUT_SECS
-    ))
-    .execute(&mut *tx)
-    .await?;
-    let result = sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-        .bind(gname)
-        .bind(cypher)
-        .bind(params)
-        .execute(&mut *tx)
+    // Set a session-level statement timeout, execute, then reset.
+    // Using SET (not SET LOCAL) so it works outside a transaction.
+    client
+        .execute(
+            &format!("SET statement_timeout = '{GRAPH_STATEMENT_TIMEOUT_SECS}s'"),
+            &[],
+        )
+        .await?;
+    let result = client
+        .execute(
+            "SELECT * FROM muninn_cypher($1, $2, $3)",
+            &[&gname, &cypher, &params],
+        )
         .await;
+    // Reset to default regardless of outcome.
+    let _ = client.execute("SET statement_timeout = 0", &[]).await;
     match result {
-        Ok(_) => {
-            tx.commit().await?;
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(e) if is_statement_timeout(&e) => {
-            let _ = tx.rollback().await;
             tracing::warn!(
                 op = op,
                 context = context,
@@ -92,19 +88,9 @@ fn relation_label(rel: &StructuralRelation) -> &'static str {
 }
 
 /// Batch-upsert symbol nodes into the per-repo AGE graph using one
-/// `UNWIND … MERGE` per distinct node label (≤4 round-trips total) instead of
-/// one round-trip per symbol. Each AGE Cypher call costs ~4–5 ms, so for a
-/// dense code file this turns hundreds of round-trips into a handful.
-///
-/// IsolatedGraph is preserved by the caller's ordering, not a per-node check:
-/// `index_file` persists all chunks (with `?` early-return on any failure)
-/// before calling this, so every `chunk_id` here already exists in the store.
-///
-/// SafeSymbolUpsert: `name`/`file_path` are user-supplied and travel inside the
-/// `$rows` params list (bound as agtype, never interpolated). The node label is
-/// a SymbolKind enum string (hardcoded), so it is safe to interpolate.
+/// `UNWIND … MERGE` per distinct node label (≤4 round-trips total).
 pub async fn upsert_symbol_nodes(
-    pool: &PgPool,
+    client: &Client,
     repo_id: Uuid,
     nodes: &[SymbolNodeInput],
 ) -> Result<()> {
@@ -138,7 +124,7 @@ pub async fn upsert_symbol_nodes(
             label = label,
         );
         exec_cypher_with_timeout(
-            pool,
+            client,
             &gname,
             &cypher,
             &params.to_string(),
@@ -152,9 +138,7 @@ pub async fn upsert_symbol_nodes(
 
 /// Batch-upsert directed edges into the per-repo graph using one
 /// `UNWIND … MATCH … MERGE` per distinct relation type (≤4 round-trips).
-/// `from`/`to` chunk-id UUIDs travel inside the `$rows` params list; the
-/// relation type is a StructuralRelation enum string (hardcoded).
-pub async fn upsert_edges(pool: &PgPool, repo_id: Uuid, edges: &[StructuralEdge]) -> Result<()> {
+pub async fn upsert_edges(client: &Client, repo_id: Uuid, edges: &[StructuralEdge]) -> Result<()> {
     if edges.is_empty() {
         return Ok(());
     }
@@ -178,7 +162,7 @@ pub async fn upsert_edges(pool: &PgPool, repo_id: Uuid, edges: &[StructuralEdge]
             rel = rel,
         );
         exec_cypher_with_timeout(
-            pool,
+            client,
             &gname,
             &cypher,
             &params.to_string(),
@@ -191,22 +175,13 @@ pub async fn upsert_edges(pool: &PgPool, repo_id: Uuid, edges: &[StructuralEdge]
 }
 
 /// Delete all symbol nodes (and their incident edges) for a file from the
-/// per-repo graph. `DETACH DELETE` removes a node together with its
-/// relationships, so callers don't need to delete edges separately.
-///
-/// Called before re-indexing a file — its chunk_ids are regenerated each index,
-/// so the MERGE-by-chunk_id in `upsert_symbol_nodes` would otherwise create fresh
-/// nodes and leave the previous ones dangling — and when a file is removed
-/// entirely (deleted on disk or newly matched by an `[index] exclude` glob).
-///
-/// `file_path` is user-supplied and is bound via the params JSON, never
-/// interpolated (same discipline as the other graph writes).
-pub async fn delete_file_symbols(pool: &PgPool, repo_id: Uuid, file_path: &str) -> Result<()> {
+/// per-repo graph.
+pub async fn delete_file_symbols(client: &Client, repo_id: Uuid, file_path: &str) -> Result<()> {
     let gname = graph_name(repo_id);
     let params = serde_json::json!({ "sym_file_path": file_path });
     let cypher = r#"MATCH (n {file_path: $sym_file_path}) DETACH DELETE n"#;
     exec_cypher_with_timeout(
-        pool,
+        client,
         &gname,
         cypher,
         &params.to_string(),
@@ -219,7 +194,7 @@ pub async fn delete_file_symbols(pool: &PgPool, repo_id: Uuid, file_path: &str) 
 
 /// Query symbols related to a given symbol name by relation type and direction.
 pub async fn query_related(
-    pool: &PgPool,
+    client: &Client,
     repo_id: Uuid,
     symbol_name: &str,
     relation: StructuralRelation,
@@ -234,9 +209,6 @@ pub async fn query_related(
         StructuralRelation::InheritsFrom => "INHERITS_FROM",
     };
 
-    // symbol_name is user-supplied — bound via params JSON, never interpolated.
-    // edge_type comes from the StructuralRelation enum (hardcoded strings).
-    // Return all fields as a single map so muninn_cypher's SETOF agtype works.
     let params = serde_json::json!({ "sym_name": symbol_name });
 
     let cypher = if incoming {
@@ -255,19 +227,18 @@ pub async fn query_related(
         )
     };
 
-    let rows = sqlx::query("SELECT r::text FROM muninn_cypher($1, $2, $3) AS r")
-        .bind(&gname)
-        .bind(&cypher)
-        .bind(params.to_string())
-        .fetch_all(pool)
+    let rows = client
+        .query(
+            "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
+            &[&gname, &cypher, &params.to_string()],
+        )
         .await?;
 
     let mut symbols = vec![];
     for row in rows {
-        use sqlx::Row;
-        // Cast to text so sqlx can read it; parse as JSON map.
-        let raw: String = row.try_get::<String, _>("r").unwrap_or_default();
-        let map: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        let raw: String = row.try_get(0).unwrap_or_default();
+        let map: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
 
         let name = map.get("name")
             .and_then(|v| v.as_str())
@@ -318,90 +289,82 @@ fn parse_symbol_kind(s: &str) -> SymbolKind {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
     use crate::{config::GlobalConfig, db};
 
-    async fn test_pool() -> PgPool {
-        // Load from the local config.toml in the muninn repo root.
-        // This file is not committed; developers copy it from ~/.config/muninn/config.toml.
+    async fn test_client() -> tokio_postgres::Client {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = manifest.join("../../config.toml");
         let cfg = GlobalConfig::load_from(&config_path).expect("load local config.toml");
         db::connect(&cfg.database).await.expect("connect to muninn db")
     }
 
-    /// Verifies that sqlx .execute() works with muninn_cypher for write operations
-    /// (MERGE statements that return no rows). This is the path used by
-    /// upsert_symbol_node and upsert_edge.
     #[tokio::test]
     #[ignore = "requires live muninn database at localhost:5450"]
     async fn test_write_via_execute() {
-        let pool = test_pool().await;
+        let client = test_client().await;
         let gname = "code_graph_63ca78b63feb4129841eb8c3842f8aec";
         let params = serde_json::json!({"sym_name": "write_test", "sym_file": "/test.rs"});
 
-        // MERGE (write) — returns no rows; .execute() must not error
-        sqlx::query("SELECT * FROM muninn_cypher($1, $2, $3)")
-            .bind(gname)
-            .bind("MERGE (n:Function {chunk_id: 'write-test-uuid'}) SET n.name = $sym_name, n.kind = 'Function', n.file_path = $sym_file, n.start_line = 1, n.end_line = 5")
-            .bind(params.to_string())
-            .execute(&pool)
+        client
+            .execute(
+                "SELECT * FROM muninn_cypher($1, $2, $3)",
+                &[
+                    &gname,
+                    &"MERGE (n:Function {chunk_id: 'write-test-uuid'}) SET n.name = $sym_name, n.kind = 'Function', n.file_path = $sym_file, n.start_line = 1, n.end_line = 5",
+                    &params.to_string(),
+                ],
+            )
             .await
             .expect("MERGE via muninn_cypher should succeed");
 
-        // Verify the node was actually written
-        let rows = sqlx::query("SELECT r::text FROM muninn_cypher($1, $2, $3) AS r")
-            .bind(gname)
-            .bind("MATCH (n {chunk_id: 'write-test-uuid'}) RETURN {name: n.name, kind: n.kind}")
-            .bind("{}")
-            .fetch_all(&pool)
+        let rows = client
+            .query(
+                "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
+                &[
+                    &gname,
+                    &"MATCH (n {chunk_id: 'write-test-uuid'}) RETURN {name: n.name, kind: n.kind}",
+                    &"{}",
+                ],
+            )
             .await
             .expect("read back should succeed");
 
         assert_eq!(rows.len(), 1, "node should have been written");
-
-        use sqlx::Row;
-        let raw: String = rows[0].try_get("r").unwrap();
+        let raw: String = rows[0].try_get(0).unwrap();
         let map: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(map.get("name").and_then(|v| v.as_str()).unwrap_or(""), "write_test");
     }
 
-    /// Verifies that sqlx can read an ag_catalog.agtype map column as serde_json::Value
-    /// and that field extraction works correctly. Uses the test node inserted during
-    /// the muninn_cypher development session.
     #[tokio::test]
     #[ignore = "requires live muninn database at localhost:5450"]
     async fn test_agtype_map_column_readable() {
-        let pool = test_pool().await;
+        let client = test_client().await;
         let gname = "code_graph_63ca78b63feb4129841eb8c3842f8aec";
         let params = serde_json::json!({"sym_name": "test_func"});
 
-        let rows = sqlx::query(
-            "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r"
-        )
-        .bind(gname)
-        .bind("MATCH (n {name: $sym_name}) RETURN {chunk_id: n.chunk_id, name: n.name, file_path: n.file_path, kind: n.kind, start_line: n.start_line, end_line: n.end_line}")
-        .bind(params.to_string())
-        .fetch_all(&pool)
-        .await
-        .expect("query should succeed");
+        let rows = client
+            .query(
+                "SELECT r::text FROM muninn_cypher($1, $2, $3) AS r",
+                &[
+                    &gname,
+                    &"MATCH (n {name: $sym_name}) RETURN {chunk_id: n.chunk_id, name: n.name, file_path: n.file_path, kind: n.kind, start_line: n.start_line, end_line: n.end_line}",
+                    &params.to_string(),
+                ],
+            )
+            .await
+            .expect("query should succeed");
 
         assert_eq!(rows.len(), 1, "should find the test_func node");
-
-        use sqlx::Row;
-        let raw: String = rows[0].try_get::<String, _>("r").expect("r column should be text");
+        let raw: String = rows[0].try_get(0).expect("r column should be text");
         let map: serde_json::Value = serde_json::from_str(&raw).expect("should parse as JSON");
-
         let name = map.get("name")
             .and_then(|v| v.as_str())
             .map(|s| s.trim_matches('"').to_string())
             .unwrap_or_default();
-
-        assert_eq!(name, "test_func", "name field should parse correctly");
-
-        let start_line = map.get("start_line")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        assert_eq!(name, "test_func");
+        let start_line = map.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
         assert_eq!(start_line, 1);
     }
 }

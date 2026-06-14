@@ -1,5 +1,7 @@
--- Knowledge items: manually curated notes and lessons attached to a repo.
--- Distinct from code chunks: not derived from source files, searched independently.
+-- #!migration
+-- name: "knowledge",
+-- description: "Knowledge items: manually curated notes and lessons attached to a repo. Distinct from code chunks: not derived from source files, searched independently.",
+-- requires: "mcp-usage";
 CREATE TABLE IF NOT EXISTS knowledge (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     repo_path     TEXT        NOT NULL,

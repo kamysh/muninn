@@ -1,6 +1,6 @@
 [package]
 name = "muninn-core"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -11,7 +11,11 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
-sqlx = { workspace = true }
+tokio-postgres = { workspace = true }
+postgres-native-tls = { workspace = true }
+native-tls = { workspace = true }
+kryzhen = { workspace = true }
+include_dir = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
@@ -26,6 +30,7 @@ tracing = { workspace = true }
 # runtime, no native ML lib, no ABI/version pinning). `fancy-regex` instead of
 # the default `onig` keeps the tokenizer dependency pure-Rust (no oniguruma C).
 model2vec-rs = { version = "0.2", default-features = false, features = ["hf-hub", "fancy-regex"] }
+pgvector = { version = "0.4.2", features = ["postgres"] }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

@@ -166,7 +166,7 @@ mod tests {
         }
 
         fn prop_similarity_identity_on_valid_input(v: f32) -> quickcheck::TestResult {
-            if v < 0.0 || v > 1.0 || v.is_nan() {
+            if !(0.0..=1.0).contains(&v) || v.is_nan() {
                 return quickcheck::TestResult::discard();
             }
             quickcheck::TestResult::from_bool((Similarity::new(v).value() - v).abs() < f32::EPSILON)

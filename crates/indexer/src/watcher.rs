@@ -1,21 +1,21 @@
-use notify::{Watcher, RecursiveMode, Event, EventKind};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use sqlx::PgPool;
+use tokio_postgres::Client;
 use uuid::Uuid;
 use anyhow::Result;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::types::IndexState;
 use muninn_core::pipeline::{build_excludes, index_file};
 
-// Pool, ids, embedder, debounce, shared state and config knobs — all distinct
+// Client, ids, embedder, debounce, shared state and config knobs — all distinct
 // concerns; bundling them into a struct would not improve clarity.
 #[allow(clippy::too_many_arguments)]
 pub async fn watch_repo(
-    pool: PgPool,
+    client: Arc<Client>,
     repo_id: Uuid,
     repo_path: PathBuf,
     embedder: Arc<dyn EmbeddingBackend>,
@@ -25,9 +25,6 @@ pub async fn watch_repo(
     expected_dim: usize,
     exclude: Vec<String>,
 ) -> Result<()> {
-    // Mirror index_repo's discovery: index everything except `.git/` and the
-    // per-repo exclude globs. (No .gitignore filtering — gitignored files are
-    // indexed on purpose.)
     let overrides = build_excludes(&repo_path, &exclude);
 
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
@@ -60,7 +57,8 @@ pub async fn watch_repo(
             let mut s = state.lock().await;
             debug_assert!(
                 *s == IndexState::Watching || *s == IndexState::Stale,
-                "detectChange: expected Watching or Stale, got {:?}", *s
+                "detectChange: expected Watching or Stale, got {:?}",
+                *s
             );
             *s = IndexState::Stale;
         }
@@ -70,7 +68,8 @@ pub async fn watch_repo(
             while let Some(p) = rx.recv().await {
                 batch.push(p);
             }
-        }).await;
+        })
+        .await;
 
         batch.sort();
         batch.dedup();
@@ -80,16 +79,17 @@ pub async fn watch_repo(
             let mut s = state.lock().await;
             debug_assert!(
                 *s == IndexState::Stale,
-                "reindexStale: expected Stale, got {:?}", *s
+                "reindexStale: expected Stale, got {:?}",
+                *s
             );
             *s = IndexState::Indexing;
         }
 
         let mut any_succeeded = false;
         for path in batch {
-            // Skip .git internals and excluded paths (mirrors index_repo's walk).
             let is_git_internal = path.components().any(|c| c.as_os_str() == ".git");
-            let is_excluded = path.strip_prefix(&repo_path)
+            let is_excluded = path
+                .strip_prefix(&repo_path)
                 .map(|rel| muninn_core::pipeline::path_excluded(&overrides, rel))
                 .unwrap_or(false);
             if is_git_internal || is_excluded {
@@ -98,7 +98,7 @@ pub async fn watch_repo(
 
             if path.is_file() {
                 match index_file(
-                    &pool,
+                    &client,
                     repo_id,
                     &path,
                     embedder.as_ref(),
@@ -109,21 +109,28 @@ pub async fn watch_repo(
                 .await
                 {
                     Ok(()) => any_succeeded = true,
-                    Err(e) => tracing::warn!("incremental index error for {}: {}", path.display(), e),
+                    Err(e) => tracing::warn!(
+                        "incremental index error for {}: {}",
+                        path.display(),
+                        e
+                    ),
                 }
             } else {
                 let fp = path.to_string_lossy();
-                if let Err(e) = muninn_core::store::delete_file_chunks(
-                    &pool, repo_id, fp.as_ref(),
-                ).await {
+                if let Err(e) =
+                    muninn_core::store::delete_file_chunks(&client, repo_id, fp.as_ref()).await
+                {
                     tracing::warn!("failed to delete chunks for {}: {}", path.display(), e);
                 } else {
-                    // Also drop the file's symbol nodes so the graph stays in
-                    // sync. Best-effort: a graph error shouldn't fail the batch.
-                    if let Err(e) = muninn_core::graph::delete_file_symbols(
-                        &pool, repo_id, fp.as_ref(),
-                    ).await {
-                        tracing::warn!("failed to delete graph nodes for {}: {}", path.display(), e);
+                    if let Err(e) =
+                        muninn_core::graph::delete_file_symbols(&client, repo_id, fp.as_ref())
+                            .await
+                    {
+                        tracing::warn!(
+                            "failed to delete graph nodes for {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                     any_succeeded = true;
                 }
@@ -138,17 +145,22 @@ pub async fn watch_repo(
                 let mut s = state.lock().await;
                 debug_assert!(
                     *s == IndexState::Indexing,
-                    "finishIndex: expected Indexing, got {:?}", *s
+                    "finishIndex: expected Indexing, got {:?}",
+                    *s
                 );
                 *s = IndexState::Indexed;
             }
         } else {
-            tracing::warn!("watcher batch for repo {} had no successes — staying Stale", repo_id);
+            tracing::warn!(
+                "watcher batch for repo {} had no successes — staying Stale",
+                repo_id
+            );
             {
                 let mut s = state.lock().await;
                 debug_assert!(
                     *s == IndexState::Indexing,
-                    "stay-Stale: expected Indexing, got {:?}", *s
+                    "stay-Stale: expected Indexing, got {:?}",
+                    *s
                 );
                 *s = IndexState::Stale;
             }
@@ -159,7 +171,8 @@ pub async fn watch_repo(
             let mut s = state.lock().await;
             debug_assert!(
                 *s == IndexState::Indexed,
-                "attachWatcher: expected Indexed, got {:?}", *s
+                "attachWatcher: expected Indexed, got {:?}",
+                *s
             );
             *s = IndexState::Watching;
         }

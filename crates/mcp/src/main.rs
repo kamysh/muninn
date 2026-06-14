@@ -18,15 +18,17 @@ async fn main() -> anyhow::Result<()> {
     let _cli = Cli::parse();
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
-    let pool = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
+    let client = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
     // Self-apply migrations on startup so the server works against a DB that
     // hasn't been migrated yet (e.g. right after a binary upgrade). Idempotent.
-    db::run_migrations(&pool).await?;
+    let mut migrate_client = db::connect_with_app_name(&cfg.database, "muninn-mcp-migrate").await?;
+    db::run_migrations(&mut migrate_client).await?;
+    drop(migrate_client);
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);
     let ctx = Arc::new(SearchContext {
-        pool,
+        client: Arc::new(client),
         embedder,
         embedding_dim,
         record_usage: cfg.mcp.record_usage,
@@ -231,7 +233,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                     );
                     if ctx.record_usage {
                         if let Err(e) = record_usage(
-                            &ctx.pool,
+                            &ctx.client,
                             tool_name,
                             repo_hint.as_deref(),
                             duration_ms,
@@ -394,22 +396,19 @@ fn count_results(content: &serde_json::Value) -> Option<i64> {
 }
 
 async fn record_usage(
-    pool: &sqlx::PgPool,
-    tool: &str,
-    repo_path: Option<&str>,
-    duration_ms: i64,
+    client:       &tokio_postgres::Client,
+    tool:         &str,
+    repo_path:    Option<&str>,
+    duration_ms:  i64,
     result_count: Option<i64>,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO mcp_usage (tool, repo_path, duration_ms, result_count)
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(tool)
-    .bind(repo_path)
-    .bind(duration_ms)
-    .bind(result_count)
-    .execute(pool)
-    .await?;
+    client
+        .execute(
+            "INSERT INTO mcp_usage (tool, repo_path, duration_ms, result_count) \
+             VALUES ($1, $2, $3, $4)",
+            &[&tool, &repo_path, &duration_ms, &result_count],
+        )
+        .await?;
     Ok(())
 }
 
@@ -455,7 +454,8 @@ async fn dispatch_tool(
             Ok(resp)
         }
         "list_knowledge" => {
-            let repo = args["repo"].as_str()
+            let repo = args["repo"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing 'repo'"))?
                 .to_string();
             let resp = tools::list_knowledge(ctx, &repo).await?;

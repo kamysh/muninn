@@ -5,7 +5,7 @@ use crate::{
     store::{upsert_chunk, delete_file_chunks},
     types::{BatchOutcome, StructuralEdge},
 };
-use sqlx::PgPool;
+use tokio_postgres::Client;
 use uuid::Uuid;
 use anyhow::Result;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
 /// the file remains searchable via full-text + semantic vectors; only
 /// structural search (callers / callees / imports / defines) is unavailable
 /// for that file. See issue #6.
-const MAX_PARSER_BYTES: u64 = 1 * 1024 * 1024; // 1 MiB
+const MAX_PARSER_BYTES: u64 = 1024 * 1024; // 1 MiB
 
 /// Per-file watchdog for `index_repo`'s inner loop. If a single file's full
 /// pipeline (parse + edge extract + chunking + embed + DB writes) takes
@@ -38,7 +38,7 @@ const MAX_PARSER_BYTES: u64 = 1 * 1024 * 1024; // 1 MiB
 const FILE_INDEX_TIMEOUT_SECS: u64 = 120;
 
 pub async fn index_file(
-    pool: &PgPool,
+    client: &Client,
     repo_id: Uuid,
     path: &Path,
     embedder: &dyn EmbeddingBackend,
@@ -47,34 +47,22 @@ pub async fn index_file(
     expected_dim: usize,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
-    // Skip files larger than the cap before reading them into memory. Huge text
-    // files (generated bundles, data dumps, vendored blobs) would otherwise
-    // explode into thousands of low-value chunks and dominate the index.
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > MAX_FILE_BYTES {
             return Ok(());
         }
     }
     let bytes = std::fs::read(path)?;
-    // Skip binary files (null byte is a reliable binary indicator)
     if bytes.contains(&0u8) {
         return Ok(());
     }
     let source = match String::from_utf8(bytes) {
         Ok(s) => s,
-        Err(_) => return Ok(()), // Non-UTF-8 encoding — skip silently
+        Err(_) => return Ok(()),
     };
 
     let detected_language = detect_language(&file_path);
-    // Gate the symbol-graph path on file size: above MAX_PARSER_BYTES we force
-    // language to None so `parse_file`, `extract_edges`, and the symbol-graph
-    // writes are all skipped — the file is still chunked + embedded + stored
-    // for full-text / semantic search. Avoids the parser-recursion cost on
-    // bundled megafiles (issue #6) up front, instead of relying on the per-
-    // file timeout as a safety net.
-    let language = if detected_language.is_some()
-        && (source.len() as u64) > MAX_PARSER_BYTES
-    {
+    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
         tracing::info!(
             file = %file_path,
             size_bytes = source.len(),
@@ -100,7 +88,6 @@ pub async fn index_file(
         return Ok(());
     }
 
-    // ValidChunk invariant: no chunk may have empty content.
     chunks.retain(|c| {
         if c.content.is_empty() {
             tracing::warn!("dropping empty-content chunk in {}", file_path);
@@ -113,7 +100,6 @@ pub async fn index_file(
         return Ok(());
     }
 
-    // Generate embeddings in batches (batch_size = texts per request)
     let batch_size = if embed_batch_size == 0 {
         chunks.len().max(1)
     } else {
@@ -123,20 +109,18 @@ pub async fn index_file(
         let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
         let embeddings = embedder.embed(&texts).await?;
         for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
-            // ValidStoredEmbedding invariant: length must equal repo's registered
-            // dimension. Reject length-0 (empty) and dimension-mismatch embeddings —
-            // storing either causes silent vector-distance failures at query time.
             if emb.is_empty() {
                 tracing::warn!(
                     "embedder returned empty vector for chunk in {}; storing without embedding",
                     file_path
                 );
-                // c.embedding stays None
             } else if emb.len() != expected_dim {
                 return Err(anyhow::anyhow!(
                     "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
                      for chunk in {}; switching backends requires unregister + re-index",
-                    emb.len(), expected_dim, file_path
+                    emb.len(),
+                    expected_dim,
+                    file_path
                 ));
             } else {
                 c.embedding = Some(emb);
@@ -144,20 +128,14 @@ pub async fn index_file(
         }
     }
 
-    delete_file_chunks(pool, repo_id, &file_path).await?;
-    // Clear this file's old symbol nodes too: chunk_ids are regenerated on each
-    // index, so MERGE-by-chunk_id below would leave the previous nodes dangling.
-    // Best-effort, matching the graph-write calls further down.
-    if let Err(e) = graph::delete_file_symbols(pool, repo_id, &file_path).await {
+    delete_file_chunks(client, repo_id, &file_path).await?;
+    if let Err(e) = graph::delete_file_symbols(client, repo_id, &file_path).await {
         tracing::warn!("failed to clear old graph nodes for {}: {}", file_path, e);
     }
     for chunk in &chunks {
-        upsert_chunk(pool, chunk).await?;
+        upsert_chunk(client, chunk).await?;
     }
 
-    // Persist parsed symbols into the per-repo AGE graph (IsolatedGraph invariant:
-    // chunks are persisted above before symbols reference them).
-    // Also build a range→chunk_id and name→chunk_id map for edge resolution.
     let mut range_to_chunk: std::collections::HashMap<(u32, u32), uuid::Uuid> =
         std::collections::HashMap::new();
     let mut name_to_chunk: std::collections::HashMap<String, uuid::Uuid> =
@@ -165,9 +143,6 @@ pub async fn index_file(
 
     let mut node_inputs: Vec<graph::SymbolNodeInput> = Vec::new();
     for chunk in &chunks {
-        // chunk_file may split an oversized symbol body into multiple
-        // sub-chunks; only the FIRST sub-chunk inherits the symbol's start
-        // line, so match by start (not strict range equality).
         if let Some(sym) = symbols.iter().find(|s| s.range.start == chunk.range.start) {
             node_inputs.push(graph::SymbolNodeInput {
                 chunk_id: chunk.id,
@@ -177,20 +152,19 @@ pub async fn index_file(
                 start_line: sym.range.start,
                 end_line: sym.range.end,
             });
-            // Key by the symbol's full range, not the (possibly truncated)
-            // first sub-chunk's range — edge resolution looks up by symbol
-            // range and would otherwise miss split symbols.
             range_to_chunk.insert((sym.range.start, sym.range.end), chunk.id);
-            // first occurrence wins for name lookup
             name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
         }
     }
-    // One batched write (≤4 round-trips) instead of one per symbol.
-    if let Err(e) = graph::upsert_symbol_nodes(pool, repo_id, &node_inputs).await {
-        tracing::warn!("failed to store {} symbol node(s) for {}: {}", node_inputs.len(), file_path, e);
+    if let Err(e) = graph::upsert_symbol_nodes(client, repo_id, &node_inputs).await {
+        tracing::warn!(
+            "failed to store {} symbol node(s) for {}: {}",
+            node_inputs.len(),
+            file_path,
+            e
+        );
     }
 
-    // Persist structural edges (DEFINES, CALLS) derived from intra-file analysis.
     if let Some(lang) = language {
         let parsed_edges = extract_edges(&symbols, &source, &lang);
         let mut edges: Vec<StructuralEdge> = Vec::new();
@@ -201,9 +175,13 @@ pub async fn index_file(
                 edges.push(StructuralEdge { from, to, relation: pe.relation });
             }
         }
-        // One batched write (≤4 round-trips) instead of one per edge.
-        if let Err(e) = graph::upsert_edges(pool, repo_id, &edges).await {
-            tracing::warn!("failed to store {} edge(s) for {}: {}", edges.len(), file_path, e);
+        if let Err(e) = graph::upsert_edges(client, repo_id, &edges).await {
+            tracing::warn!(
+                "failed to store {} edge(s) for {}: {}",
+                edges.len(),
+                file_path,
+                e
+            );
         }
     }
 
@@ -233,7 +211,6 @@ pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides
         if pat.is_empty() {
             continue;
         }
-        // A leading `!` makes an override glob an *ignore* (exclude) rule.
         if let Err(e) = builder.add(&format!("!{pat}")) {
             tracing::warn!("ignoring invalid exclude glob {:?}: {}", pat, e);
         }
@@ -241,7 +218,8 @@ pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides
     builder.build().unwrap_or_else(|e| {
         tracing::warn!(
             "failed to build exclude globset for {}: {}",
-            repo_path.display(), e
+            repo_path.display(),
+            e
         );
         ignore::overrides::Override::empty()
     })
@@ -264,7 +242,7 @@ pub fn path_excluded(overrides: &ignore::overrides::Override, rel: &Path) -> boo
         return true;
     }
     rel.ancestors()
-        .skip(1) // rel itself already tested above
+        .skip(1)
         .take_while(|a| !a.as_os_str().is_empty())
         .any(|ancestor| overrides.matched(ancestor, true).is_ignore())
 }
@@ -279,11 +257,11 @@ pub fn path_excluded(overrides: &ignore::overrides::Override, rel: &Path) -> boo
 ///
 /// `on_progress` is called after each file with `(files_done, total_files, path)`.
 /// Pass `|_, _, _| {}` for no-op (daemon background use).
-// Pool, ids, embedder, config knobs and a progress callback — all distinct
+// Client, ids, embedder, config knobs and a progress callback — all distinct
 // concerns; a param struct would obscure more than it clarifies.
 #[allow(clippy::too_many_arguments)]
 pub async fn index_repo(
-    pool: &PgPool,
+    client: &Client,
     repo_id: Uuid,
     repo_path: &Path,
     embedder: Arc<dyn EmbeddingBackend>,
@@ -294,9 +272,6 @@ pub async fn index_repo(
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     use ignore::WalkBuilder;
 
-    // Index everything under the repo root: no .gitignore / hidden-file
-    // filtering. Only `.git/` (pruned below), binary/oversize files (skipped in
-    // index_file), and the per-repo `exclude` globs are left out.
     let overrides = build_excludes(repo_path, exclude);
     let walker = WalkBuilder::new(repo_path)
         .standard_filters(false)
@@ -311,9 +286,6 @@ pub async fn index_repo(
         }
     }
 
-    // The authoritative set of file paths after this walk. `index_file` stores
-    // `file_path` as `path.to_string_lossy()`, so build `keep` the same way to
-    // prune orphaned chunks (deleted-on-disk or newly-excluded files) below.
     let keep: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
 
     let total = files.len();
@@ -322,24 +294,8 @@ pub async fn index_repo(
     let mut skips: Vec<SkipRecord> = Vec::new();
 
     for file in &files {
-        // 1500-char cap keeps chunks at a useful search granularity: one
-        // embedding per ~symbol-sized span rather than one blurred vector per
-        // huge file. model2vec mean-pools over all tokens (no context-window
-        // truncation), so this is a quality knob, not a hard limit.
-        //
-        // Per-file watchdog: `index_file` runs entirely inside one
-        // `tokio::time::timeout`. If a single file's parse + edge-extract +
-        // chunking + graph write together exceed `FILE_INDEX_TIMEOUT_SECS`, we
-        // log a warning, record a SkipRecord with reason "file timed out",
-        // and move on. This is the file-level analogue of the per-cypher
-        // statement_timeout in `graph.rs` (issue #5) and addresses the parser
-        // hang on dense TypeScript .d.ts files (issue #6). NOTE: tokio's
-        // `timeout` does not cancel a blocking sub-task — if the work was
-        // pinned inside `tokio::task::spawn_blocking` on a CPU-bound parser
-        // recursion, that thread keeps running until it returns; the index
-        // loop is unblocked regardless.
         let work = index_file(
-            pool,
+            client,
             repo_id,
             file,
             embedder.as_ref(),
@@ -355,8 +311,6 @@ pub async fn index_repo(
         {
             Ok(Ok(())) => any_succeeded = true,
             Ok(Err(e)) => {
-                // Render the full cause chain once, both for the tracing
-                // warning (daemon log) and for the structured record (CLI).
                 let reason = format!("{:#}", e);
                 tracing::warn!("skipping {}: {}", file.display(), reason);
                 skips.push(SkipRecord { path: file.clone(), reason });
@@ -379,42 +333,39 @@ pub async fn index_repo(
         on_progress(done, total, file);
     }
 
-    // finishIndex (Indexing → Indexed) requires BatchOutcome ≠ NoneSucceeded.
-    // A totally-failed non-empty batch must NOT mark the repo as indexed.
     let any_failed = !skips.is_empty();
     if any_succeeded || files.is_empty() {
-        // Authoritative reindex: drop chunks (and graph nodes) for files no
-        // longer in the set — deleted on disk or newly matched by an exclude
-        // glob. Skipped only when the whole batch failed: we must not destroy
-        // data on a bad run. Files that failed *this* run stay in `keep`, so
-        // their prior data is preserved. Non-fatal: a prune error leaves orphans
-        // but the index is otherwise valid.
-        //
-        // Prune the graph first (per orphan file) so we never leave symbol nodes
-        // pointing at chunks that no longer exist.
-        match crate::store::file_paths_not_in(pool, repo_id, &keep).await {
+        match crate::store::file_paths_not_in(client, repo_id, &keep).await {
             Ok(orphans) => {
                 for path in &orphans {
-                    if let Err(e) = crate::graph::delete_file_symbols(pool, repo_id, path).await {
+                    if let Err(e) = crate::graph::delete_file_symbols(client, repo_id, path).await {
                         tracing::warn!("graph prune failed for {}: {}", path, e);
                     }
                 }
             }
             Err(e) => tracing::warn!("listing orphan files failed for repo {}: {}", repo_id, e),
         }
-        match crate::store::prune_chunks_not_in(pool, repo_id, &keep).await {
+        match crate::store::prune_chunks_not_in(client, repo_id, &keep).await {
             Ok(n) if n > 0 => tracing::info!(
-                "reindex pruned {} orphaned chunk(s) in repo {}", n, repo_id),
+                "reindex pruned {} orphaned chunk(s) in repo {}",
+                n,
+                repo_id
+            ),
             Ok(_) => {}
             Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
         }
-        crate::store::mark_indexed(pool, repo_id).await?;
-        let outcome = if any_failed { BatchOutcome::SomeSucceeded } else { BatchOutcome::AllSucceeded };
+        crate::store::mark_indexed(client, repo_id).await?;
+        let outcome = if any_failed {
+            BatchOutcome::SomeSucceeded
+        } else {
+            BatchOutcome::AllSucceeded
+        };
         Ok((outcome, skips))
     } else {
         tracing::error!(
             "repo {}: all {} files failed to index — not marking as indexed",
-            repo_id, files.len()
+            repo_id,
+            files.len()
         );
         Err(anyhow::anyhow!(
             "BatchOutcome: no files were successfully indexed in repo {}",
@@ -442,10 +393,8 @@ mod tests {
     #[test]
     fn dir_exclude_covers_descendants() {
         let o = ov(&["target/"]);
-        // The directory itself and anything beneath it are excluded …
         assert!(path_excluded(&o, Path::new("target/debug/build/x.rs")));
         assert!(path_excluded(&o, Path::new("target/foo")));
-        // … but unrelated paths are still indexed (node_modules NOT excluded).
         assert!(!path_excluded(&o, Path::new("src/lib.rs")));
         assert!(!path_excluded(&o, Path::new("node_modules/left-pad/index.js")));
     }
@@ -468,7 +417,6 @@ mod tests {
 
     #[test]
     fn blank_patterns_ignored() {
-        // Whitespace-only / empty entries must not turn into a match-all.
         let o = ov(&["", "   "]);
         assert!(!path_excluded(&o, Path::new("anything.rs")));
     }

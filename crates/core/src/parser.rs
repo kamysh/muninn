@@ -621,7 +621,7 @@ fn foo() {
         // (A single line longer than max_chars is still accepted as one chunk;
         // anything larger is a bug — the symbols path must split.)
         fn prop_no_chunk_grossly_exceeds_max_chars(content: String, max_chars_seed: u16) -> bool {
-            let max_chars = (max_chars_seed as usize).max(64).min(4096);
+            let max_chars = (max_chars_seed as usize).clamp(64, 4096);
             let symbols = parse_file(&content, Language::Rust).unwrap_or_default();
             let chunks = chunk_file(&content, &symbols, max_chars);
             // The chunker is line-aligned and accumulates until the next line would push past

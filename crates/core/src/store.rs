@@ -1,8 +1,11 @@
+use crate::config::DatabaseConfig;
+use crate::db::connect_for_lock;
 use crate::types::{Chunk, Repo};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::pool::PoolConnection;
-use sqlx::{PgPool, Postgres, Row};
+use pgvector::Vector;
+use std::sync::Arc;
+use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 /// The repo columns selected into a `Repo` by `row_to_repo`. Kept as one
@@ -22,25 +25,24 @@ pub fn graph_name(repo_id: Uuid) -> String {
 }
 
 pub async fn register_repo(
-    pool: &PgPool,
+    client: &Client,
     path: &str,
     name: &str,
     embedding_dim: usize,
 ) -> Result<Repo> {
-    let row = sqlx::query(&format!(
-        r#"
+    let row = client
+        .query_one(
+            &format!(
+                r#"
         INSERT INTO repos (id, path, name, indexed_at, embedding_dim)
         VALUES ($1, $2, $3, NULL, $4)
         ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name
         RETURNING {REPO_COLUMNS}
         "#
-    ))
-    .bind(Uuid::new_v4())
-    .bind(path)
-    .bind(name)
-    .bind(embedding_dim as i32)
-    .fetch_one(pool)
-    .await?;
+            ),
+            &[&Uuid::new_v4(), &path, &name, &(embedding_dim as i32)],
+        )
+        .await?;
 
     let repo = row_to_repo(row)?;
     let stored_dim = repo.embedding_dim as usize;
@@ -55,9 +57,10 @@ pub async fn register_repo(
 
     // Create per-repo chunks table (idempotent)
     let table = chunks_table(repo.id);
-    let embedding_dim = stored_dim;
-    sqlx::query(&format!(
-        r#"
+    client
+        .execute(
+            &format!(
+                r#"
         CREATE TABLE IF NOT EXISTS "{table}" (
             id          UUID PRIMARY KEY,
             repo_id     UUID NOT NULL,
@@ -69,57 +72,64 @@ pub async fn register_repo(
             embedding   VECTOR({embedding_dim})
         )
         "#
-    ))
-    .execute(pool)
-    .await?;
+            ),
+            &[],
+        )
+        .await?;
 
-    sqlx::query(&format!(
-        r#"CREATE INDEX IF NOT EXISTS "{table}_ts_idx" ON "{table}" USING GIN (ts_vector)"#
-    ))
-    .execute(pool)
-    .await?;
+    client
+        .execute(
+            &format!(
+                r#"CREATE INDEX IF NOT EXISTS "{table}_ts_idx" ON "{table}" USING GIN (ts_vector)"#
+            ),
+            &[],
+        )
+        .await?;
 
-    sqlx::query(&format!(
-        r#"CREATE INDEX IF NOT EXISTS "{table}_emb_idx" ON "{table}" USING hnsw (embedding vector_cosine_ops)"#
-    ))
-    .execute(pool)
-    .await?;
+    client
+        .execute(
+            &format!(
+                r#"CREATE INDEX IF NOT EXISTS "{table}_emb_idx" ON "{table}" USING hnsw (embedding vector_cosine_ops)"#
+            ),
+            &[],
+        )
+        .await?;
 
-    sqlx::query(&format!(
-        r#"CREATE INDEX IF NOT EXISTS "{table}_file_idx" ON "{table}" (file_path)"#
-    ))
-    .execute(pool)
-    .await?;
+    client
+        .execute(
+            &format!(
+                r#"CREATE INDEX IF NOT EXISTS "{table}_file_idx" ON "{table}" (file_path)"#
+            ),
+            &[],
+        )
+        .await?;
 
     // Create per-repo AGE graph (idempotent: check before create)
     let gname = graph_name(repo.id);
-    let graph_exists: bool = sqlx::query(
-        "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
-    )
-    .bind(&gname)
-    .fetch_one(pool)
-    .await?
-    .try_get(0)?;
+    let graph_exists: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
+            &[&gname],
+        )
+        .await?
+        .get(0);
 
     if !graph_exists {
-        sqlx::query(&format!(
-            "SELECT * FROM ag_catalog.create_graph('{gname}')"
-        ))
-        .execute(pool)
-        .await?;
+        client
+            .execute(
+                &format!("SELECT * FROM ag_catalog.create_graph('{gname}')"),
+                &[],
+            )
+            .await?;
     }
 
     // Ensure the four known vertex labels exist and have property indexes on
     // `chunk_id` (MERGE hot path in upsert_symbol_nodes) and `file_path` (MATCH
-    // hot path in delete_file_symbols). Without these the per-row property
-    // lookup degraded to a seq scan of the label table — for files with many
-    // symbols the cumulative cost grew until a single reindex step could hang
-    // for tens of minutes (issue #5). This block is idempotent and mirrors
-    // migration 014, so a freshly registered repo gets the fast lookups
-    // without depending on a future migration run. Spec: Muninn.Storage
-    // (IsolatedGraph + timeout addendum).
-    sqlx::query(&format!(
-        r#"
+    // hot path in delete_file_symbols). Idempotent; mirrors migration 014.
+    client
+        .execute(
+            &format!(
+                r#"
         DO $do$
         DECLARE
             lbl    TEXT;
@@ -151,85 +161,83 @@ pub async fn register_repo(
         END
         $do$;
         "#
-    ))
-    .execute(pool)
-    .await?;
+            ),
+            &[],
+        )
+        .await?;
 
     Ok(repo)
 }
 
-pub async fn delete_repo(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    // Drop per-repo chunks table
+pub async fn delete_repo(client: &Client, repo_id: Uuid) -> Result<()> {
     let table = chunks_table(repo_id);
-    sqlx::query(&format!(r#"DROP TABLE IF EXISTS "{table}""#))
-        .execute(pool)
+    client
+        .execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
         .await?;
 
-    // Drop per-repo AGE graph (cascade = true drops all vertices and edges)
     let gname = graph_name(repo_id);
-    let graph_exists: bool = sqlx::query(
-        "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
-    )
-    .bind(&gname)
-    .fetch_one(pool)
-    .await?
-    .try_get(0)?;
+    let graph_exists: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
+            &[&gname],
+        )
+        .await?
+        .get(0);
 
     if graph_exists {
-        sqlx::query(&format!(
-            "SELECT * FROM ag_catalog.drop_graph('{gname}', true)"
-        ))
-        .execute(pool)
-        .await?;
+        client
+            .execute(
+                &format!("SELECT * FROM ag_catalog.drop_graph('{gname}', true)"),
+                &[],
+            )
+            .await?;
     }
 
-    sqlx::query(r#"DELETE FROM repos WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+    client
+        .execute(r#"DELETE FROM repos WHERE id = $1"#, &[&repo_id])
         .await?;
     Ok(())
 }
 
-pub async fn get_repo_by_path(pool: &PgPool, path: &str) -> Result<Option<Repo>> {
-    let row = sqlx::query(&format!(
-        r#"SELECT {REPO_COLUMNS} FROM repos WHERE path = $1"#
-    ))
-    .bind(path)
-    .fetch_optional(pool)
-    .await?;
-
+pub async fn get_repo_by_path(client: &Client, path: &str) -> Result<Option<Repo>> {
+    let row = client
+        .query_opt(
+            &format!(r#"SELECT {REPO_COLUMNS} FROM repos WHERE path = $1"#),
+            &[&path],
+        )
+        .await?;
     row.map(row_to_repo).transpose()
 }
 
-pub async fn list_repos(pool: &PgPool) -> Result<Vec<Repo>> {
-    let rows = sqlx::query(&format!(
-        r#"SELECT {REPO_COLUMNS} FROM repos ORDER BY name"#
-    ))
-    .fetch_all(pool)
-    .await?;
-
+pub async fn list_repos(client: &Client) -> Result<Vec<Repo>> {
+    let rows = client
+        .query(
+            &format!(r#"SELECT {REPO_COLUMNS} FROM repos ORDER BY name"#),
+            &[],
+        )
+        .await?;
     rows.into_iter().map(row_to_repo).collect()
 }
 
 /// Notify the indexer daemon that the set of registered repos has changed.
-/// The daemon listens on the `muninn_repos_changed` channel via PostgreSQL LISTEN/NOTIFY
-/// and will re-scan the repos table on receipt.
-pub async fn notify_repos_changed(pool: &PgPool) -> Result<()> {
-    sqlx::query("SELECT pg_notify('muninn_repos_changed', '')")
-        .execute(pool)
+pub async fn notify_repos_changed(client: &Client) -> Result<()> {
+    client
+        .execute("SELECT pg_notify('muninn_repos_changed', '')", &[])
         .await?;
     Ok(())
 }
 
-pub async fn mark_indexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexed_at = NOW(), ever_indexed = TRUE WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+pub async fn mark_indexed(client: &Client, repo_id: Uuid) -> Result<()> {
+    client
+        .execute(
+            r#"UPDATE repos SET indexed_at = NOW(), ever_indexed = TRUE WHERE id = $1"#,
+            &[&repo_id],
+        )
         .await?;
     Ok(())
 }
 
-pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
+pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
     anyhow::ensure!(
         chunk.range.is_valid(),
         "invalid LineRange: start {} > end {}",
@@ -246,24 +254,12 @@ pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
     );
 
     let table = chunks_table(chunk.repo_id);
-
-    let embedding_literal = chunk.embedding.as_ref().map(|emb| {
-        format!(
-            "[{}]",
-            emb.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",")
-        )
-    });
-
-    let emb_placeholder = if embedding_literal.is_some() {
-        "$7::vector"
-    } else {
-        "NULL"
-    };
+    let embedding: Option<Vector> = chunk.embedding.as_ref().map(|emb| Vector::from(emb.clone()));
 
     let sql = format!(
         r#"
         INSERT INTO "{table}" (id, repo_id, file_path, start_line, end_line, content, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6, {emb_placeholder})
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (id) DO UPDATE
             SET file_path  = EXCLUDED.file_path,
                 start_line = EXCLUDED.start_line,
@@ -274,205 +270,182 @@ pub async fn upsert_chunk(pool: &PgPool, chunk: &Chunk) -> Result<Uuid> {
         "#
     );
 
-    let row = if let Some(emb) = embedding_literal {
-        sqlx::query(&sql)
-            .bind(chunk.id)
-            .bind(chunk.repo_id)
-            .bind(&chunk.file_path)
-            .bind(chunk.range.start as i32)
-            .bind(chunk.range.end as i32)
-            .bind(&chunk.content)
-            .bind(emb)
-            .fetch_one(pool)
-            .await?
-    } else {
-        sqlx::query(&sql)
-            .bind(chunk.id)
-            .bind(chunk.repo_id)
-            .bind(&chunk.file_path)
-            .bind(chunk.range.start as i32)
-            .bind(chunk.range.end as i32)
-            .bind(&chunk.content)
-            .fetch_one(pool)
-            .await?
-    };
+    let row = client
+        .query_one(
+            &sql,
+            &[
+                &chunk.id,
+                &chunk.repo_id,
+                &chunk.file_path,
+                &(chunk.range.start as i32),
+                &(chunk.range.end as i32),
+                &chunk.content,
+                &embedding,
+            ],
+        )
+        .await?;
 
-    let id: Uuid = row.try_get::<Uuid, _>("id")?;
+    let id: Uuid = row.try_get(0)?;
     Ok(id)
 }
 
-pub async fn delete_file_chunks(pool: &PgPool, repo_id: Uuid, file_path: &str) -> Result<()> {
-    // NonEmptyFilePath invariant: an empty path would execute a vacuous delete
-    // (matching nothing) or, worse, delete all chunks if the schema changes.
+pub async fn delete_file_chunks(client: &Client, repo_id: Uuid, file_path: &str) -> Result<()> {
     anyhow::ensure!(
         !file_path.is_empty(),
         "NonEmptyFilePath violation: file_path must not be empty"
     );
     let table = chunks_table(repo_id);
-    sqlx::query(&format!(
-        r#"DELETE FROM "{table}" WHERE file_path = $1"#
-    ))
-    .bind(file_path)
-    .execute(pool)
-    .await?;
+    client
+        .execute(
+            &format!(r#"DELETE FROM "{table}" WHERE file_path = $1"#),
+            &[&file_path],
+        )
+        .await?;
     Ok(())
 }
 
 /// Delete every chunk for a repo whose `file_path` is not in `keep`.
-///
-/// A full reindex re-inserts chunks only for files it walks, so files deleted
-/// from disk or newly matched by an `[index] exclude` glob would otherwise
-/// leave orphaned chunks behind. Calling this with the set of files just
-/// indexed makes the reindex authoritative over the current file set. Returns
-/// the number of rows deleted. With an empty `keep` set this deletes all chunks
-/// (the entire file set is gone or excluded).
-pub async fn prune_chunks_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) -> Result<u64> {
+pub async fn prune_chunks_not_in(client: &Client, repo_id: Uuid, keep: &[String]) -> Result<u64> {
     let table = chunks_table(repo_id);
-    // `<> ALL($1)` is true when file_path equals no kept path; for an empty
-    // array it is vacuously true, so every row is removed.
-    let res = sqlx::query(&format!(
-        r#"DELETE FROM "{table}" WHERE file_path <> ALL($1)"#
-    ))
-    .bind(keep)
-    .execute(pool)
-    .await?;
-    Ok(res.rows_affected())
+    let n = client
+        .execute(
+            &format!(r#"DELETE FROM "{table}" WHERE file_path <> ALL($1)"#),
+            &[&keep],
+        )
+        .await?;
+    Ok(n)
 }
 
-/// Distinct `file_path`s currently in the repo's chunk store that are NOT in
-/// `keep`. These are the files a reindex no longer covers (deleted on disk or
-/// newly excluded); the caller prunes their graph nodes before pruning chunks.
-pub async fn file_paths_not_in(pool: &PgPool, repo_id: Uuid, keep: &[String]) -> Result<Vec<String>> {
-    use sqlx::Row;
+/// Distinct `file_path`s currently in the repo's chunk store that are NOT in `keep`.
+pub async fn file_paths_not_in(
+    client: &Client,
+    repo_id: Uuid,
+    keep: &[String],
+) -> Result<Vec<String>> {
     let table = chunks_table(repo_id);
-    let rows = sqlx::query(&format!(
-        r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#
-    ))
-    .bind(keep)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().filter_map(|r| r.try_get::<String, _>("file_path").ok()).collect())
+    let rows = client
+        .query(
+            &format!(
+                r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#
+            ),
+            &[&keep],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
 // ---- indexing lock (PostgreSQL session-scoped advisory lock) ----------------
 //
-// The mutex is `pg_advisory_lock`, held on a dedicated session (connection) for
-// the index's duration. Liveness is the session itself: if the holder's process
-// dies, PostgreSQL frees the lock automatically — no heartbeat, no staleness
-// window. Spec: Muninn.AdvisoryLock.
+// The advisory lock is held on a DEDICATED connection for the index's duration.
+// Liveness is the TCP session itself: if the holder's process dies, PostgreSQL
+// frees the lock automatically. Spec: Muninn.AdvisoryLock.
 
 /// The advisory-lock key for a repo: the first 8 bytes of its UUID as an i64.
-/// Advisory locks are per-database, and muninn/mimir use separate databases, so
-/// there is no cross-tool collision; within muninn's database a 64-bit key from
-/// the UUID is collision-free for any realistic repo count.
 fn advisory_key(repo_id: Uuid) -> i64 {
     let b = repo_id.as_bytes();
     i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
 /// Try to acquire the repo's advisory lock without blocking. On success returns
-/// the connection holding it — the lock lives exactly as long as that connection
-/// (release with `unlock`, or implicitly when the process/connection dies). On
-/// contention returns `None` (the probe connection is dropped, holding nothing).
-pub async fn try_lock(pool: &PgPool, repo_id: Uuid) -> Result<Option<PoolConnection<Postgres>>> {
-    let mut conn = pool.acquire().await?;
-    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(advisory_key(repo_id))
-        .fetch_one(&mut *conn)
-        .await?;
-    Ok(if got { Some(conn) } else { None })
+/// an `Arc<Client>` whose underlying connection holds the lock. On contention
+/// returns `None`.
+pub async fn try_lock(cfg: &DatabaseConfig, repo_id: Uuid) -> Result<Option<Arc<Client>>> {
+    let lock_client = connect_for_lock(cfg).await?;
+    let got: bool = lock_client
+        .query_one("SELECT pg_try_advisory_lock($1)", &[&advisory_key(repo_id)])
+        .await?
+        .get(0);
+    if got {
+        Ok(Some(lock_client))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Block until the repo's advisory lock is acquired, then return the connection
-/// holding it. Used by a foreground job after it has set the preempt flag: the
-/// current holder (a daemon reindex, or another CLI) releases and this wakes.
-pub async fn lock_blocking(pool: &PgPool, repo_id: Uuid) -> Result<PoolConnection<Postgres>> {
-    let mut conn = pool.acquire().await?;
-    sqlx::query("SELECT pg_advisory_lock($1)")
-        .bind(advisory_key(repo_id))
-        .execute(&mut *conn)
+/// holding it.
+pub async fn lock_blocking(cfg: &DatabaseConfig, repo_id: Uuid) -> Result<Arc<Client>> {
+    let lock_client = connect_for_lock(cfg).await?;
+    lock_client
+        .execute("SELECT pg_advisory_lock($1)", &[&advisory_key(repo_id)])
         .await?;
-    Ok(conn)
+    Ok(lock_client)
 }
 
-/// Release the advisory lock held on `conn`. Call on the normal completion path;
-/// a crash / Ctrl-C releases it automatically when the session ends.
-pub async fn unlock(conn: &mut PoolConnection<Postgres>, repo_id: Uuid) -> Result<()> {
-    sqlx::query("SELECT pg_advisory_unlock($1)")
-        .bind(advisory_key(repo_id))
-        .execute(&mut **conn)
+/// Release the advisory lock. Call on the normal completion path; a crash /
+/// Ctrl-C releases it automatically when the session ends.
+pub async fn unlock(conn: &Arc<Client>, repo_id: Uuid) -> Result<()> {
+    conn.execute("SELECT pg_advisory_unlock($1)", &[&advisory_key(repo_id)])
         .await?;
     Ok(())
 }
 
-/// Mark a repo as owed a (re)index. Called at the START of a foreground index so
-/// that any interruption (Ctrl-C, crash, lock auto-release) leaves indexed_at
-/// NULL — owed — rather than pointing at a stale, partially-rebuilt index.
-/// everIndexed is left unchanged. Spec: Muninn.IndexFsm.interrupt.
-pub async fn mark_unindexed(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET indexed_at = NULL WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+/// Mark a repo as owed a (re)index. Spec: Muninn.IndexFsm.interrupt.
+pub async fn mark_unindexed(client: &Client, repo_id: Uuid) -> Result<()> {
+    client
+        .execute(
+            r#"UPDATE repos SET indexed_at = NULL WHERE id = $1"#,
+            &[&repo_id],
+        )
         .await?;
     Ok(())
 }
 
-/// Set or clear a repo's paused flag. When paused, the daemon skips the repo
-/// entirely (no reindex, no watcher) without dropping data. Spec:
-/// Muninn.Index.daemonDecision (paused → Skip).
-pub async fn set_paused(pool: &PgPool, repo_id: Uuid, paused: bool) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET paused = $2 WHERE id = $1"#)
-        .bind(repo_id)
-        .bind(paused)
-        .execute(pool)
+/// Set or clear a repo's paused flag. Spec: Muninn.Index.daemonDecision.
+pub async fn set_paused(client: &Client, repo_id: Uuid, paused: bool) -> Result<()> {
+    client
+        .execute(
+            r#"UPDATE repos SET paused = $2 WHERE id = $1"#,
+            &[&repo_id, &paused],
+        )
         .await?;
     Ok(())
 }
 
-/// Signal that a foreground job is waiting for the lock and the current
-/// background holder should yield. Spec: Muninn.AdvisoryLock preempt.
-pub async fn request_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET preempt_requested = TRUE WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+/// Signal that a foreground job is waiting for the lock. Spec: Muninn.AdvisoryLock preempt.
+pub async fn request_preempt(client: &Client, repo_id: Uuid) -> Result<()> {
+    client
+        .execute(
+            r#"UPDATE repos SET preempt_requested = TRUE WHERE id = $1"#,
+            &[&repo_id],
+        )
         .await?;
     Ok(())
 }
 
-/// Clear the preempt flag. Called by a foreground job once it has acquired the
-/// lock (it is the job the waiter was after).
-pub async fn clear_preempt(pool: &PgPool, repo_id: Uuid) -> Result<()> {
-    sqlx::query(r#"UPDATE repos SET preempt_requested = FALSE WHERE id = $1"#)
-        .bind(repo_id)
-        .execute(pool)
+/// Clear the preempt flag.
+pub async fn clear_preempt(client: &Client, repo_id: Uuid) -> Result<()> {
+    client
+        .execute(
+            r#"UPDATE repos SET preempt_requested = FALSE WHERE id = $1"#,
+            &[&repo_id],
+        )
         .await?;
     Ok(())
 }
 
-/// Whether a foreground job has requested preemption. The background reindex
-/// task polls this every ~10 s and yields the lock when it is true.
-pub async fn is_preempt_requested(pool: &PgPool, repo_id: Uuid) -> Result<bool> {
-    let row = sqlx::query(r#"SELECT preempt_requested FROM repos WHERE id = $1"#)
-        .bind(repo_id)
-        .fetch_optional(pool)
+/// Whether a foreground job has requested preemption.
+pub async fn is_preempt_requested(client: &Client, repo_id: Uuid) -> Result<bool> {
+    let row = client
+        .query_opt(
+            r#"SELECT preempt_requested FROM repos WHERE id = $1"#,
+            &[&repo_id],
+        )
         .await?;
-    Ok(row
-        .map(|r| r.try_get::<bool, _>("preempt_requested"))
-        .transpose()?
-        .unwrap_or(false))
+    Ok(row.map(|r| r.get::<_, bool>(0)).unwrap_or(false))
 }
 
 // ---- helpers ----------------------------------------------------------------
 
-fn row_to_repo(row: sqlx::postgres::PgRow) -> Result<Repo> {
+fn row_to_repo(row: Row) -> Result<Repo> {
     Ok(Repo {
-        id: row.try_get::<Uuid, _>("id")?,
-        path: row.try_get::<String, _>("path")?,
-        name: row.try_get::<String, _>("name")?,
-        indexed_at: row.try_get::<Option<DateTime<Utc>>, _>("indexed_at")?,
-        ever_indexed: row.try_get::<bool, _>("ever_indexed")?,
-        embedding_dim: row.try_get::<i32, _>("embedding_dim")? as u32,
-        preempt_requested: row.try_get::<bool, _>("preempt_requested")?,
-        paused: row.try_get::<bool, _>("paused")?,
+        id:                row.try_get("id")?,
+        path:              row.try_get("path")?,
+        name:              row.try_get("name")?,
+        indexed_at:        row.try_get::<_, Option<DateTime<Utc>>>("indexed_at")?,
+        ever_indexed:      row.try_get("ever_indexed")?,
+        embedding_dim:     row.try_get::<_, i32>("embedding_dim")? as u32,
+        preempt_requested: row.try_get("preempt_requested")?,
+        paused:            row.try_get("paused")?,
     })
 }

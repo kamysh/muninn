@@ -1,3 +1,7 @@
+-- #!migration
+-- name: "mcp-usage",
+-- description: "mcp-usage",
+-- requires: "backfill-repo-embedding-dim";
 CREATE TABLE IF NOT EXISTS mcp_usage (
     id            BIGSERIAL PRIMARY KEY,
     ts            TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -48,9 +48,14 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "0.2.2";
+          version = "0.3.0";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            outputHashes = {
+              "kryzhen-0.6.0" = "sha256-NIUuqvpTZ7S+20MTNZQU3cw9t+I4RmcyVCW/8/cMxO4=";
+            };
+          };
           nativeBuildInputs = [ pkgs.pkg-config ];
           # Tests need a Postgres + downloaded model; run them in the dev
           # shell via `cargo nextest` instead.
@@ -74,7 +79,12 @@
         # and aarch64-linux link fine without this.)
         muninnStatic = pkgs.pkgsStatic.rustPlatform.buildRustPackage (commonAttrs // {
           pname = "muninn-static";
-          nativeBuildInputs = [ pkgs.pkgsStatic.pkg-config ];
+          buildInputs = pkgs.lib.optionals (pkgs.lib.hasSuffix "linux" system) [
+            pkgs.pkgsStatic.openssl
+          ];
+          nativeBuildInputs = pkgs.lib.optionals (pkgs.lib.hasSuffix "linux" system) [
+            pkgs.pkgsStatic.pkg-config
+          ];
         } // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
           RUSTFLAGS = "-C relocation-model=static";
         });
@@ -105,6 +115,9 @@
             pkgs.just
             pkgs.git
           ];
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
 
           shellHook = ''
             export DATABASE_URL="''${DATABASE_URL:-postgresql://localhost/muninn_dev}"

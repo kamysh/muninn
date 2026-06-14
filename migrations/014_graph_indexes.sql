@@ -1,26 +1,7 @@
--- Backfill btree expression indexes on the per-repo AGE graphs.
---
--- Issue: per-repo `code_graph_<uuid>` schemas had no indexes on the properties
--- muninn matches by (`chunk_id`, `file_path`). `MERGE (n:Label {chunk_id: ...})`
--- in `upsert_symbol_nodes` and `MATCH (n {file_path: ...}) DETACH DELETE n` in
--- `delete_file_symbols` therefore degraded to a full sequential scan of the
--- label tables for every row in `UNWIND $rows`. For a large file (e.g. a
--- minified TypeScript bundle with thousands of symbols), a single MERGE step
--- spent tens of minutes inside AGE with no observable progress — see issue #5.
---
--- Fix: btree expression indexes on the agtype property access for every
--- per-repo graph and every known vertex label. Empirically a single chunk_id
--- lookup on a 26 793-row `Function` label drops from a 14.9 ms seq scan to a
--- 1.5 ms bitmap index scan; the MERGE that does this lookup once per UNWIND
--- row goes from minutes to subsecond.
---
--- This migration is idempotent: existing graphs already missing label tables
--- get them created via AGE's `create_vlabel`; existing indexes are skipped via
--- `CREATE INDEX IF NOT EXISTS`. New repos pick up the same indexes through
--- `store::register_repo`, which is updated to call `create_vlabel` + the
--- indexes for the four known labels (Function/Class/Import/Module) at
--- registration time.
-
+-- #!migration
+-- name: "graph-indexes",
+-- description: "Backfill btree expression indexes on the per-repo AGE graphs. Issue: per-repo `code_graph_<uuid>` schemas had no indexes on the properties muninn matches by (`chunk_id`, `file_path`). `MERGE (n:Label {chunk_id: ...})` in `upsert_symbol_nodes` and `MATCH (n {file_path: ...}) DETACH DELETE n` in `delete_file_symbols` therefore degraded to a full sequential scan of the label tables for every row in `UNWIND $rows`. For a large file (e.g. a minified TypeScript bundle with thousands of symbols), a single MERGE step spent tens of minutes inside AGE with no observable progress — see issue #5. Fix: btree expression indexes on the agtype property access for every per-repo graph and every known vertex label. Empirically a single chunk_id lookup on a 26 793-row `Function` label drops from a 14.9 ms seq scan to a 1.5 ms bitmap index scan; the MERGE that does this lookup once per UNWIND row goes from minutes to subsecond. This migration is idempotent: existing graphs already missing label tables get them created via AGE's `create_vlabel`; existing indexes are skipped via `CREATE INDEX IF NOT EXISTS`. New repos pick up the same indexes through `store::register_repo`, which is updated to call `create_vlabel` + the indexes for the four known labels (Function/Class/Import/Module) at registration time.",
+-- requires: "repo-paused";
 DO $migration$
 DECLARE
     g  TEXT;

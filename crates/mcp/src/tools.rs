@@ -1,13 +1,13 @@
 use muninn_core::{search, graph, knowledge, store, embeddings::EmbeddingBackend};
 use muninn_core::types::Repo;
-use sqlx::PgPool;
+use tokio_postgres::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use anyhow::Result;
 use uuid::Uuid;
 
 pub struct SearchContext {
-    pub pool: PgPool,
+    pub client: Arc<Client>,
     pub embedder: Arc<dyn EmbeddingBackend>,
     pub embedding_dim: usize,
     pub record_usage: bool,
@@ -51,21 +51,15 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    let repo = resolve_repo(&ctx.pool, &params).await?;
+    let repo = resolve_repo(&ctx.client, &params).await?;
 
     let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    // Fetch many more candidates than the final limit. RRF needs broad recall
-    // from each leg so that cross-list boosts can surface the best matches.
-    // With limit*2=20 candidates, a relevant file at semantic rank 21 (pushed
-    // down by a large node_modules corpus) never participates in the merge and
-    // gets no boost from its fulltext rank. 10× gives 100 candidates for the
-    // typical limit=10 request, which is the standard RRF operating range.
     let candidate = (limit * 10).min(search::MAX_LIMIT);
-    let semantic = search::semantic_search(&ctx.pool, &query_vec, repo.id, candidate).await?;
-    let fulltext = search::fulltext_search(&ctx.pool, &params.query, repo.id, candidate).await?;
+    let semantic = search::semantic_search(&ctx.client, &query_vec, repo.id, candidate).await?;
+    let fulltext = search::fulltext_search(&ctx.client, &params.query, repo.id, candidate).await?;
     let merged = search::rrf_merge(semantic, fulltext, limit as usize);
 
     Ok(SearchResponse {
@@ -75,8 +69,8 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    let repo = resolve_repo(&ctx.pool, &params).await?;
-    let results = search::fulltext_search(&ctx.pool, &params.query, repo.id, limit).await?;
+    let repo = resolve_repo(&ctx.client, &params).await?;
+    let results = search::fulltext_search(&ctx.client, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -84,13 +78,13 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    let repo = resolve_repo(&ctx.pool, &params).await?;
+    let repo = resolve_repo(&ctx.client, &params).await?;
 
     let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    let results = search::semantic_search(&ctx.pool, &query_vec, repo.id, limit).await?;
+    let results = search::semantic_search(&ctx.client, &query_vec, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -111,12 +105,12 @@ pub async fn search_structural(
     params: StructuralParams,
 ) -> Result<serde_json::Value> {
     let (relation, incoming) = match params.relation.as_str() {
-        "callers" => (muninn_core::types::StructuralRelation::Calls, true),
-        "callees" => (muninn_core::types::StructuralRelation::Calls, false),
-        "imports" => (muninn_core::types::StructuralRelation::Imports, false),
-        "defines" => (muninn_core::types::StructuralRelation::Defines, false),
+        "callers"   => (muninn_core::types::StructuralRelation::Calls, true),
+        "callees"   => (muninn_core::types::StructuralRelation::Calls, false),
+        "imports"   => (muninn_core::types::StructuralRelation::Imports, false),
+        "defines"   => (muninn_core::types::StructuralRelation::Defines, false),
         "inheritors" => (muninn_core::types::StructuralRelation::InheritsFrom, true),
-        "inherits" => (muninn_core::types::StructuralRelation::InheritsFrom, false),
+        "inherits"  => (muninn_core::types::StructuralRelation::InheritsFrom, false),
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 
@@ -126,29 +120,33 @@ pub async fn search_structural(
         cwd: params.cwd,
         limit: None,
     };
-    let repo = resolve_repo(&ctx.pool, &search_params).await?;
+    let repo = resolve_repo(&ctx.client, &search_params).await?;
     let symbols =
-        graph::query_related(&ctx.pool, repo.id, &params.symbol, relation, incoming).await?;
+        graph::query_related(&ctx.client, repo.id, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 
-async fn resolve_repo(pool: &PgPool, params: &SearchParams) -> Result<Repo> {
+async fn resolve_repo(client: &Client, params: &SearchParams) -> Result<Repo> {
     let path = if let Some(ref explicit) = params.repo {
         explicit.clone()
     } else if let Some(ref cwd) = params.cwd {
         let cwd_path = std::path::Path::new(cwd);
-        let root = muninn_core::repo_resolver::find_repo_root(cwd_path)
-            .ok_or_else(|| anyhow::anyhow!("no {} found above '{}'", muninn_core::config::RepoConfig::FILE_NAME, cwd))?;
+        let root = muninn_core::repo_resolver::find_repo_root(cwd_path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no {} found above '{}'",
+                muninn_core::config::RepoConfig::FILE_NAME,
+                cwd
+            )
+        })?;
         root.to_string_lossy().to_string()
     } else {
         anyhow::bail!("provide either 'repo' path or 'cwd' to resolve the repository");
     };
 
-    store::get_repo_by_path(pool, &path)
+    store::get_repo_by_path(client, &path)
         .await?
         .ok_or_else(|| anyhow::anyhow!("repo not found or not indexed: '{}'", path))
 }
-
 
 /// Enforce RepoDimMatchesBackend: the query embedding must have the same
 /// dimension as the VECTOR(n) column in the repo's chunks table.
@@ -240,13 +238,12 @@ pub async fn record_knowledge(
 ) -> Result<KnowledgeItemResponse> {
     let id = params.id.as_deref().map(Uuid::parse_str).transpose()?;
 
-    // Embed the title + body for semantic search.
     let text = format!("{}\n{}", params.title, params.body);
     let embedding = ctx.embedder.embed(&[text]).await?;
     let emb = embedding.into_iter().next().unwrap_or_default();
 
     let item = knowledge::upsert(
-        &ctx.pool,
+        &ctx.client,
         id,
         &params.repo,
         &params.title,
@@ -271,7 +268,7 @@ pub async fn search_knowledge(
     let emb = embedding.into_iter().next().unwrap_or_default();
 
     let results = knowledge::search_hybrid(
-        &ctx.pool,
+        &ctx.client,
         &params.repo,
         &params.query,
         &emb,
@@ -299,7 +296,7 @@ pub async fn delete_knowledge(
     params: DeleteKnowledgeParams,
 ) -> Result<serde_json::Value> {
     let id = Uuid::parse_str(&params.id)?;
-    let deleted = knowledge::delete(&ctx.pool, id).await?;
+    let deleted = knowledge::delete(&ctx.client, id).await?;
     Ok(serde_json::json!({ "deleted": deleted }))
 }
 
@@ -307,7 +304,7 @@ pub async fn list_knowledge(
     ctx:       &SearchContext,
     repo_path: &str,
 ) -> Result<serde_json::Value> {
-    let items = knowledge::list(&ctx.pool, repo_path).await?;
+    let items = knowledge::list(&ctx.client, repo_path).await?;
     let response: Vec<KnowledgeItemResponse> = items.into_iter().map(Into::into).collect();
     Ok(serde_json::to_value(response)?)
 }
@@ -317,7 +314,8 @@ fn normalize_limit(limit: Option<i64>) -> Result<i64> {
     anyhow::ensure!(limit >= 1, "limit must be at least 1");
     anyhow::ensure!(
         limit <= muninn_core::search::MAX_LIMIT,
-        "limit must not exceed {}", muninn_core::search::MAX_LIMIT
+        "limit must not exceed {}",
+        muninn_core::search::MAX_LIMIT
     );
     Ok(limit)
 }

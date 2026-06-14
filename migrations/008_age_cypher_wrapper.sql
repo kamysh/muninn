@@ -1,10 +1,7 @@
--- Wrapper for ag_catalog.cypher that accepts plain text parameters.
---
--- AGE 1.6.0 requires the third argument to cypher() to be a bare $N Param
--- node (not a TypeCast), and sqlx cannot send parameters with the agtype OID.
--- This function accepts gname, query, and params as plain text, then executes
--- the cypher call via dynamic SQL (EXECUTE...USING) so the $1 Param inside
--- the dynamic string is correctly typed as ag_catalog.agtype.
+-- #!migration
+-- name: "age_cypher_wrapper",
+-- description: "Wrapper for ag_catalog.cypher that accepts plain text parameters. AGE 1.6.0 requires the third argument to cypher() to be a bare $N Param node (not a TypeCast), and sqlx cannot send parameters with the agtype OID. This function accepts gname, query, and params as plain text, then executes the cypher call via dynamic SQL (EXECUTE...USING) so the $1 Param inside the dynamic string is correctly typed as ag_catalog.agtype.",
+-- requires: "knowledge";
 CREATE OR REPLACE FUNCTION muninn_cypher(gname text, query text, params text)
 RETURNS SETOF ag_catalog.agtype AS $func$
 BEGIN
