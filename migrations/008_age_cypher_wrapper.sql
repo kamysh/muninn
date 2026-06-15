@@ -11,3 +11,9 @@ BEGIN
     ) USING params::ag_catalog.agtype;
 END;
 $func$ LANGUAGE plpgsql;
+
+-- #!migration
+-- name: "drop-muninn-cypher",
+-- description: "Drop the muninn_cypher stored procedure — replaced by PREPARE/EXECUTE/DEALLOCATE in graph.rs which enforces the query/data boundary at the protocol level (spec: Muninn.Storage, GRAPH-WRITE TIMEOUT section).",
+-- requires: "age_cypher_wrapper";
+DROP FUNCTION IF EXISTS muninn_cypher(text, text, text);
