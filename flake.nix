@@ -48,12 +48,12 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "0.4.2";
+          version = "0.4.4";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes = {
-              "kryzhen-0.6.0" = "sha256-NIUuqvpTZ7S+20MTNZQU3cw9t+I4RmcyVCW/8/cMxO4=";
+              "kryzhen-0.7.0" = "sha256-CcDJArP/MNtByr8LE5dP3hzpATsb3sTUX4Koq3UF/70=";
             };
           };
           nativeBuildInputs = [ pkgs.pkg-config ];
