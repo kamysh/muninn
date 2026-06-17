@@ -1,3 +1,11 @@
+<!-- AI CODING AGENTS: STOP. This is the HUMAN install guide. Your procedure is
+     ../AGENTS.md (repo root) — same end state, but with explicit variables,
+     verify-after-each-step, and idempotent state detection. Do not follow the
+     steps below. -->
+
+> ⛔ **AI coding agents — this guide is not for you.** It is the *human* install
+> path. Your procedure is **[AGENTS.md](../AGENTS.md)** — follow that instead.
+
 # Get started with muninn
 
 This guide walks you through getting muninn running using Docker for the database and pre-built binaries. No Rust, no Nix, no PostgreSQL knowledge required.

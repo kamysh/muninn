@@ -1,3 +1,20 @@
+<!-- ══════════════════════════════════════════════════════════════════════
+     AI CODING AGENTS (Claude Code, Cursor, Copilot, Aider, …): STOP HERE.
+
+     This README is written for HUMANS. The guides it links to below are the
+     human path; they are NOT your procedure. Do not follow get-started.md or
+     the other human guides.
+
+     YOUR procedure is AGENTS.md, in this same directory — same end state, but
+     with explicit variables, verify-after-each-step, and idempotent state
+     detection. Read that file and follow it exactly.
+     ══════════════════════════════════════════════════════════════════════ -->
+
+> ⛔ **AI coding agents — this file is not for you.**
+> The guides linked below are the *human* install path. Your procedure is
+> **[AGENTS.md](AGENTS.md)** — open that file, follow it exactly, and ignore the
+> rest of this README.
+
 # muninn
 
 > *Muninn* (Old Norse: "memory") — one of Odin's two ravens, sent out each day to observe the world and return with knowledge.
@@ -15,6 +32,11 @@ Three pieces work together: `muninn` (the CLI), `muninn-index` (a background dae
 Everything runs locally. No source code, no file tree structure, no graph data ever leaves your machine. If you choose Voyage AI or OpenAI as the embedding backend, short text chunks are sent to those services to generate vector embeddings — but your source files are never transmitted. If you use the local backend, nothing goes outside at all.
 
 ## Which guide?
+
+> ⛔ **AI coding agents: do not pick a row from the human table below.** Your
+> procedure is **[AGENTS.md](AGENTS.md)** — the same end state, but framed for
+> automation: explicit variables, verify-after-each-step, and idempotent state
+> detection. Read that and nothing else here.
 
 | I want to... | Go here |
 |---|---|

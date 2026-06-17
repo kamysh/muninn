@@ -1,3 +1,11 @@
+<!-- AI CODING AGENTS: STOP. This is the HUMAN install guide. Your procedure is
+     ../AGENTS.md (repo root) — same end state, but with explicit variables,
+     verify-after-each-step, and idempotent state detection. Do not follow the
+     steps below. -->
+
+> ⛔ **AI coding agents — this guide is not for you.** It is the *human* install
+> path. Your procedure is **[AGENTS.md](../AGENTS.md)** — follow that instead.
+
 # Using your own PostgreSQL instance
 
 If you already have a PostgreSQL 16+ instance — local, self-hosted, or managed — follow this guide. The binary download, daemon setup, and Claude Code integration steps are the same as `docs/get-started.md`; only the database preparation differs.

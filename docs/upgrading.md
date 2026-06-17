@@ -1,3 +1,12 @@
+<!-- AI CODING AGENTS: STOP. This is the HUMAN upgrade guide. Your procedure is
+     ../AGENTS.md (repo root), section "Upgrading an existing install" — same
+     end state, but with explicit variables and verify-after-each-step. Do not
+     follow the steps below. -->
+
+> ⛔ **AI coding agents — this guide is not for you.** It is the *human* upgrade
+> path. Your procedure is **[AGENTS.md](../AGENTS.md)** (section "Upgrading an
+> existing install") — follow that instead.
+
 # Upgrading muninn
 
 Two things to update: the binaries and the database schema (if the new release includes new migrations). Both take under a minute. Your indexed data is preserved — migrations are additive and never delete existing index data.
