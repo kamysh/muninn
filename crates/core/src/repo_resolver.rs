@@ -92,7 +92,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // outer has .muninn.toml AND outer/inner has .muninn.toml
         // cwd is inside inner — should resolve to inner, not outer
-        make_tree(tmp.path(), &[".muninn.toml", "inner/.muninn.toml", "inner/src/file.rs"]);
+        make_tree(
+            tmp.path(),
+            &[".muninn.toml", "inner/.muninn.toml", "inner/src/file.rs"],
+        );
         let cwd = tmp.path().join("inner/src");
         let root = find_repo_root(&cwd).unwrap();
         assert_eq!(root, tmp.path().join("inner"));

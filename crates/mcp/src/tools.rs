@@ -1,9 +1,9 @@
-use muninn_core::{search, graph, knowledge, store, embeddings::EmbeddingBackend};
+use anyhow::Result;
 use muninn_core::types::Repo;
-use tokio_postgres::Client;
+use muninn_core::{embeddings::EmbeddingBackend, graph, knowledge, search, store};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use anyhow::Result;
+use tokio_postgres::Client;
 use uuid::Uuid;
 
 pub struct SearchContext {
@@ -53,7 +53,10 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
     let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.client, &params).await?;
 
-    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
+    let embedding = ctx
+        .embedder
+        .embed(std::slice::from_ref(&params.query))
+        .await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -80,7 +83,10 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
     let limit = normalize_limit(params.limit)?;
     let repo = resolve_repo(&ctx.client, &params).await?;
 
-    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
+    let embedding = ctx
+        .embedder
+        .embed(std::slice::from_ref(&params.query))
+        .await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -105,12 +111,12 @@ pub async fn search_structural(
     params: StructuralParams,
 ) -> Result<serde_json::Value> {
     let (relation, incoming) = match params.relation.as_str() {
-        "callers"   => (muninn_core::types::StructuralRelation::Calls, true),
-        "callees"   => (muninn_core::types::StructuralRelation::Calls, false),
-        "imports"   => (muninn_core::types::StructuralRelation::Imports, false),
-        "defines"   => (muninn_core::types::StructuralRelation::Defines, false),
+        "callers" => (muninn_core::types::StructuralRelation::Calls, true),
+        "callees" => (muninn_core::types::StructuralRelation::Calls, false),
+        "imports" => (muninn_core::types::StructuralRelation::Imports, false),
+        "defines" => (muninn_core::types::StructuralRelation::Defines, false),
         "inheritors" => (muninn_core::types::StructuralRelation::InheritsFrom, true),
-        "inherits"  => (muninn_core::types::StructuralRelation::InheritsFrom, false),
+        "inherits" => (muninn_core::types::StructuralRelation::InheritsFrom, false),
         other => return Err(anyhow::anyhow!("unknown relation: {}", other)),
     };
 
@@ -167,52 +173,52 @@ fn validate_query_dim(query_vec: &[f32], repo: &Repo) -> Result<()> {
 
 #[derive(Deserialize)]
 pub struct RecordKnowledgeParams {
-    pub repo:          String,
-    pub title:         String,
-    pub body:          String,
+    pub repo: String,
+    pub title: String,
+    pub body: String,
     #[serde(default)]
-    pub tags:          Vec<String>,
+    pub tags: Vec<String>,
     #[serde(default)]
     pub related_files: Vec<String>,
     /// If provided, update the existing item with this id instead of inserting.
-    pub id:            Option<String>,
+    pub id: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct KnowledgeItemResponse {
-    pub id:            String,
-    pub repo:          String,
-    pub title:         String,
-    pub body:          String,
-    pub tags:          Vec<String>,
+    pub id: String,
+    pub repo: String,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
     pub related_files: Vec<String>,
-    pub created_at:    String,
-    pub updated_at:    String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 impl From<knowledge::KnowledgeItem> for KnowledgeItemResponse {
     fn from(item: knowledge::KnowledgeItem) -> Self {
         Self {
-            id:            item.id.to_string(),
-            repo:          item.repo_path,
-            title:         item.title,
-            body:          item.body,
-            tags:          item.tags,
+            id: item.id.to_string(),
+            repo: item.repo_path,
+            title: item.title,
+            body: item.body,
+            tags: item.tags,
             related_files: item.related_files,
-            created_at:    item.created_at.to_rfc3339(),
-            updated_at:    item.updated_at.to_rfc3339(),
+            created_at: item.created_at.to_rfc3339(),
+            updated_at: item.updated_at.to_rfc3339(),
         }
     }
 }
 
 #[derive(Serialize)]
 pub struct KnowledgeResultItem {
-    pub id:            String,
-    pub title:         String,
-    pub body:          String,
-    pub tags:          Vec<String>,
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
     pub related_files: Vec<String>,
-    pub score:         f32,
+    pub score: f32,
 }
 
 #[derive(Serialize)]
@@ -223,7 +229,7 @@ pub struct KnowledgeSearchResponse {
 #[derive(Deserialize)]
 pub struct SearchKnowledgeParams {
     pub query: String,
-    pub repo:  String,
+    pub repo: String,
     pub limit: Option<i64>,
 }
 
@@ -233,7 +239,7 @@ pub struct DeleteKnowledgeParams {
 }
 
 pub async fn record_knowledge(
-    ctx:    &SearchContext,
+    ctx: &SearchContext,
     params: RecordKnowledgeParams,
 ) -> Result<KnowledgeItemResponse> {
     let id = params.id.as_deref().map(Uuid::parse_str).transpose()?;
@@ -259,40 +265,37 @@ pub async fn record_knowledge(
 }
 
 pub async fn search_knowledge(
-    ctx:    &SearchContext,
+    ctx: &SearchContext,
     params: SearchKnowledgeParams,
 ) -> Result<KnowledgeSearchResponse> {
     let limit = normalize_limit(params.limit)?;
 
-    let embedding = ctx.embedder.embed(std::slice::from_ref(&params.query)).await?;
+    let embedding = ctx
+        .embedder
+        .embed(std::slice::from_ref(&params.query))
+        .await?;
     let emb = embedding.into_iter().next().unwrap_or_default();
 
-    let results = knowledge::search_hybrid(
-        &ctx.client,
-        &params.repo,
-        &params.query,
-        &emb,
-        limit,
-    )
-    .await?;
+    let results =
+        knowledge::search_hybrid(&ctx.client, &params.repo, &params.query, &emb, limit).await?;
 
     Ok(KnowledgeSearchResponse {
         results: results
             .into_iter()
             .map(|r| KnowledgeResultItem {
-                id:            r.item.id.to_string(),
-                title:         r.item.title,
-                body:          r.item.body,
-                tags:          r.item.tags,
+                id: r.item.id.to_string(),
+                title: r.item.title,
+                body: r.item.body,
+                tags: r.item.tags,
                 related_files: r.item.related_files,
-                score:         r.score,
+                score: r.score,
             })
             .collect(),
     })
 }
 
 pub async fn delete_knowledge(
-    ctx:    &SearchContext,
+    ctx: &SearchContext,
     params: DeleteKnowledgeParams,
 ) -> Result<serde_json::Value> {
     let id = Uuid::parse_str(&params.id)?;
@@ -300,10 +303,7 @@ pub async fn delete_knowledge(
     Ok(serde_json::json!({ "deleted": deleted }))
 }
 
-pub async fn list_knowledge(
-    ctx:       &SearchContext,
-    repo_path: &str,
-) -> Result<serde_json::Value> {
+pub async fn list_knowledge(ctx: &SearchContext, repo_path: &str) -> Result<serde_json::Value> {
     let items = knowledge::list(&ctx.client, repo_path).await?;
     let response: Vec<KnowledgeItemResponse> = items.into_iter().map(Into::into).collect();
     Ok(serde_json::to_value(response)?)

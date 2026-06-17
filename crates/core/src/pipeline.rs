@@ -1,15 +1,15 @@
 use crate::{
     embeddings::EmbeddingBackend,
     graph,
-    parser::{detect_language, extract_edges, parse_file, chunk_file},
-    store::{upsert_chunk, delete_file_chunks},
+    parser::{chunk_file, detect_language, extract_edges, parse_file},
+    store::{delete_file_chunks, upsert_chunk},
     types::{BatchOutcome, StructuralEdge},
 };
+use anyhow::Result;
+use std::path::Path;
+use std::sync::Arc;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use anyhow::Result;
-use std::sync::Arc;
-use std::path::Path;
 
 /// Files larger than this are skipped during indexing (see `index_file`).
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
@@ -172,7 +172,11 @@ pub async fn index_file(
             let from_id = range_to_chunk.get(&(pe.from_range.start, pe.from_range.end));
             let to_id = name_to_chunk.get(&pe.to_name);
             if let (Some(&from), Some(&to)) = (from_id, to_id) {
-                edges.push(StructuralEdge { from, to, relation: pe.relation });
+                edges.push(StructuralEdge {
+                    from,
+                    to,
+                    relation: pe.relation,
+                });
             }
         }
         if let Err(e) = graph::upsert_edges(client, repo_id, &edges).await {
@@ -286,7 +290,10 @@ pub async fn index_repo(
         }
     }
 
-    let keep: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let keep: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
 
     let total = files.len();
     let mut done = 0usize;
@@ -313,7 +320,10 @@ pub async fn index_repo(
             Ok(Err(e)) => {
                 let reason = format!("{:#}", e);
                 tracing::warn!("skipping {}: {}", file.display(), reason);
-                skips.push(SkipRecord { path: file.clone(), reason });
+                skips.push(SkipRecord {
+                    path: file.clone(),
+                    reason,
+                });
             }
             Err(_elapsed) => {
                 let reason = format!(
@@ -326,7 +336,10 @@ pub async fn index_repo(
                     timeout_secs = FILE_INDEX_TIMEOUT_SECS,
                     "file index timed out — skipping"
                 );
-                skips.push(SkipRecord { path: file.clone(), reason });
+                skips.push(SkipRecord {
+                    path: file.clone(),
+                    reason,
+                });
             }
         }
         done += 1;
@@ -346,11 +359,9 @@ pub async fn index_repo(
             Err(e) => tracing::warn!("listing orphan files failed for repo {}: {}", repo_id, e),
         }
         match crate::store::prune_chunks_not_in(client, repo_id, &keep).await {
-            Ok(n) if n > 0 => tracing::info!(
-                "reindex pruned {} orphaned chunk(s) in repo {}",
-                n,
-                repo_id
-            ),
+            Ok(n) if n > 0 => {
+                tracing::info!("reindex pruned {} orphaned chunk(s) in repo {}", n, repo_id)
+            }
             Ok(_) => {}
             Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
         }
@@ -396,7 +407,10 @@ mod tests {
         assert!(path_excluded(&o, Path::new("target/debug/build/x.rs")));
         assert!(path_excluded(&o, Path::new("target/foo")));
         assert!(!path_excluded(&o, Path::new("src/lib.rs")));
-        assert!(!path_excluded(&o, Path::new("node_modules/left-pad/index.js")));
+        assert!(!path_excluded(
+            &o,
+            Path::new("node_modules/left-pad/index.js")
+        ));
     }
 
     #[test]

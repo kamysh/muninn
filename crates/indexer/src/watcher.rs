@@ -1,3 +1,7 @@
+use anyhow::Result;
+use muninn_core::embeddings::EmbeddingBackend;
+use muninn_core::pipeline::{build_excludes, index_file};
+use muninn_core::types::IndexState;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6,10 +10,6 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use anyhow::Result;
-use muninn_core::embeddings::EmbeddingBackend;
-use muninn_core::types::IndexState;
-use muninn_core::pipeline::{build_excludes, index_file};
 
 // Client, ids, embedder, debounce, shared state and config knobs — all distinct
 // concerns; bundling them into a struct would not improve clarity.
@@ -109,11 +109,9 @@ pub async fn watch_repo(
                 .await
                 {
                     Ok(()) => any_succeeded = true,
-                    Err(e) => tracing::warn!(
-                        "incremental index error for {}: {}",
-                        path.display(),
-                        e
-                    ),
+                    Err(e) => {
+                        tracing::warn!("incremental index error for {}: {}", path.display(), e)
+                    }
                 }
             } else {
                 let fp = path.to_string_lossy();
@@ -123,8 +121,7 @@ pub async fn watch_repo(
                     tracing::warn!("failed to delete chunks for {}: {}", path.display(), e);
                 } else {
                     if let Err(e) =
-                        muninn_core::graph::delete_file_symbols(&client, repo_id, fp.as_ref())
-                            .await
+                        muninn_core::graph::delete_file_symbols(&client, repo_id, fp.as_ref()).await
                     {
                         tracing::warn!(
                             "failed to delete graph nodes for {}: {}",

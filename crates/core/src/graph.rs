@@ -1,8 +1,8 @@
+use crate::store::graph_name;
+use crate::types::{LineRange, StructuralEdge, StructuralRelation, Symbol, SymbolKind};
+use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use anyhow::Result;
-use crate::types::{Symbol, SymbolKind, LineRange, StructuralRelation, StructuralEdge};
-use crate::store::graph_name;
 
 // ─── Per-statement graph-write timeout (Tier 2 safety net) ───────────────────
 //
@@ -40,7 +40,9 @@ async fn age_execute(
     client.simple_query(prepare_sql).await?;
     let exec = format!("EXECUTE {}('{}')", stmt_name, sql_esc(agtype_json));
     let result = client.simple_query(&exec).await;
-    let _ = client.simple_query(&format!("DEALLOCATE {}", stmt_name)).await;
+    let _ = client
+        .simple_query(&format!("DEALLOCATE {}", stmt_name))
+        .await;
     result?;
     Ok(())
 }
@@ -72,7 +74,8 @@ async fn exec_cypher_write_with_timeout(
         Ok(_) => Ok(()),
         Err(e) => {
             // Check if the underlying cause is a statement timeout.
-            let is_timeout = e.downcast_ref::<tokio_postgres::Error>()
+            let is_timeout = e
+                .downcast_ref::<tokio_postgres::Error>()
                 .map(is_statement_timeout)
                 .unwrap_or(false);
             if is_timeout {
@@ -104,17 +107,17 @@ pub struct SymbolNodeInput {
 fn kind_label(kind: &SymbolKind) -> &'static str {
     match kind {
         SymbolKind::Function => "Function",
-        SymbolKind::Class    => "Class",
-        SymbolKind::Module   => "Module",
-        SymbolKind::Import   => "Import",
+        SymbolKind::Class => "Class",
+        SymbolKind::Module => "Module",
+        SymbolKind::Import => "Import",
     }
 }
 
 fn relation_label(rel: &StructuralRelation) -> &'static str {
     match rel {
-        StructuralRelation::Calls        => "CALLS",
-        StructuralRelation::Imports      => "IMPORTS",
-        StructuralRelation::Defines      => "DEFINES",
+        StructuralRelation::Calls => "CALLS",
+        StructuralRelation::Imports => "IMPORTS",
+        StructuralRelation::Defines => "DEFINES",
         StructuralRelation::InheritsFrom => "INHERITS_FROM",
     }
 }
@@ -134,19 +137,26 @@ pub async fn upsert_symbol_nodes(
     let mut by_label: std::collections::HashMap<&'static str, Vec<serde_json::Value>> =
         std::collections::HashMap::new();
     for n in nodes {
-        by_label.entry(kind_label(&n.kind)).or_default().push(serde_json::json!({
-            "chunk_id": n.chunk_id.to_string(),
-            "name": n.name,
-            "file_path": n.file_path,
-            "start_line": n.start_line,
-            "end_line": n.end_line,
-        }));
+        by_label
+            .entry(kind_label(&n.kind))
+            .or_default()
+            .push(serde_json::json!({
+                "chunk_id": n.chunk_id.to_string(),
+                "name": n.name,
+                "file_path": n.file_path,
+                "start_line": n.start_line,
+                "end_line": n.end_line,
+            }));
     }
 
     for (label, rows) in by_label {
         let params = serde_json::json!({ "rows": rows });
         let agtype_json = params.to_string();
-        let stmt = format!("muninn_upsert_{}_{}", label.to_lowercase(), Uuid::new_v4().simple());
+        let stmt = format!(
+            "muninn_upsert_{}_{}",
+            label.to_lowercase(),
+            Uuid::new_v4().simple()
+        );
         // label and relation_label are &'static str from closed match arms — never user input.
         let cypher = format!(
             r#"UNWIND $rows AS r
@@ -185,16 +195,23 @@ pub async fn upsert_edges(client: &Client, repo_id: Uuid, edges: &[StructuralEdg
     let mut by_rel: std::collections::HashMap<&'static str, Vec<serde_json::Value>> =
         std::collections::HashMap::new();
     for e in edges {
-        by_rel.entry(relation_label(&e.relation)).or_default().push(serde_json::json!({
-            "from": e.from.to_string(),
-            "to": e.to.to_string(),
-        }));
+        by_rel
+            .entry(relation_label(&e.relation))
+            .or_default()
+            .push(serde_json::json!({
+                "from": e.from.to_string(),
+                "to": e.to.to_string(),
+            }));
     }
 
     for (rel, rows) in by_rel {
         let params = serde_json::json!({ "rows": rows });
         let agtype_json = params.to_string();
-        let stmt = format!("muninn_upsert_edge_{}_{}", rel.to_lowercase(), Uuid::new_v4().simple());
+        let stmt = format!(
+            "muninn_upsert_edge_{}_{}",
+            rel.to_lowercase(),
+            Uuid::new_v4().simple()
+        );
         let cypher = format!(
             r#"UNWIND $rows AS r
                MATCH (a {{chunk_id: r.from}}), (b {{chunk_id: r.to}})
@@ -296,25 +313,25 @@ pub async fn query_related(
             let map: serde_json::Value =
                 serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
 
-            let name = map.get("name")
+            let name = map
+                .get("name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
-            let file_path = map.get("file_path")
+            let file_path = map
+                .get("file_path")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
-            let kind_str = map.get("kind")
+            let kind_str = map
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
-            let start_line = map.get("start_line")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let end_line = map.get("end_line")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let chunk_id: Uuid = map.get("chunk_id")
+            let start_line = map.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let end_line = map.get("end_line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let chunk_id: Uuid = map
+                .get("chunk_id")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.trim_matches('"').parse().ok())
                 .unwrap_or_else(Uuid::nil);
@@ -354,7 +371,9 @@ mod tests {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = manifest.join("../../config.toml");
         let cfg = GlobalConfig::load_from(&config_path).expect("load local config.toml");
-        db::connect(&cfg.database).await.expect("connect to muninn db")
+        db::connect(&cfg.database)
+            .await
+            .expect("connect to muninn db")
     }
 
     #[tokio::test]
@@ -384,17 +403,36 @@ mod tests {
              $$ MATCH (n {{chunk_id: $chunk_id}}) RETURN {{name: n.name, kind: n.kind}} $$, \
              $1) AS r"
         );
-        client.simple_query(&read_prepare).await.expect("prepare read");
-        let exec = format!("EXECUTE {}('{}')", read_stmt, sql_esc(&read_params.to_string()));
+        client
+            .simple_query(&read_prepare)
+            .await
+            .expect("prepare read");
+        let exec = format!(
+            "EXECUTE {}('{}')",
+            read_stmt,
+            sql_esc(&read_params.to_string())
+        );
         let msgs = client.simple_query(&exec).await.expect("execute read");
-        let _ = client.simple_query(&format!("DEALLOCATE {read_stmt}")).await;
+        let _ = client
+            .simple_query(&format!("DEALLOCATE {read_stmt}"))
+            .await;
 
-        let rows: Vec<_> = msgs.iter().filter_map(|m| {
-            if let tokio_postgres::SimpleQueryMessage::Row(r) = m { Some(r) } else { None }
-        }).collect();
+        let rows: Vec<_> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let tokio_postgres::SimpleQueryMessage::Row(r) = m {
+                    Some(r)
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(rows.len(), 1, "node should have been written");
         let raw = rows[0].get(0).unwrap();
         let map: serde_json::Value = serde_json::from_str(raw).unwrap();
-        assert_eq!(map.get("name").and_then(|v| v.as_str()).unwrap_or(""), "write_test");
+        assert_eq!(
+            map.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+            "write_test"
+        );
     }
 }

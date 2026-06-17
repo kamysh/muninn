@@ -17,8 +17,7 @@ const SEARCH_PATH: &str = "public,ag_catalog";
 // include_dir! embeds all files recursively; we iterate .files() sorted by name.
 static MIGRATIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../migrations");
 
-const RECEIPT_JSON: &str =
-    include_str!("../../../migrations/.kryzhen-import-receipt.json");
+const RECEIPT_JSON: &str = include_str!("../../../migrations/.kryzhen-import-receipt.json");
 
 fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
     // Collect .sql files sorted by name (001_, 002_, … ordering).
@@ -60,8 +59,7 @@ fn pgpass_lookup(host: &str, port: u16, dbname: &str, user: &str) -> Option<Stri
             continue;
         }
         let m = |pat: &str, val: &str| pat == "*" || pat == val;
-        if m(parts[0], host) && m(parts[1], &port_s) && m(parts[2], dbname) && m(parts[3], user)
-        {
+        if m(parts[0], host) && m(parts[1], &port_s) && m(parts[2], dbname) && m(parts[3], user) {
             return Some(parts[4].to_owned());
         }
     }
@@ -175,7 +173,10 @@ pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
 /// spawned task for its lifetime.
 pub async fn connect_listener(
     cfg: &DatabaseConfig,
-) -> Result<(Client, mpsc::UnboundedReceiver<tokio_postgres::Notification>)> {
+) -> Result<(
+    Client,
+    mpsc::UnboundedReceiver<tokio_postgres::Notification>,
+)> {
     let mut pg_cfg = make_pg_config(cfg);
     pg_cfg.application_name("muninn-index-listener");
 

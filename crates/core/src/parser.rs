@@ -82,14 +82,9 @@ fn extract_defines(symbols: &[ParsedSymbol]) -> Vec<ParsedEdge> {
 /// CALLS edges: for each Function symbol, walk its subtree in the tree-sitter
 /// parse tree, find call expressions, and match callee names against other
 /// symbols in the same file.
-fn extract_calls(
-    symbols: &[ParsedSymbol],
-    source: &str,
-    language: &Language,
-) -> Vec<ParsedEdge> {
+fn extract_calls(symbols: &[ParsedSymbol], source: &str, language: &Language) -> Vec<ParsedEdge> {
     // Build a set of known symbol names for fast lookup.
-    let known: std::collections::HashSet<&str> =
-        symbols.iter().map(|s| s.name.as_str()).collect();
+    let known: std::collections::HashSet<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
 
     let mut parser = tree_sitter::Parser::new();
     let ts_lang = match language {
@@ -184,7 +179,8 @@ fn collect_callees_rec(
     if node.kind() == call_kind {
         // The function/callee is the "function" field (Rust, JS/TS) or
         // the first named child (Python).
-        let callee_node = node.child_by_field_name("function")
+        let callee_node = node
+            .child_by_field_name("function")
             .or_else(|| node.named_child(0));
 
         if let Some(cn) = callee_node {
@@ -209,15 +205,14 @@ fn collect_callees_rec(
 fn extract_callee_name(node: tree_sitter::Node, source: &str) -> String {
     match node.kind() {
         "identifier" | "field_identifier" => {
-            node.utf8_text(source.as_bytes())
-                .unwrap_or("")
-                .to_string()
+            node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
         }
         // Rust: `field_expression` → last child is the method name
         // Python: `attribute` → `attribute` field
         // JS/TS: `member_expression` → `property` field
         _ => {
-            let name_node = node.child_by_field_name("field")
+            let name_node = node
+                .child_by_field_name("field")
                 .or_else(|| node.child_by_field_name("attribute"))
                 .or_else(|| node.child_by_field_name("property"));
             name_node
@@ -238,7 +233,8 @@ pub fn parse_file(source: &str, language: Language) -> Result<Vec<ParsedSymbol>>
     };
     parser.set_language(&ts_lang)?;
 
-    let tree = parser.parse(source, None)
+    let tree = parser
+        .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("tree-sitter parse failed"))?;
 
     let lines: Vec<&str> = source.lines().collect();
@@ -259,18 +255,30 @@ fn extend_over_leading_doc(lines: &[&str], code_start_row: usize, language: &Lan
     let mut start = code_start_row;
     while start > 0 {
         let prev = lines[start - 1].trim_start();
-        if prev.is_empty() { break; }
+        if prev.is_empty() {
+            break;
+        }
         let is_doc_or_attr = match language {
-            Language::Rust =>
-                prev.starts_with("//") || prev.starts_with("#[") || prev.starts_with("#![")
-                || prev.starts_with("/*") || prev.starts_with('*'),
-            Language::Python =>
-                prev.starts_with('#') || prev.starts_with('@'),
-            Language::JavaScript | Language::TypeScript =>
-                prev.starts_with("//") || prev.starts_with("/*") || prev.starts_with('*')
-                || prev.starts_with('@'),
+            Language::Rust => {
+                prev.starts_with("//")
+                    || prev.starts_with("#[")
+                    || prev.starts_with("#![")
+                    || prev.starts_with("/*")
+                    || prev.starts_with('*')
+            }
+            Language::Python => prev.starts_with('#') || prev.starts_with('@'),
+            Language::JavaScript | Language::TypeScript => {
+                prev.starts_with("//")
+                    || prev.starts_with("/*")
+                    || prev.starts_with('*')
+                    || prev.starts_with('@')
+            }
         };
-        if is_doc_or_attr { start -= 1; } else { break; }
+        if is_doc_or_attr {
+            start -= 1;
+        } else {
+            break;
+        }
     }
     start
 }
@@ -278,11 +286,7 @@ fn extend_over_leading_doc(lines: &[&str], code_start_row: usize, language: &Lan
 /// Extract a display name for a symbol node.
 /// For named declarations (functions, classes, modules) uses the "name" field.
 /// For imports uses the first named child (the path/module being imported).
-fn extract_symbol_name(
-    kind: &SymbolKind,
-    node: tree_sitter::Node,
-    source: &str,
-) -> String {
+fn extract_symbol_name(kind: &SymbolKind, node: tree_sitter::Node, source: &str) -> String {
     match kind {
         SymbolKind::Import => {
             // Try "name" field first (Python), then first named child (Rust use_declaration path,
@@ -294,12 +298,11 @@ fn extract_symbol_name(
                 .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
                 .unwrap_or_else(|| "<import>".to_string())
         }
-        _ => {
-            node.child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                .unwrap_or("<anonymous>")
-                .to_string()
-        }
+        _ => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            .unwrap_or("<anonymous>")
+            .to_string(),
     }
 }
 
@@ -317,10 +320,18 @@ fn extract_symbols(
         (Language::Rust, "use_declaration") => Some(SymbolKind::Import),
         (Language::Python, "function_definition") => Some(SymbolKind::Function),
         (Language::Python, "class_definition") => Some(SymbolKind::Class),
-        (Language::Python, "import_statement") | (Language::Python, "import_from_statement") => Some(SymbolKind::Import),
-        (Language::JavaScript | Language::TypeScript, "function_declaration") => Some(SymbolKind::Function),
-        (Language::JavaScript | Language::TypeScript, "class_declaration") => Some(SymbolKind::Class),
-        (Language::JavaScript | Language::TypeScript, "import_statement") => Some(SymbolKind::Import),
+        (Language::Python, "import_statement") | (Language::Python, "import_from_statement") => {
+            Some(SymbolKind::Import)
+        }
+        (Language::JavaScript | Language::TypeScript, "function_declaration") => {
+            Some(SymbolKind::Function)
+        }
+        (Language::JavaScript | Language::TypeScript, "class_declaration") => {
+            Some(SymbolKind::Class)
+        }
+        (Language::JavaScript | Language::TypeScript, "import_statement") => {
+            Some(SymbolKind::Import)
+        }
         _ => None,
     };
 
@@ -333,7 +344,10 @@ fn extract_symbols(
         out.push(ParsedSymbol {
             name,
             kind: k,
-            range: LineRange { start: start_line, end: end_line },
+            range: LineRange {
+                start: start_line,
+                end: end_line,
+            },
         });
     }
 
@@ -353,7 +367,9 @@ pub fn chunk_file(
     let lines: Vec<&str> = source.lines().collect();
     let mut chunks = Vec::new();
 
-    if lines.is_empty() { return chunks; }
+    if lines.is_empty() {
+        return chunks;
+    }
 
     // Line-aligned accumulation into chunks of ≤ max_chars (with single-line
     // fallback if any one line alone exceeds the budget). `base_line_1idx` is
@@ -401,7 +417,9 @@ pub fn chunk_file(
     // that would otherwise be invisible to semantic search.
     let mut covered = vec![false; lines.len()];
     for sym in symbols {
-        let s = (sym.range.start as usize).saturating_sub(1).min(lines.len());
+        let s = (sym.range.start as usize)
+            .saturating_sub(1)
+            .min(lines.len());
         let e = (sym.range.end as usize).min(lines.len());
         if let Some(slice) = covered.get_mut(s..e) {
             slice.fill(true);
@@ -415,7 +433,9 @@ pub fn chunk_file(
         let s = (sym.range.start as usize).saturating_sub(1);
         let e = sym.range.end as usize;
         let span = lines.get(s..e.min(lines.len())).unwrap_or(&[]);
-        if span.is_empty() { continue; }
+        if span.is_empty() {
+            continue;
+        }
 
         let full_content: String = span.join("\n");
         if full_content.len() <= max_chars {
@@ -435,11 +455,20 @@ pub fn chunk_file(
     // Emit gap chunks for contiguous uncovered line ranges.
     let mut i = 0usize;
     while i < lines.len() {
-        if covered[i] { i += 1; continue; }
+        if covered[i] {
+            i += 1;
+            continue;
+        }
         let gap_start = i;
-        while i < lines.len() && !covered[i] { i += 1; }
+        while i < lines.len() && !covered[i] {
+            i += 1;
+        }
         let gap_end = i;
-        accumulate(&lines[gap_start..gap_end], (gap_start as u32) + 1, &mut chunks);
+        accumulate(
+            &lines[gap_start..gap_end],
+            (gap_start as u32) + 1,
+            &mut chunks,
+        );
     }
 
     chunks
@@ -490,18 +519,29 @@ fn add(a: i32, b: i32) -> i32 {
 }
 ";
         let symbols = parse_file(src, Language::Rust).unwrap();
-        let add = symbols.iter().find(|s| s.name == "add").expect("add symbol");
+        let add = symbols
+            .iter()
+            .find(|s| s.name == "add")
+            .expect("add symbol");
         // Symbol range starts at the doc comment (line 1), not the fn (line 4).
-        assert_eq!(add.range.start, 1, "symbol start should include leading doc/attr");
+        assert_eq!(
+            add.range.start, 1,
+            "symbol start should include leading doc/attr"
+        );
 
         let chunks = chunk_file(src, &symbols, 512);
-        let add_chunk = chunks.iter()
+        let add_chunk = chunks
+            .iter()
             .find(|c| c.range.start == add.range.start)
             .expect("chunk for add");
-        assert!(add_chunk.content.contains("Adds two numbers together"),
-            "doc comment must be in the symbol's chunk");
-        assert!(add_chunk.content.contains("fn add"),
-            "fn body must be in the same chunk as its doc");
+        assert!(
+            add_chunk.content.contains("Adds two numbers together"),
+            "doc comment must be in the symbol's chunk"
+        );
+        assert!(
+            add_chunk.content.contains("fn add"),
+            "fn body must be in the same chunk as its doc"
+        );
     }
 
     #[test]
@@ -515,7 +555,10 @@ fn foo() {
 }
 ";
         let symbols = parse_file(src, Language::Rust).unwrap();
-        let foo = symbols.iter().find(|s| s.name == "foo").expect("foo symbol");
+        let foo = symbols
+            .iter()
+            .find(|s| s.name == "foo")
+            .expect("foo symbol");
         // fn foo is on line 3; the comment on line 1 is separated by a blank
         // line 2, so the symbol must start at line 3, not absorb the comment.
         assert_eq!(foo.range.start, 3);

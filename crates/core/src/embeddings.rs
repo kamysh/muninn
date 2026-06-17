@@ -1,8 +1,8 @@
 use anyhow::Result;
 use model2vec_rs::model::StaticModel;
 use std::future::Future;
-use std::pin::Pin;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 /// Boxed, `Send` future returned by `EmbeddingBackend::embed`.
@@ -22,22 +22,24 @@ pub struct VoyageBackend {
 
 impl VoyageBackend {
     pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model, client: reqwest::Client::new() }
+        Self {
+            api_key,
+            model,
+            client: reqwest::Client::new(),
+        }
     }
 }
 
 impl EmbeddingBackend for VoyageBackend {
-    fn embed<'a>(
-        &'a self,
-        texts: &'a [String],
-    ) -> EmbedFuture<'a> {
+    fn embed<'a>(&'a self, texts: &'a [String]) -> EmbedFuture<'a> {
         Box::pin(async move {
             let body = serde_json::json!({
                 "input": texts,
                 "model": self.model,
                 "input_type": "document"
             });
-            let resp: serde_json::Value = self.client
+            let resp: serde_json::Value = self
+                .client
                 .post("https://api.voyageai.com/v1/embeddings")
                 .bearer_auth(&self.api_key)
                 .json(&body)
@@ -61,21 +63,23 @@ pub struct OpenAIBackend {
 
 impl OpenAIBackend {
     pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model, client: reqwest::Client::new() }
+        Self {
+            api_key,
+            model,
+            client: reqwest::Client::new(),
+        }
     }
 }
 
 impl EmbeddingBackend for OpenAIBackend {
-    fn embed<'a>(
-        &'a self,
-        texts: &'a [String],
-    ) -> EmbedFuture<'a> {
+    fn embed<'a>(&'a self, texts: &'a [String]) -> EmbedFuture<'a> {
         Box::pin(async move {
             let body = serde_json::json!({
                 "input": texts,
                 "model": self.model
             });
-            let resp: serde_json::Value = self.client
+            let resp: serde_json::Value = self
+                .client
                 .post("https://api.openai.com/v1/embeddings")
                 .bearer_auth(&self.api_key)
                 .json(&body)
@@ -113,13 +117,21 @@ impl LocalBackend {
         // whole slice in one pass and doesn't take a batch hint.
         let cache_dir = cache_dir.and_then(|path| {
             let trimmed = path.trim().to_string();
-            if trimmed.is_empty() { None } else { Some(PathBuf::from(trimmed)) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
         });
-        Self { model: Mutex::new(None), cache_dir }
+        Self {
+            model: Mutex::new(None),
+            cache_dir,
+        }
     }
 
     fn init_model(&self) -> Result<Arc<StaticModel>> {
-        let mut guard = self.model
+        let mut guard = self
+            .model
             .lock()
             .map_err(|_| anyhow::anyhow!("local model init mutex poisoned"))?;
         if let Some(ref m) = *guard {
@@ -129,7 +141,9 @@ impl LocalBackend {
         if let Some(ref dir) = self.cache_dir {
             // SAFETY: env writes are only safe single-threaded; init_model holds
             // the outer Mutex, so no concurrent reader exists in our path.
-            unsafe { std::env::set_var("HF_HUB_CACHE", dir); }
+            unsafe {
+                std::env::set_var("HF_HUB_CACHE", dir);
+            }
         }
         tracing::info!(
             "initialising local embedding model ({LOCAL_MODEL}, {LOCAL_DIM} dims) — \
@@ -145,10 +159,7 @@ impl LocalBackend {
 }
 
 impl EmbeddingBackend for LocalBackend {
-    fn embed<'a>(
-        &'a self,
-        texts: &'a [String],
-    ) -> EmbedFuture<'a> {
+    fn embed<'a>(&'a self, texts: &'a [String]) -> EmbedFuture<'a> {
         let texts = texts.to_vec();
         Box::pin(async move {
             if texts.is_empty() {
@@ -174,7 +185,7 @@ pub fn expected_dimension(cfg: &crate::config::EmbeddingConfig) -> usize {
     match cfg.backend {
         EmbeddingBackend::Voyage => 1024,
         EmbeddingBackend::OpenAI => 1536,
-        EmbeddingBackend::Local  => LOCAL_DIM,
+        EmbeddingBackend::Local => LOCAL_DIM,
     }
 }
 
@@ -201,7 +212,8 @@ fn parse_embeddings(resp: &serde_json::Value) -> Result<Vec<Vec<f32>>> {
     let data = resp["data"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("unexpected response: missing 'data' array"))?;
-    let embeddings = data.iter()
+    let embeddings = data
+        .iter()
         .map(|item| {
             item["embedding"]
                 .as_array()
@@ -226,15 +238,10 @@ mod tests {
     }
 
     impl EmbeddingBackend for TestEmbeddingBackend {
-        fn embed<'a>(
-            &'a self,
-            texts: &'a [String],
-        ) -> EmbedFuture<'a> {
+        fn embed<'a>(&'a self, texts: &'a [String]) -> EmbedFuture<'a> {
             let dim = self.dimension;
             let n = texts.len();
-            Box::pin(async move {
-                Ok((0..n).map(|_| vec![0.0f32; dim]).collect())
-            })
+            Box::pin(async move { Ok((0..n).map(|_| vec![0.0f32; dim]).collect()) })
         }
     }
 
@@ -245,10 +252,28 @@ mod tests {
 
     #[test]
     fn expected_dimensions_match_spec() {
-        use crate::config::{EmbeddingConfig, EmbeddingBackend};
-        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::Voyage, ..Default::default() }), 1024);
-        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::OpenAI, ..Default::default() }), 1536);
-        assert_eq!(expected_dimension(&EmbeddingConfig { backend: EmbeddingBackend::Local, ..Default::default() }), LOCAL_DIM);
+        use crate::config::{EmbeddingBackend, EmbeddingConfig};
+        assert_eq!(
+            expected_dimension(&EmbeddingConfig {
+                backend: EmbeddingBackend::Voyage,
+                ..Default::default()
+            }),
+            1024
+        );
+        assert_eq!(
+            expected_dimension(&EmbeddingConfig {
+                backend: EmbeddingBackend::OpenAI,
+                ..Default::default()
+            }),
+            1536
+        );
+        assert_eq!(
+            expected_dimension(&EmbeddingConfig {
+                backend: EmbeddingBackend::Local,
+                ..Default::default()
+            }),
+            LOCAL_DIM
+        );
     }
 
     #[tokio::test]
@@ -276,13 +301,19 @@ mod tests {
 
     #[test]
     fn make_backend_local_returns_512() {
-        let cfg = crate::config::EmbeddingConfig { backend: crate::config::EmbeddingBackend::Local, ..Default::default() };
+        let cfg = crate::config::EmbeddingConfig {
+            backend: crate::config::EmbeddingBackend::Local,
+            ..Default::default()
+        };
         assert_eq!(super::expected_dimension(&cfg), LOCAL_DIM);
     }
 
     #[test]
     fn make_backend_openai_returns_1536() {
-        let cfg = crate::config::EmbeddingConfig { backend: crate::config::EmbeddingBackend::OpenAI, ..Default::default() };
+        let cfg = crate::config::EmbeddingConfig {
+            backend: crate::config::EmbeddingBackend::OpenAI,
+            ..Default::default()
+        };
         assert_eq!(super::expected_dimension(&cfg), 1536);
     }
 

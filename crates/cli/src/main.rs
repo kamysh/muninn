@@ -187,7 +187,9 @@ fn edit_toml_in_temp(
 
     loop {
         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        std::process::Command::new(&editor).arg(&tmp_path).status()?;
+        std::process::Command::new(&editor)
+            .arg(&tmp_path)
+            .status()?;
 
         let content = std::fs::read_to_string(&tmp_path)?;
         match check(&content) {
@@ -512,10 +514,22 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Config { op } => handle_repo_config(&client, &cfg, op).await?,
 
-        Commands::Add { path, set, no_index } => {
+        Commands::Add {
+            path,
+            set,
+            no_index,
+        } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            anyhow::ensure!(repo_path.exists(), "path does not exist: {}", repo_path.display());
-            anyhow::ensure!(repo_path.is_dir(), "path is not a directory: {}", repo_path.display());
+            anyhow::ensure!(
+                repo_path.exists(),
+                "path does not exist: {}",
+                repo_path.display()
+            );
+            anyhow::ensure!(
+                repo_path.is_dir(),
+                "path is not a directory: {}",
+                repo_path.display()
+            );
             anyhow::ensure!(
                 store::get_repo_by_path(&client, &repo_path.to_string_lossy()).await?.is_none(),
                 "repo '{}' is already registered. Use `muninn config set --repo {} k=v` to change it.",
@@ -540,8 +554,13 @@ async fn main() -> anyhow::Result<()> {
             let rc = RepoConfig::from_toml_str(&content)?;
             let eff = config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
-            store::register_repo(&client, &repo_path.to_string_lossy(), &eff.repo_name, repo_dim)
-                .await?;
+            store::register_repo(
+                &client,
+                &repo_path.to_string_lossy(),
+                &eff.repo_name,
+                repo_dim,
+            )
+            .await?;
 
             if no_index {
                 println!(
@@ -653,7 +672,10 @@ async fn main() -> anyhow::Result<()> {
                 true
             } else {
                 let prompt = if toml_path.exists() {
-                    format!("Delete {} and remove index data? [y/N] ", toml_path.display())
+                    format!(
+                        "Delete {} and remove index data? [y/N] ",
+                        toml_path.display()
+                    )
                 } else {
                     format!(
                         "{} not found at {}. Remove index data anyway? [y/N] ",
@@ -717,7 +739,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("Path:         {}", r.path);
                 println!(
                     "Indexed:      {}",
-                    r.indexed_at.map(|t| t.to_string()).unwrap_or_else(|| "no".to_string())
+                    r.indexed_at
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "no".to_string())
                 );
                 println!("Ever indexed: {}", r.ever_indexed);
                 println!("Embedding:    {} dims", r.embedding_dim);

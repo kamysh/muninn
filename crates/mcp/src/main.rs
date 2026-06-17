@@ -6,12 +6,20 @@ use clap::Parser;
 #[command(name = "muninn-mcp", about = "muninn MCP server", version)]
 struct Cli {}
 
-use muninn_core::{config::GlobalConfig, db, embeddings::{make_backend, expected_dimension}};
-use std::{path::{Path, PathBuf}, sync::Arc, time::{Duration, SystemTime}};
+use muninn_core::{
+    config::GlobalConfig,
+    db,
+    embeddings::{expected_dimension, make_backend},
+};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tools::SearchContext;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -68,7 +76,10 @@ async fn main() -> anyhow::Result<()> {
 async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_json::Value {
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
-    let params = req.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    let params = req
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     match method {
         "initialize" => serde_json::json!({
@@ -91,124 +102,124 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                  to the nearest {fname} when 'repo' is absent."
             );
             serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "tools": [
-                    {
-                        "name": "search_hybrid",
-                        "description": format!("Semantic + fulltext hybrid search over indexed repos. {walk_suffix}"),
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string"},
-                                "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["query"]
-                        }
-                    },
-                    {
-                        "name": "search_fulltext",
-                        "description": format!("Full-text keyword search. {walk_suffix}"),
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string"},
-                                "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["query"]
-                        }
-                    },
-                    {
-                        "name": "search_semantic",
-                        "description": format!("Vector similarity search. {walk_suffix}"),
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string"},
-                                "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": (cwd_desc.clone())},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["query"]
-                        }
-                    },
-                    {
-                        "name": "search_structural",
-                        "description": format!("Graph traversal — find related symbols. {walk_suffix}"),
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "symbol": {"type": "string"},
-                                "relation": {
-                                    "type": "string",
-                                    "enum": ["callers","callees","imports","defines","inheritors","inherits"]
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "search_hybrid",
+                            "description": format!("Semantic + fulltext hybrid search over indexed repos. {walk_suffix}"),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string"},
+                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "limit": {"type": "integer"}
                                 },
-                                "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                "cwd": {"type": "string", "description": (cwd_desc)}
-                            },
-                            "required": ["symbol", "relation"]
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "search_fulltext",
+                            "description": format!("Full-text keyword search. {walk_suffix}"),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string"},
+                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "limit": {"type": "integer"}
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "search_semantic",
+                            "description": format!("Vector similarity search. {walk_suffix}"),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string"},
+                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "limit": {"type": "integer"}
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "search_structural",
+                            "description": format!("Graph traversal — find related symbols. {walk_suffix}"),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "symbol": {"type": "string"},
+                                    "relation": {
+                                        "type": "string",
+                                        "enum": ["callers","callees","imports","defines","inheritors","inherits"]
+                                    },
+                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": (cwd_desc)}
+                                },
+                                "required": ["symbol", "relation"]
+                            }
+                        },
+                        {
+                            "name": "record_knowledge",
+                            "description": "Store a curated knowledge item (note, lesson, or subsystem insight) for a repo. Items are embedded and searchable via search_knowledge. Provide 'id' to update an existing item.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo":          {"type": "string", "description": "Absolute path of the repo this knowledge belongs to."},
+                                    "title":         {"type": "string", "description": "Short title."},
+                                    "body":          {"type": "string", "description": "Full content of the note or lesson."},
+                                    "tags":          {"type": "array", "items": {"type": "string"}, "description": "Optional tags for categorisation."},
+                                    "related_files": {"type": "array", "items": {"type": "string"}, "description": "Repo-relative file paths that this item describes."},
+                                    "id":            {"type": "string", "description": "UUID of existing item to update. Omit to insert."}
+                                },
+                                "required": ["repo", "title", "body"]
+                            }
+                        },
+                        {
+                            "name": "search_knowledge",
+                            "description": "Hybrid semantic + fulltext search over knowledge items stored for a repo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string"},
+                                    "repo":  {"type": "string", "description": "Absolute path of the repo."},
+                                    "limit": {"type": "integer"}
+                                },
+                                "required": ["query", "repo"]
+                            }
+                        },
+                        {
+                            "name": "delete_knowledge",
+                            "description": "Delete a knowledge item by its UUID.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string", "description": "UUID of the knowledge item to delete."}
+                                },
+                                "required": ["id"]
+                            }
+                        },
+                        {
+                            "name": "list_knowledge",
+                            "description": "List all knowledge items stored for a repo, ordered by most recently updated.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the repo."}
+                                },
+                                "required": ["repo"]
+                            }
                         }
-                    },
-                    {
-                        "name": "record_knowledge",
-                        "description": "Store a curated knowledge item (note, lesson, or subsystem insight) for a repo. Items are embedded and searchable via search_knowledge. Provide 'id' to update an existing item.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "repo":          {"type": "string", "description": "Absolute path of the repo this knowledge belongs to."},
-                                "title":         {"type": "string", "description": "Short title."},
-                                "body":          {"type": "string", "description": "Full content of the note or lesson."},
-                                "tags":          {"type": "array", "items": {"type": "string"}, "description": "Optional tags for categorisation."},
-                                "related_files": {"type": "array", "items": {"type": "string"}, "description": "Repo-relative file paths that this item describes."},
-                                "id":            {"type": "string", "description": "UUID of existing item to update. Omit to insert."}
-                            },
-                            "required": ["repo", "title", "body"]
-                        }
-                    },
-                    {
-                        "name": "search_knowledge",
-                        "description": "Hybrid semantic + fulltext search over knowledge items stored for a repo.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string"},
-                                "repo":  {"type": "string", "description": "Absolute path of the repo."},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["query", "repo"]
-                        }
-                    },
-                    {
-                        "name": "delete_knowledge",
-                        "description": "Delete a knowledge item by its UUID.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string", "description": "UUID of the knowledge item to delete."}
-                            },
-                            "required": ["id"]
-                        }
-                    },
-                    {
-                        "name": "list_knowledge",
-                        "description": "List all knowledge items stored for a repo, ordered by most recently updated.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "repo": {"type": "string", "description": "Absolute path of the repo."}
-                            },
-                            "required": ["repo"]
-                        }
-                    }
-                ]
-            }
-        })
-        },
+                    ]
+                }
+            })
+        }
         "tools/call" => {
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params
@@ -269,8 +280,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
 }
 
 fn init_logging(cfg: &GlobalConfig) -> anyhow::Result<Option<WorkerGuard>> {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
 
     if !cfg.mcp.logging.enabled {
@@ -396,10 +406,10 @@ fn count_results(content: &serde_json::Value) -> Option<i64> {
 }
 
 async fn record_usage(
-    client:       &tokio_postgres::Client,
-    tool:         &str,
-    repo_path:    Option<&str>,
-    duration_ms:  i64,
+    client: &tokio_postgres::Client,
+    tool: &str,
+    repo_path: Option<&str>,
+    duration_ms: i64,
     result_count: Option<i64>,
 ) -> anyhow::Result<()> {
     client

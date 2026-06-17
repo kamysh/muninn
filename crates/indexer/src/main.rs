@@ -2,9 +2,9 @@ mod watcher;
 
 use clap::Parser;
 use muninn_core::{
-    config::{GlobalConfig, RepoConfig, EffectiveConfig},
+    config::{EffectiveConfig, GlobalConfig, RepoConfig},
     db,
-    embeddings::{make_backend, expected_dimension},
+    embeddings::{expected_dimension, make_backend},
     pipeline::index_repo,
     store,
     types::{BatchOutcome, IndexState},
@@ -281,9 +281,7 @@ async fn scan_and_dispatch(
                                 }
                                 // mark_indexed was called inside index_repo; now notify
                                 // so the daemon re-scans and re-attaches the watcher.
-                                if let Err(e) =
-                                    store::notify_repos_changed(&index_client).await
-                                {
+                                if let Err(e) = store::notify_repos_changed(&index_client).await {
                                     tracing::warn!(
                                         "reindex of {} complete but notify failed: {}",
                                         repo_path_str,
@@ -291,11 +289,7 @@ async fn scan_and_dispatch(
                                     );
                                 }
                             }
-                            Err(e) => tracing::error!(
-                                "reindex of {} failed: {}",
-                                repo_path_str,
-                                e
-                            ),
+                            Err(e) => tracing::error!("reindex of {} failed: {}", repo_path_str, e),
                         }
                     }
                     None => {
@@ -305,16 +299,9 @@ async fn scan_and_dispatch(
                         // set so the daemon's scan guard does not re-grab before the
                         // foreground job clears it on acquire.
                         if let Err(e) = store::unlock(&lock_conn, repo_id).await {
-                            tracing::warn!(
-                                "unlock (yield) for {} failed: {}",
-                                repo_path_str,
-                                e
-                            );
+                            tracing::warn!("unlock (yield) for {} failed: {}", repo_path_str, e);
                         }
-                        tracing::info!(
-                            "yielded {} to a waiting foreground job",
-                            repo_path_str
-                        );
+                        tracing::info!("yielded {} to a waiting foreground job", repo_path_str);
                     }
                 }
                 reindexing2.lock().await.remove(&repo_id);

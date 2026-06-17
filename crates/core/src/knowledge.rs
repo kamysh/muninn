@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use pgvector::Vector;
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
-use pgvector::Vector;
 
 use crate::search::rrf_merge;
 use crate::types::{Chunk, LineRange, SearchResult};
@@ -11,19 +11,19 @@ use crate::types::{Chunk, LineRange, SearchResult};
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeItem {
-    pub id:            Uuid,
-    pub repo_path:     String,
-    pub title:         String,
-    pub body:          String,
-    pub tags:          Vec<String>,
+    pub id: Uuid,
+    pub repo_path: String,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
     pub related_files: Vec<String>,
-    pub created_at:    DateTime<Utc>,
-    pub updated_at:    DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeResult {
-    pub item:  KnowledgeItem,
+    pub item: KnowledgeItem,
     pub score: f32,
 }
 
@@ -39,18 +39,18 @@ pub struct KnowledgeResult {
 // move the argument list elsewhere without improving clarity.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert(
-    client:        &Client,
-    id:            Option<Uuid>,
-    repo_path:     &str,
-    title:         &str,
-    body:          &str,
-    tags:          &[String],
+    client: &Client,
+    id: Option<Uuid>,
+    repo_path: &str,
+    title: &str,
+    body: &str,
+    tags: &[String],
     related_files: &[String],
-    embedding:     Option<&[f32]>,
-    expected_dim:  usize,
+    embedding: Option<&[f32]>,
+    expected_dim: usize,
 ) -> Result<KnowledgeItem> {
     anyhow::ensure!(!title.is_empty(), "knowledge title must not be empty");
-    anyhow::ensure!(!body.is_empty(),  "knowledge body must not be empty");
+    anyhow::ensure!(!body.is_empty(), "knowledge body must not be empty");
     if let Some(emb) = embedding {
         anyhow::ensure!(
             emb.len() == expected_dim,
@@ -124,10 +124,10 @@ pub async fn list(client: &Client, repo_path: &str) -> Result<Vec<KnowledgeItem>
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 pub async fn search_fulltext(
-    client:    &Client,
+    client: &Client,
     repo_path: &str,
-    query:     &str,
-    limit:     i64,
+    query: &str,
+    limit: i64,
 ) -> Result<Vec<KnowledgeResult>> {
     let rows = client
         .query(
@@ -154,10 +154,10 @@ pub async fn search_fulltext(
 }
 
 pub async fn search_semantic(
-    client:          &Client,
-    repo_path:       &str,
+    client: &Client,
+    repo_path: &str,
     query_embedding: &[f32],
-    limit:           i64,
+    limit: i64,
 ) -> Result<Vec<KnowledgeResult>> {
     let vec = Vector::from(query_embedding.to_vec());
 
@@ -187,17 +187,17 @@ pub async fn search_semantic(
 
 /// Hybrid search: RRF merge of semantic + fulltext results.
 pub async fn search_hybrid(
-    client:          &Client,
-    repo_path:       &str,
-    query:           &str,
+    client: &Client,
+    repo_path: &str,
+    query: &str,
     query_embedding: &[f32],
-    limit:           i64,
+    limit: i64,
 ) -> Result<Vec<KnowledgeResult>> {
     let sem = search_semantic(client, repo_path, query_embedding, limit * 2).await?;
-    let ft  = search_fulltext(client, repo_path, query, limit * 2).await?;
+    let ft = search_fulltext(client, repo_path, query, limit * 2).await?;
 
     let sem_sr: Vec<SearchResult> = sem.iter().map(knowledge_to_search_result).collect();
-    let ft_sr:  Vec<SearchResult> = ft.iter().map(knowledge_to_search_result).collect();
+    let ft_sr: Vec<SearchResult> = ft.iter().map(knowledge_to_search_result).collect();
 
     let merged_sr = rrf_merge(sem_sr, ft_sr, limit as usize);
 
@@ -211,7 +211,7 @@ pub async fn search_hybrid(
         .into_iter()
         .filter_map(|sr| {
             all_items.get(&sr.chunk.id).map(|r| KnowledgeResult {
-                item:  r.item.clone(),
+                item: r.item.clone(),
                 score: sr.score,
             })
         })
@@ -222,14 +222,14 @@ pub async fn search_hybrid(
 
 fn row_to_item(row: Row) -> Result<KnowledgeItem> {
     Ok(KnowledgeItem {
-        id:            row.try_get("id")?,
-        repo_path:     row.try_get("repo_path")?,
-        title:         row.try_get("title")?,
-        body:          row.try_get("body")?,
-        tags:          row.try_get("tags")?,
+        id: row.try_get("id")?,
+        repo_path: row.try_get("repo_path")?,
+        title: row.try_get("title")?,
+        body: row.try_get("body")?,
+        tags: row.try_get("tags")?,
         related_files: row.try_get("related_files")?,
-        created_at:    row.try_get("created_at")?,
-        updated_at:    row.try_get("updated_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
     })
 }
 
@@ -239,11 +239,11 @@ fn knowledge_to_search_result(r: &KnowledgeResult) -> SearchResult {
     SearchResult {
         score: r.score,
         chunk: Chunk {
-            id:        r.item.id,
-            repo_id:   Uuid::nil(),
+            id: r.item.id,
+            repo_id: Uuid::nil(),
             file_path: r.item.title.clone(),
-            range:     LineRange { start: 0, end: 0 },
-            content:   r.item.body.clone(),
+            range: LineRange { start: 0, end: 0 },
+            content: r.item.body.clone(),
             embedding: None,
         },
     }

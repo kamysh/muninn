@@ -1,10 +1,10 @@
-use crate::types::{Chunk, SearchResult, LineRange};
 use crate::store::chunks_table;
+use crate::types::{Chunk, LineRange, SearchResult};
+use anyhow::Result;
+use pgvector::Vector;
+use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use anyhow::Result;
-use std::collections::HashMap;
-use pgvector::Vector;
 
 /// Server-enforced ceiling on query limits (spec: Muninn.Search.MAX_LIMIT).
 /// Without this, a caller supplying limit=10⁹ would attempt a billion-row fetch.
@@ -121,12 +121,18 @@ pub fn rrf_merge(
     for (rank, result) in list_a.into_iter().enumerate() {
         let rrf = 1.0 / (K + rank as f32);
         let id = result.chunk.id;
-        scores.entry(id).and_modify(|e| e.0 += rrf).or_insert((rrf, result));
+        scores
+            .entry(id)
+            .and_modify(|e| e.0 += rrf)
+            .or_insert((rrf, result));
     }
     for (rank, result) in list_b.into_iter().enumerate() {
         let rrf = 1.0 / (K + rank as f32);
         let id = result.chunk.id;
-        scores.entry(id).and_modify(|e| e.0 += rrf).or_insert((rrf, result));
+        scores
+            .entry(id)
+            .and_modify(|e| e.0 += rrf)
+            .or_insert((rrf, result));
     }
 
     let mut results: Vec<(f32, SearchResult)> = scores.into_values().collect();

@@ -33,8 +33,12 @@ fn walk_source_files() -> Vec<(PathBuf, String, muninn_core::parser::Language)> 
         let Some(lang) = detect_language(&path.to_string_lossy()) else {
             continue;
         };
-        let Ok(content) = std::fs::read_to_string(path) else { continue };
-        if content.is_empty() { continue }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if content.is_empty() {
+            continue;
+        }
         out.push((path.to_owned(), content, lang));
     }
     out
@@ -50,7 +54,10 @@ fn chunk_fits_max_chars_with_slop() {
     const SLOP_FACTOR: usize = 10; // single oversize line allowed; anything else is a bug
 
     let files = walk_source_files();
-    assert!(!files.is_empty(), "no source files walked — corpus discovery broken");
+    assert!(
+        !files.is_empty(),
+        "no source files walked — corpus discovery broken"
+    );
 
     let mut violations = Vec::new();
     for (path, content, lang) in &files {
@@ -61,8 +68,11 @@ fn chunk_fits_max_chars_with_slop() {
                 violations.push(format!(
                     "{}:{}-{}  chunk len {} > {}*{}",
                     path.display(),
-                    c.range.start, c.range.end,
-                    c.content.len(), MAX_CHARS, SLOP_FACTOR,
+                    c.range.start,
+                    c.range.end,
+                    c.content.len(),
+                    MAX_CHARS,
+                    SLOP_FACTOR,
                 ));
             }
         }
@@ -86,12 +96,16 @@ fn every_line_appears_in_some_chunk() {
         // unusual files may legitimately produce none).
         let symbols = parse_file(content, *lang).unwrap_or_default();
         let chunks = chunk_file(content, &symbols, 1500);
-        if chunks.is_empty() { continue }
+        if chunks.is_empty() {
+            continue;
+        }
 
         // Build a line set covered by chunks.
         let mut covered = std::collections::HashSet::new();
         for c in &chunks {
-            for l in c.range.start..=c.range.end { covered.insert(l); }
+            for l in c.range.start..=c.range.end {
+                covered.insert(l);
+            }
         }
         // For every non-empty line in the file, assert it's covered OR
         // it's an empty/whitespace-only line at a file boundary.
@@ -111,7 +125,12 @@ fn every_line_appears_in_some_chunk() {
         missing.len() < 200,
         "{} lines not covered by any chunk (first 10):\n  {}",
         missing.len(),
-        missing.iter().take(10).cloned().collect::<Vec<_>>().join("\n  ")
+        missing
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
 }
 
@@ -124,7 +143,12 @@ fn chunker_is_deterministic_on_real_corpus() {
         let symbols = parse_file(content, *lang).unwrap_or_default();
         let a = chunk_file(content, &symbols, 1500);
         let b = chunk_file(content, &symbols, 1500);
-        assert_eq!(a.len(), b.len(), "chunk count differs for {}", path.display());
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "chunk count differs for {}",
+            path.display()
+        );
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.range.start, y.range.start, "{} start", path.display());
             assert_eq!(x.range.end, y.range.end, "{} end", path.display());

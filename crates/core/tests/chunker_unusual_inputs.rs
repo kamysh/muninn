@@ -11,7 +11,10 @@ fn one_giant_single_line() {
     // line exceeds max_chars" fallback path.
     let src = "x".repeat(50_000);
     let chunks = chunk_file(&src, &[], 1500);
-    assert!(!chunks.is_empty(), "expected at least one chunk for non-empty input");
+    assert!(
+        !chunks.is_empty(),
+        "expected at least one chunk for non-empty input"
+    );
     for c in &chunks {
         assert!(c.range.is_valid());
         assert!(!c.content.is_empty());
@@ -30,14 +33,26 @@ fn one_giant_symbol_body() {
     let symbols = parse_file(&src, Language::Rust).unwrap();
     let chunks = chunk_file(&src, &symbols, 1500);
 
-    assert!(chunks.len() >= 2, "oversize symbol should split, got {} chunks", chunks.len());
+    assert!(
+        chunks.len() >= 2,
+        "oversize symbol should split, got {} chunks",
+        chunks.len()
+    );
     for c in &chunks {
-        assert!(c.content.len() <= 1500 * 10, "sub-chunk len {}", c.content.len());
+        assert!(
+            c.content.len() <= 1500 * 10,
+            "sub-chunk len {}",
+            c.content.len()
+        );
     }
 
     // Every variable name appears somewhere in the concatenated chunks
     // (no silent line drops).
-    let combined: String = chunks.iter().map(|c| c.content.as_str()).collect::<Vec<_>>().join("\n");
+    let combined: String = chunks
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     for i in 0..400 {
         assert!(combined.contains(&format!("v_{i}")), "lost line for v_{i}");
     }
@@ -53,7 +68,8 @@ fn one_giant_symbol_body() {
 
 #[test]
 fn unicode_mixed() {
-    let src = "fn café() {\n    let π = 3.14;\n    let 中文 = \"日本語\";\n    let 🦀 = \"crab\";\n}\n";
+    let src =
+        "fn café() {\n    let π = 3.14;\n    let 中文 = \"日本語\";\n    let 🦀 = \"crab\";\n}\n";
     let symbols = parse_file(src, Language::Rust).unwrap_or_default();
     let _chunks = chunk_file(src, &symbols, 1500);
     // Just shouldn't panic or hang. Output validity is checked by other invariants.
@@ -85,8 +101,12 @@ fn no_symbols_no_newlines() {
 #[test]
 fn empty_file_no_crash() {
     assert!(chunk_file("", &[], 1500).is_empty());
-    assert!(chunk_file("\n", &[], 1500).iter().all(|c| !c.content.is_empty()));
-    assert!(chunk_file("   ", &[], 1500).iter().all(|c| c.range.is_valid()));
+    assert!(chunk_file("\n", &[], 1500)
+        .iter()
+        .all(|c| !c.content.is_empty()));
+    assert!(chunk_file("   ", &[], 1500)
+        .iter()
+        .all(|c| c.range.is_valid()));
 }
 
 #[test]

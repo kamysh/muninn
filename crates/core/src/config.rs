@@ -55,10 +55,10 @@ pub enum SslMode {
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     // Required fields — must be present in every config layer.
-    pub host:   String,
-    pub port:   u16,
+    pub host: String,
+    pub port: u16,
     pub dbname: String,
-    pub user:   String,
+    pub user: String,
 
     // Optional fields — absent means use the driver or pool default.
     /// If set, used verbatim as the connection string; other fields are ignored
@@ -90,17 +90,17 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            host:             "localhost".to_string(),
-            port:             5432,
-            dbname:           "muninn".to_string(),
-            user:             std::env::var("USER").unwrap_or_else(|_| "muninn".to_string()),
-            dsn_override:     None,
-            ssl_mode:         None,
-            ssl_root_cert:    None,
-            ssl_client_cert:  None,
-            ssl_client_key:   None,
-            max_connections:  None,
-            connect_timeout:  None,
+            host: "localhost".to_string(),
+            port: 5432,
+            dbname: "muninn".to_string(),
+            user: std::env::var("USER").unwrap_or_else(|_| "muninn".to_string()),
+            dsn_override: None,
+            ssl_mode: None,
+            ssl_root_cert: None,
+            ssl_client_cert: None,
+            ssl_client_key: None,
+            max_connections: None,
+            connect_timeout: None,
             application_name: None,
         }
     }
@@ -207,13 +207,29 @@ impl GlobalConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.database.host.trim().is_empty(), "[database] host must not be empty");
-        anyhow::ensure!(!self.database.dbname.trim().is_empty(), "[database] dbname must not be empty");
-        anyhow::ensure!(!self.database.user.trim().is_empty(), "[database] user must not be empty");
-        anyhow::ensure!(self.embeddings.batch_size > 0, "[embeddings] batch_size must be greater than 0");
+        anyhow::ensure!(
+            !self.database.host.trim().is_empty(),
+            "[database] host must not be empty"
+        );
+        anyhow::ensure!(
+            !self.database.dbname.trim().is_empty(),
+            "[database] dbname must not be empty"
+        );
+        anyhow::ensure!(
+            !self.database.user.trim().is_empty(),
+            "[database] user must not be empty"
+        );
+        anyhow::ensure!(
+            self.embeddings.batch_size > 0,
+            "[embeddings] batch_size must be greater than 0"
+        );
         if self.embeddings.backend != EmbeddingBackend::Local {
             anyhow::ensure!(
-                self.embeddings.model.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                self.embeddings
+                    .model
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false),
                 "[embeddings] model is required for voyage and openai backends"
             );
         }
@@ -239,7 +255,9 @@ impl GlobalConfig {
                     eprintln!(
                         "WARNING: {} has permissions {:04o} — it may contain API keys \
                          and should be readable only by the owner (chmod 600 {:?})",
-                        path.display(), mode & 0o777, path
+                        path.display(),
+                        mode & 0o777,
+                        path
                     );
                 }
             }
@@ -398,8 +416,7 @@ impl RepoConfig {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(&path)?;
-        toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
+        toml::from_str(&content).map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
     }
 
     /// Validate semantic constraints on a parsed RepoConfig.
@@ -412,7 +429,10 @@ impl RepoConfig {
             );
             if emb.backend != EmbeddingBackend::Local {
                 anyhow::ensure!(
-                    emb.model.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                    emb.model
+                        .as_deref()
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false),
                     "[embeddings] model is required for voyage and openai backends"
                 );
             }
@@ -429,7 +449,7 @@ impl RepoConfig {
     /// Return the template content for a new .muninn.toml (all sections commented out).
     pub fn template_content(dir_name: &str) -> String {
         format!(
-                "# .muninn.toml — per-repo config for {dir_name}\n\
+            "# .muninn.toml — per-repo config for {dir_name}\n\
                  #\n\
                  # The presence of this file marks the directory as a muninn repo root.\n\
                  # An empty file (everything commented out) is perfectly valid — all settings\n\
@@ -472,13 +492,16 @@ impl RepoConfig {
                  # root) to exclude specific paths. `.git/`, binaries, and files over\n\
                  # 10 MiB are always skipped.\n\
                  # exclude = [\"target/\", \"dist/\", \"**/*.min.js\"]\n",
-                dir_name = dir_name
+            dir_name = dir_name
         )
     }
 
     /// Create a .muninn.toml template in repo_root (does nothing if already exists).
     /// Returns the path to the file.
-    pub fn create_template(repo_root: &std::path::Path, dir_name: &str) -> anyhow::Result<std::path::PathBuf> {
+    pub fn create_template(
+        repo_root: &std::path::Path,
+        dir_name: &str,
+    ) -> anyhow::Result<std::path::PathBuf> {
         let path = repo_root.join(Self::FILE_NAME);
         if !path.exists() {
             std::fs::write(&path, Self::template_content(dir_name))?;
@@ -503,12 +526,27 @@ impl EffectiveConfig {
     /// `dir_name` is the fallback repo name when [repo].name is absent.
     pub fn merge(global: &GlobalConfig, repo: &RepoConfig, dir_name: &str) -> Self {
         Self {
-            database:  repo.database.clone().unwrap_or_else(|| global.database.clone()),
-            embeddings: repo.embeddings.clone().unwrap_or_else(|| global.embeddings.clone()),
-            watcher:   repo.watcher.clone().unwrap_or_else(|| global.watcher.clone()),
-            exclude:   repo.index.as_ref().map(|i| i.exclude.clone())
-                           .unwrap_or_else(|| global.index.exclude.clone()),
-            repo_name: repo.repo_name.clone().unwrap_or_else(|| dir_name.to_string()),
+            database: repo
+                .database
+                .clone()
+                .unwrap_or_else(|| global.database.clone()),
+            embeddings: repo
+                .embeddings
+                .clone()
+                .unwrap_or_else(|| global.embeddings.clone()),
+            watcher: repo
+                .watcher
+                .clone()
+                .unwrap_or_else(|| global.watcher.clone()),
+            exclude: repo
+                .index
+                .as_ref()
+                .map(|i| i.exclude.clone())
+                .unwrap_or_else(|| global.index.exclude.clone()),
+            repo_name: repo
+                .repo_name
+                .clone()
+                .unwrap_or_else(|| dir_name.to_string()),
         }
     }
 }
@@ -633,7 +671,10 @@ mod tests {
         assert_eq!(toml_get("a = 1\n", "a.b").unwrap(), None);
         assert_eq!(toml_get("", "x.y").unwrap(), None);
         assert_eq!(toml_get("[t]\nk = 1\n", "missing").unwrap(), None);
-        assert_eq!(toml_get("[t]\nk = 1\n", "t.k").unwrap(), Some("1".to_string()));
+        assert_eq!(
+            toml_get("[t]\nk = 1\n", "t.k").unwrap(),
+            Some("1".to_string())
+        );
         assert_eq!(toml_get("[t]\nk = 1\n", "t.k.deeper").unwrap(), None);
     }
 
@@ -641,17 +682,29 @@ mod tests {
     fn toml_set_then_get_roundtrip_and_string_fallback() {
         let s = toml_set("", "embeddings.backend", "local").unwrap();
         // strings render unquoted, no decor
-        assert_eq!(toml_get(&s, "embeddings.backend").unwrap(), Some("local".to_string()));
+        assert_eq!(
+            toml_get(&s, "embeddings.backend").unwrap(),
+            Some("local".to_string())
+        );
         let s2 = toml_set(&s, "database.port", "7432").unwrap();
-        assert_eq!(toml_get(&s2, "database.port").unwrap(), Some("7432".to_string()));
+        assert_eq!(
+            toml_get(&s2, "database.port").unwrap(),
+            Some("7432".to_string())
+        );
     }
 
     #[test]
     fn toml_get_strips_trailing_comment_and_quotes() {
         let content = "[embeddings]\nbackend = \"local\"           # voyage | openai | local\n";
-        assert_eq!(toml_get(content, "embeddings.backend").unwrap(), Some("local".to_string()));
+        assert_eq!(
+            toml_get(content, "embeddings.backend").unwrap(),
+            Some("local".to_string())
+        );
         let arr = "[index]\nexclude = [\"a\",\"b\"]  # globs\n";
-        assert_eq!(toml_get(arr, "index.exclude").unwrap(), Some("[\"a\",\"b\"]".to_string()));
+        assert_eq!(
+            toml_get(arr, "index.exclude").unwrap(),
+            Some("[\"a\",\"b\"]".to_string())
+        );
     }
 
     #[test]
@@ -703,7 +756,10 @@ mod tests {
     #[test]
     fn effective_config_repo_name_override() {
         let global = GlobalConfig::default();
-        let repo = RepoConfig { repo_name: Some("custom-name".to_string()), ..Default::default() };
+        let repo = RepoConfig {
+            repo_name: Some("custom-name".to_string()),
+            ..Default::default()
+        };
         let eff = EffectiveConfig::merge(&global, &repo, "dir-name");
         assert_eq!(eff.repo_name, "custom-name");
     }

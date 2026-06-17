@@ -97,9 +97,7 @@ pub async fn register_repo(
 
     client
         .execute(
-            &format!(
-                r#"CREATE INDEX IF NOT EXISTS "{table}_file_idx" ON "{table}" (file_path)"#
-            ),
+            &format!(r#"CREATE INDEX IF NOT EXISTS "{table}_file_idx" ON "{table}" (file_path)"#),
             &[],
         )
         .await?;
@@ -279,7 +277,10 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
     );
 
     let table = chunks_table(chunk.repo_id);
-    let embedding: Option<Vector> = chunk.embedding.as_ref().map(|emb| Vector::from(emb.clone()));
+    let embedding: Option<Vector> = chunk
+        .embedding
+        .as_ref()
+        .map(|emb| Vector::from(emb.clone()));
 
     let sql = format!(
         r#"
@@ -350,9 +351,7 @@ pub async fn file_paths_not_in(
     let table = chunks_table(repo_id);
     let rows = client
         .query(
-            &format!(
-                r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#
-            ),
+            &format!(r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#),
             &[&keep],
         )
         .await?;
@@ -464,13 +463,13 @@ pub async fn is_preempt_requested(client: &Client, repo_id: Uuid) -> Result<bool
 
 fn row_to_repo(row: Row) -> Result<Repo> {
     Ok(Repo {
-        id:                row.try_get("id")?,
-        path:              row.try_get("path")?,
-        name:              row.try_get("name")?,
-        indexed_at:        row.try_get::<_, Option<DateTime<Utc>>>("indexed_at")?,
-        ever_indexed:      row.try_get("ever_indexed")?,
-        embedding_dim:     row.try_get::<_, i32>("embedding_dim")? as u32,
+        id: row.try_get("id")?,
+        path: row.try_get("path")?,
+        name: row.try_get("name")?,
+        indexed_at: row.try_get::<_, Option<DateTime<Utc>>>("indexed_at")?,
+        ever_indexed: row.try_get("ever_indexed")?,
+        embedding_dim: row.try_get::<_, i32>("embedding_dim")? as u32,
         preempt_requested: row.try_get("preempt_requested")?,
-        paused:            row.try_get("paused")?,
+        paused: row.try_get("paused")?,
     })
 }
