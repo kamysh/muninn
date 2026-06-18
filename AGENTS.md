@@ -320,75 +320,18 @@ crashing on startup. Run `muninn-mcp` directly to see stderr.
 
 ## Step 7 — Install the muninn skill and Claude Code hooks
 
-The skill at `~/.claude/skills/muninn/SKILL.md` teaches Claude Code how
-to use muninn's tools — which search to pick, when to record knowledge,
-how it relates to its other memory tools. The skill on its own is not
-enough: its first paragraph asserts *"the `UserPromptSubmit` hook fires
-`search_hybrid` before every message"* — without that hook, the
-documented loop never starts, and without a `SessionStart` hook the
-skill itself is loaded only opportunistically. Install all three pieces
-together.
+The skill, hooks, and a `~/.claude/CLAUDE.md` section work together as a
+unit — the skill alone is not enough. The complete guided procedure is in
+[`docs/claude-code-setup/INSTALL.md`](docs/claude-code-setup/INSTALL.md).
 
-### 7a — Drop the skill file in place
+Hand that directory to Claude Code with:
 
-The canonical source is `skill/SKILL.md` in this repo. Download it
-straight from `main` so the installed file is byte-identical to the
-source — re-running the command later overwrites any drift.
+> **"Walk me through installing this. Show me each change before applying
+> it and wait for my approval."**
 
-```sh
-mkdir -p "$HOME/.claude/skills/muninn"
-curl -fsSL https://raw.githubusercontent.com/kamysh/muninn/main/skill/SKILL.md \
-  -o "$HOME/.claude/skills/muninn/SKILL.md"
-```
-
-### 7b — Wire the SessionStart and UserPromptSubmit hooks
-
-Merge two hook entries into `~/.claude/settings.json` with `jq`. The
-merge is idempotent: each hook is keyed by a unique substring of its
-command (`mcp__muninn__search_hybrid` for the prompt hook,
-`muninn skill` for the session hook), and re-running the block is a
-no-op once both are installed. Other entries (e.g. mimir's own hooks)
-are preserved untouched as separate array elements.
-
-```sh
-SETTINGS="$HOME/.claude/settings.json"
-mkdir -p "$(dirname "$SETTINGS")"
-[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-
-PROMPT_CMD='echo "Before acting: query muninn for relevant code knowledge (mcp__muninn__search_hybrid). Do this BEFORE reading files or writing code."'
-SESSION_CMD='echo "mcp__muninn tools are available. Invoke the muninn skill now to load the code search protocol for this session."'
-
-tmp=$(mktemp)
-jq --arg p "$PROMPT_CMD" --arg s "$SESSION_CMD" '
-  .hooks //= {}
-  | .hooks.UserPromptSubmit //= []
-  | .hooks.SessionStart      //= []
-  | (if any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == $p) then .
-     else .hooks.UserPromptSubmit += [{matcher: "", hooks: [{type: "command", command: $p}]}]
-     end)
-  | (if any(.hooks.SessionStart[]?.hooks[]?;      .command == $s) then .
-     else .hooks.SessionStart      += [{hooks: [{type: "command", command: $s}]}]
-     end)
-' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
-chmod 600 "$SETTINGS"
-```
-
-Restart Claude Code (close and reopen any active sessions) for the
-hooks to take effect — they fire on session start and on each user
-message, neither of which Claude can trigger retroactively.
-
-**Verify** (skill file matches `main`, both hooks present):
-```sh
-[ -f "$HOME/.claude/skills/muninn/SKILL.md" ] && echo OK
-local=$(shasum -a 256 "$HOME/.claude/skills/muninn/SKILL.md" | cut -d' ' -f1)
-remote=$(curl -fsSL https://raw.githubusercontent.com/kamysh/muninn/main/skill/SKILL.md \
-         | shasum -a 256 | cut -d' ' -f1)
-[ "$local" = "$remote" ] && echo OK
-jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
-  "$HOME/.claude/settings.json" >/dev/null && echo OK
-jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
-  "$HOME/.claude/settings.json" >/dev/null && echo OK
-```
+Claude Code will read the reference files (`skill/SKILL.md`, `CLAUDE.md`,
+`settings.json`), compare them against what is already on the machine,
+propose the minimal diff for each step, and apply it only after you confirm.
 
 ## Step 8 — (Optional) Register the first repository
 

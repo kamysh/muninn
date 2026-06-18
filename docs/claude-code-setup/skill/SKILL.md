@@ -17,11 +17,26 @@ Every search tool takes:
 - **`cwd`** — use only to let muninn walk up from your current directory to the nearest `.muninn.toml`.
 - **`limit`** — pass a generous value (≈15–20) for discovery; the default is small.
 
-## Reading results
+## Reading results — act on what comes back
 
-- Scores are **RRF rank-reciprocals (≈ 0.01–0.03), not relevance percentages.** Use the *rank order*, not the magnitude. Near-uniform low scores are normal — they are NOT a signal that "nothing matched."
-- Each hit gives `file_path` plus a `start_line..end_line` range. Open it with Read at that range, or answer directly from the returned chunk.
-- If results look stale or wrong (paths that no longer exist, build artifacts like `target/**`), the index is stale or mis-configured — run `muninn reindex <repo>`, check the repo's `.muninn.toml` excludes, and say so.
+Each hit gives `file_path` plus a `start_line..end_line` range.
+
+**Required discipline:** read the pointed-to range *before* doing anything else
+with that file. Do not open the file from line 1 when muninn already told you
+where the relevant section is. Do not grep for the same symbol you just searched.
+
+If the top results are not what you need:
+- Switch tool (see table below) — do not silently fall back to Bash grep.
+- Surface the miss to the user if the search should have found something and
+  didn't (stale index, missing exclude, wrong repo path). This is a product signal.
+
+Scores are **RRF rank-reciprocals (≈ 0.01–0.03), not relevance percentages.**
+Use the *rank order*, not the magnitude. Near-uniform low scores are normal —
+they are NOT a signal that "nothing matched."
+
+If results look stale or wrong (paths that no longer exist, build artifacts like
+`target/**`), the index is stale or mis-configured — run `muninn reindex <repo>`,
+check the repo's `.muninn.toml` excludes, and say so.
 
 ## Choosing a tool — and when to prefer muninn over grep
 
@@ -35,7 +50,7 @@ Every search tool takes:
 
 **Reach for muninn over grep/Read when:** you don't know the exact name (conceptual search → `search_hybrid`/`search_semantic`); you need the call graph (→ `search_structural` — its killer use); or you're searching across files/repos. **grep/Read are fine** when you already know the exact string *and* which file it's in. For an exact identifier across the whole repo, **`search_fulltext` is the muninn equivalent of grep** — prefer it; it is also the robust fallback when `search_hybrid` is drowned by a dominating corpus (vendored deps, generated files, `target/`).
 
-**Anti-pattern:** fire the hook's search, ignore it, then grep for the same thing. If a search misses what it should find, that is a product signal — refine the query or switch tool (`search_fulltext` for an exact symbol, `search_structural` for call sites), and surface the miss. Don't silently fall back to grep.
+**Anti-pattern:** fire the hook's search, ignore it, then grep for the same thing. If a search misses what it should find, that is a product signal — refine the query or switch tool, and surface the miss. Don't silently fall back to grep.
 
 ## When to record knowledge
 
@@ -49,9 +64,11 @@ Do not record things derivable by searching: function signatures, file locations
 
 ## Working alongside mimir
 
-Muninn and [mimir](https://github.com/kamysh/mimir) are complementary:
+Muninn and mimir are complementary:
 
 - **Muninn** — facts about your code: what exists, how it's connected, what's non-obvious
 - **Mimir** — beliefs about how to work: heuristics, patterns, confidence-weighted rules that evolve over time
 
-When the hook fires before a task, both should be queried: muninn for code context, mimir for approach guidance.
+**Muninn answers "where is X in the code." Mimir answers "what did I learn that should change my approach."** Do not query mimir for code locations or muninn for lessons.
+
+When the hook fires before a task, both should be used: read the muninn range hits, dispose of the mimir priors (follow or override with one line), then act.

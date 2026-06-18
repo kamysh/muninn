@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__muninn__search_hybrid",
+      "mcp__muninn__search_fulltext",
+      "mcp__muninn__search_semantic",
+      "mcp__muninn__search_structural"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'mcp__muninn tools are available. Invoke the muninn skill now to load the code search protocol for this session.'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Also query muninn for relevant code knowledge (mcp__muninn__search_hybrid) before reading files — muninn = where code is, mimir = what you learned.'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sid=$(jq -r .session_id 2>/dev/null); rm -f \"/tmp/claude-mm-muninn-$sid\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__muninn__search_hybrid|mcp__muninn__search_fulltext|mcp__muninn__search_semantic|mcp__muninn__search_structural",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sid=$(jq -r .session_id 2>/dev/null); touch \"/tmp/claude-mm-muninn-$sid\""
+          }
+        ]
+      }
+    ]
+  }
+}
