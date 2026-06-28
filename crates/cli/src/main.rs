@@ -24,6 +24,8 @@ enum Commands {
     },
     /// Get, set, edit, or unset config keys (--global or --repo <path>)
     Config {
+        #[command(flatten)]
+        scope: ScopeArgs,
         #[command(subcommand)]
         op: ConfigOp,
     },
@@ -84,40 +86,16 @@ struct ScopeArgs {
 #[derive(Subcommand)]
 enum ConfigOp {
     /// Print a key's value (or the whole config if no key given)
-    Get {
-        key: Option<String>,
-        #[command(flatten)]
-        scope: ScopeArgs,
-    },
+    Get { key: Option<String> },
     /// Set one or more key=value (non-interactive)
     Set {
         #[arg(value_name = "KEY=VALUE", required = true)]
         assignments: Vec<String>,
-        #[command(flatten)]
-        scope: ScopeArgs,
     },
     /// Open the config in $EDITOR
-    Edit {
-        #[command(flatten)]
-        scope: ScopeArgs,
-    },
+    Edit,
     /// Remove a key
-    Unset {
-        key: String,
-        #[command(flatten)]
-        scope: ScopeArgs,
-    },
-}
-
-impl ConfigOp {
-    fn scope(&self) -> &ScopeArgs {
-        match self {
-            ConfigOp::Get { scope, .. }
-            | ConfigOp::Set { scope, .. }
-            | ConfigOp::Edit { scope }
-            | ConfigOp::Unset { scope, .. } => scope,
-        }
-    }
+    Unset { key: String },
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -399,9 +377,10 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
 async fn handle_repo_config(
     client: &Client,
     cfg: &GlobalConfig,
+    scope: ScopeArgs,
     op: ConfigOp,
 ) -> anyhow::Result<()> {
-    let repo_path = match op.scope().repo.as_deref() {
+    let repo_path = match scope.repo.as_deref() {
         Some(p) => muninn_core::repo_resolver::resolve_path(p)?,
         None => unreachable!("global scope handled before client load"),
     };
@@ -499,7 +478,7 @@ async fn main() -> anyhow::Result<()> {
     // already-loaded config: `init`, and any `config … --global`.
     match &cli.command {
         Commands::Init { set } => return handle_init(set).await,
-        Commands::Config { op } if op.scope().global => return handle_global_config(op).await,
+        Commands::Config { scope, op } if scope.global => return handle_global_config(op).await,
         _ => {}
     }
 
@@ -512,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
     drop(migrate_client);
 
     match cli.command {
-        Commands::Config { op } => handle_repo_config(&client, &cfg, op).await?,
+        Commands::Config { scope, op } => handle_repo_config(&client, &cfg, scope, op).await?,
 
         Commands::Add {
             path,
