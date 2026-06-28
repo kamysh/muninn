@@ -353,7 +353,7 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
     let base = std::fs::read_to_string(&path)?;
     let new = match op {
         ConfigOp::Set { assignments, .. } => apply_assigns(&base, assignments)?,
-        ConfigOp::Edit { .. } => {
+        ConfigOp::Edit => {
             println!("Opening {} in $EDITOR…", path.display());
             edit_toml_in_temp(&base, |c| GlobalConfig::from_toml_str(c)?.validate())?
         }
@@ -427,7 +427,7 @@ async fn handle_repo_config(
 
     let new = match &op {
         ConfigOp::Set { assignments, .. } => apply_assigns(&existing, assignments)?,
-        ConfigOp::Edit { .. } => {
+        ConfigOp::Edit => {
             println!("Opening {} in $EDITOR…", toml_path.display());
             let cfg2 = cfg.clone();
             let dn = dir_name.clone();
