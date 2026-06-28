@@ -77,7 +77,7 @@ data Command : Set where
   CmdResume  : FilePath → Command
   CmdRemove  : FilePath → Bool → Command              -- path, skipConfirm (--yes)
   CmdStatus  : Maybe FilePath → Command               -- nothing = fleet overview; just p = detail
-  CmdUsage   : Maybe ℕ → Command                     -- nothing = default window
+  CmdUsage   : ℕ → Command                            -- days-back window; CLI defaults it to 30
 
 -- ─── Bootstrap invariant ─────────────────────────────────────────────────────
 -- `muninn init` is the only command that runs before the global config exists —
