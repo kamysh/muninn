@@ -288,5 +288,68 @@ mod tests {
             let merged = rrf_merge(list_a, list_b, n * 2 + 1);
             merged.windows(2).all(|w| w[0].score >= w[1].score)
         }
+
+        // Result count is exactly min(#unique ids, limit). With two disjoint
+        // lists of n distinct ids each, the unique count is 2n.
+        fn prop_rrf_merge_count_is_min_unique_limit(n: u8, limit: u8) -> bool {
+            let n = (n as usize).min(20);
+            let limit = limit as usize;
+            let list_a: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let list_b: Vec<_> = (0..n).map(|_| arb_result(Uuid::new_v4())).collect();
+            let merged = rrf_merge(list_a, list_b, limit);
+            merged.len() == (2 * n).min(limit)
+        }
+
+        // Single-list rank monotonicity: an item earlier in the input (lower
+        // rank, higher 1/(K+rank)) never scores below a later item.
+        fn prop_rrf_single_list_rank_monotone(n: u8) -> bool {
+            let n = (n as usize).min(30);
+            let ids: Vec<Uuid> = (0..n).map(|_| Uuid::new_v4()).collect();
+            let list: Vec<_> = ids.iter().map(|&id| arb_result(id)).collect();
+            let merged = rrf_merge(list, vec![], n + 1);
+            // Build a rank lookup from the merged (sorted-desc) output and check
+            // it agrees with input order: input position i has score 1/(60+i),
+            // which is strictly decreasing, so merged order == input order.
+            merged
+                .iter()
+                .map(|r| r.chunk.id)
+                .eq(ids.into_iter())
+        }
+
+        // A doc appearing at the SAME rank in both lists scores exactly twice a
+        // doc at that rank in only one list (RRF sums the per-list contributions).
+        fn prop_rrf_shared_doc_doubles_score(rank: u8) -> bool {
+            let rank = (rank as usize).min(200);
+            let shared = Uuid::new_v4();
+            let solo = Uuid::new_v4();
+            // Pad both lists so `shared` and `solo` sit at the same rank.
+            let mut list_a: Vec<_> = (0..rank).map(|_| arb_result(Uuid::new_v4())).collect();
+            list_a.push(arb_result(shared));
+            let mut list_b: Vec<_> = (0..rank).map(|_| arb_result(Uuid::new_v4())).collect();
+            list_b.push(arb_result(shared));
+            // `solo` only in list_a at the same rank position.
+            let mut list_a2 = list_a.clone();
+            // overwrite the shared push in the clone with solo for a clean compare
+            *list_a2.last_mut().unwrap() = arb_result(solo);
+
+            let merged_shared = rrf_merge(list_a, list_b, 10_000);
+            let merged_solo = rrf_merge(list_a2, vec![], 10_000);
+            let s_shared = merged_shared
+                .iter()
+                .find(|r| r.chunk.id == shared)
+                .map(|r| r.score)
+                .unwrap();
+            let s_solo = merged_solo
+                .iter()
+                .find(|r| r.chunk.id == solo)
+                .map(|r| r.score)
+                .unwrap();
+            (s_shared - 2.0 * s_solo).abs() < 1e-6
+        }
+
+        // Empty + empty is empty, regardless of limit.
+        fn prop_rrf_merge_both_empty_is_empty(limit: u8) -> bool {
+            rrf_merge(vec![], vec![], limit as usize).is_empty()
+        }
     }
 }

@@ -186,4 +186,79 @@ mod tests {
             quickcheck::TestResult::from_bool((Similarity::new(v).value() - v).abs() < f32::EPSILON)
         }
     }
+
+    // ── IndexState / HolderKind (spec: Muninn.IndexFsm, Muninn.AdvisoryLock) ──
+
+    #[test]
+    fn holder_kind_distinguishes_fg_from_bg() {
+        assert_ne!(HolderKind::Fg, HolderKind::Bg);
+        assert_eq!(HolderKind::Fg, HolderKind::Fg);
+    }
+
+    #[test]
+    fn indexing_holder_is_part_of_equality() {
+        // The holder is part of the state's identity: an Fg index and a Bg index
+        // are different states (this is what the spec's HolderKind parameter buys).
+        assert_ne!(
+            IndexState::Indexing(HolderKind::Fg),
+            IndexState::Indexing(HolderKind::Bg)
+        );
+        assert_eq!(
+            IndexState::Indexing(HolderKind::Bg),
+            IndexState::Indexing(HolderKind::Bg)
+        );
+    }
+
+    #[test]
+    fn index_state_serde_round_trip_all_variants() {
+        let variants = [
+            IndexState::Unindexed,
+            IndexState::Indexing(HolderKind::Fg),
+            IndexState::Indexing(HolderKind::Bg),
+            IndexState::Indexed,
+            IndexState::Watching,
+            IndexState::Stale,
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).expect("serialize");
+            let back: IndexState = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(v, back, "round-trip mismatch for {v:?}");
+        }
+    }
+
+    #[test]
+    fn indexing_serde_preserves_holder() {
+        // A Bg index must not deserialize back as an Fg index (the holder is
+        // carried through the wire format, not dropped).
+        let json = serde_json::to_string(&IndexState::Indexing(HolderKind::Bg)).unwrap();
+        let back: IndexState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IndexState::Indexing(HolderKind::Bg));
+        assert_ne!(back, IndexState::Indexing(HolderKind::Fg));
+    }
+
+    quickcheck! {
+        // Every IndexState (including both holder kinds) survives a JSON
+        // serialize→deserialize round-trip unchanged.
+        fn prop_index_state_json_round_trip(pick: u8) -> bool {
+            let state = match pick % 6 {
+                0 => IndexState::Unindexed,
+                1 => IndexState::Indexing(HolderKind::Fg),
+                2 => IndexState::Indexing(HolderKind::Bg),
+                3 => IndexState::Indexed,
+                4 => IndexState::Watching,
+                _ => IndexState::Stale,
+            };
+            let json = serde_json::to_string(&state).unwrap();
+            let back: IndexState = serde_json::from_str(&json).unwrap();
+            back == state
+        }
+
+        // HolderKind round-trips and the two kinds never collide through serde.
+        fn prop_holder_kind_round_trip(fg: bool) -> bool {
+            let k = if fg { HolderKind::Fg } else { HolderKind::Bg };
+            let json = serde_json::to_string(&k).unwrap();
+            let back: HolderKind = serde_json::from_str(&json).unwrap();
+            back == k
+        }
+    }
 }

@@ -775,4 +775,148 @@ mod tests {
         assert!(loaded.embeddings.is_none());
         assert!(loaded.watcher.is_none());
     }
+
+    // ── exclude merge semantics (spec: Muninn.Config.merge — whole-list REPLACE) ──
+
+    fn global_with_exclude(globs: &[&str]) -> GlobalConfig {
+        GlobalConfig {
+            index: IndexConfig {
+                exclude: globs.iter().map(|s| s.to_string()).collect(),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn repo_with_index(index: Option<&[&str]>) -> RepoConfig {
+        RepoConfig {
+            index: index.map(|globs| IndexConfig {
+                exclude: globs.iter().map(|s| s.to_string()).collect(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exclude_inherits_global_when_repo_has_no_index() {
+        let global = global_with_exclude(&["node_modules/", "target/"]);
+        let repo = repo_with_index(None);
+        let eff = EffectiveConfig::merge(&global, &repo, "proj");
+        assert_eq!(eff.exclude, vec!["node_modules/", "target/"]);
+    }
+
+    #[test]
+    fn exclude_replaced_wholesale_when_repo_has_index() {
+        // The repo [index] section REPLACES the global list outright — it is not
+        // a union. A repo that lists only its own pattern loses the global ones.
+        let global = global_with_exclude(&["node_modules/", "target/"]);
+        let repo = repo_with_index(Some(&["**/_insights/"]));
+        let eff = EffectiveConfig::merge(&global, &repo, "proj");
+        assert_eq!(eff.exclude, vec!["**/_insights/"]);
+        assert!(!eff.exclude.iter().any(|g| g == "node_modules/"));
+    }
+
+    #[test]
+    fn exclude_empty_repo_index_replaces_with_empty() {
+        // An explicit empty repo [index] (exclude = []) means "index everything",
+        // overriding a non-empty global list — distinct from inheriting.
+        let global = global_with_exclude(&["target/"]);
+        let repo = repo_with_index(Some(&[]));
+        let eff = EffectiveConfig::merge(&global, &repo, "proj");
+        assert!(eff.exclude.is_empty());
+    }
+
+    use quickcheck::quickcheck;
+
+    quickcheck! {
+        // The merged exclude list is EXACTLY the repo's when it has an [index]
+        // section, else exactly the global's. This is the whole-list-replace
+        // contract from the spec's `effective` combinator.
+        fn prop_exclude_merge_is_replace(global_globs: Vec<String>,
+                                         repo_globs: Option<Vec<String>>) -> bool {
+            let global = GlobalConfig {
+                index: IndexConfig { exclude: global_globs.clone() },
+                ..Default::default()
+            };
+            let repo = RepoConfig {
+                index: repo_globs.clone().map(|g| IndexConfig { exclude: g }),
+                ..Default::default()
+            };
+            let eff = EffectiveConfig::merge(&global, &repo, "proj");
+            match repo_globs {
+                Some(g) => eff.exclude == g,
+                None     => eff.exclude == global_globs,
+            }
+        }
+
+        // Merge never invents or drops entries: the result is one of the two
+        // inputs verbatim (never a union, intersection, or reordering).
+        fn prop_exclude_merge_no_synthesis(global_globs: Vec<String>,
+                                           repo_globs: Option<Vec<String>>) -> bool {
+            let global = GlobalConfig {
+                index: IndexConfig { exclude: global_globs.clone() },
+                ..Default::default()
+            };
+            let repo = RepoConfig {
+                index: repo_globs.clone().map(|g| IndexConfig { exclude: g }),
+                ..Default::default()
+            };
+            let eff = EffectiveConfig::merge(&global, &repo, "proj");
+            eff.exclude == repo_globs.unwrap_or(global_globs)
+        }
+    }
+
+    // ── config TOML parse / merge round-trip ──────────────────────────────────
+
+    #[test]
+    fn repo_config_exclude_parses_from_toml() {
+        let toml = "[index]\nexclude = [\"target/\", \"**/*.min.js\"]\n";
+        let rc = RepoConfig::from_toml_str(toml).unwrap();
+        let idx = rc.index.expect("index section present");
+        assert_eq!(idx.exclude, vec!["target/", "**/*.min.js"]);
+    }
+
+    #[test]
+    fn exclude_survives_toml_set_get_round_trip() {
+        let base = "[index]\nexclude = []\n";
+        let set = toml_set(base, "index.exclude", "[\"a/\", \"b/\"]").unwrap();
+        assert_eq!(
+            toml_get(&set, "index.exclude").unwrap(),
+            Some("[\"a/\", \"b/\"]".to_string())
+        );
+        // and the typed parse agrees with the textual round-trip
+        let rc = RepoConfig::from_toml_str(&set).unwrap();
+        assert_eq!(rc.index.unwrap().exclude, vec!["a/", "b/"]);
+    }
+
+    #[test]
+    fn repo_config_rejects_unknown_field() {
+        // deny_unknown_fields guards against silent typos in a hand-edited file.
+        let toml = "[index]\nexcludes = [\"oops\"]\n"; // note the typo: excludes
+        assert!(RepoConfig::from_toml_str(toml).is_err());
+    }
+
+    quickcheck! {
+        // Any IndexConfig round-trips through TOML serialize→parse unchanged,
+        // for glob strings that survive TOML quoting (no control chars / quotes).
+        fn prop_index_config_toml_round_trip(globs: Vec<String>) -> quickcheck::TestResult {
+            let safe: Vec<String> = globs
+                .into_iter()
+                .filter(|g| !g.contains(['"', '\\', '\n', '\r', '\t', '#']))
+                .collect();
+            let rc = RepoConfig {
+                index: Some(IndexConfig { exclude: safe.clone() }),
+                ..Default::default()
+            };
+            let toml = match toml::to_string(&rc) {
+                Ok(t) => t,
+                Err(_) => return quickcheck::TestResult::discard(),
+            };
+            let back = match RepoConfig::from_toml_str(&toml) {
+                Ok(b) => b,
+                Err(_) => return quickcheck::TestResult::discard(),
+            };
+            let got = back.index.map(|i| i.exclude).unwrap_or_default();
+            quickcheck::TestResult::from_bool(got == safe)
+        }
+    }
 }
