@@ -56,7 +56,9 @@ record WatcherConfig : Set where
 
 record EmbeddingConfig : Set where
   field backend   : EmbeddingBackend
-        model     : String
+        -- Required for voyage/openai; absent for local (uses a hardcoded
+        -- bundled model). Matches the impl's Option<String> (config.rs).
+        model     : Maybe String
         apiKey    : Maybe String
         cacheDir  : Maybe String
         batchSize : ℕ
