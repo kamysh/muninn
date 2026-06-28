@@ -323,8 +323,9 @@ async fn run_foreground_index(
 // ── config handlers ────────────────────────────────────────────────────────
 
 /// `config <op> --global`: edits the global config file directly, then runs
-/// migrations. Does not require an already-loaded config, so it works on a fresh
-/// system (alongside `init`).
+/// migrations. Requires the global config to already exist — `init` is the sole
+/// bootstrap path (matches the spec's bootstrap invariant). On a fresh system
+/// every op (get/set/edit/unset) refuses until `muninn init` has created it.
 async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
     let path = GlobalConfig::config_path();
 
@@ -344,11 +345,12 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let base = if path.exists() {
-        std::fs::read_to_string(&path)?
-    } else {
-        GlobalConfig::template_content().to_string()
-    };
+    anyhow::ensure!(
+        path.exists(),
+        "no global config at {}; run 'muninn init' first",
+        path.display()
+    );
+    let base = std::fs::read_to_string(&path)?;
     let new = match op {
         ConfigOp::Set { assignments, .. } => apply_assigns(&base, assignments)?,
         ConfigOp::Edit { .. } => {
