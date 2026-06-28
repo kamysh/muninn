@@ -75,7 +75,7 @@ data Command : Set where
   CmdReindex : ReindexTarget → Bool → Command         -- target, detach
   CmdPause   : FilePath → Command
   CmdResume  : FilePath → Command
-  CmdRemove  : FilePath → Command
+  CmdRemove  : FilePath → Bool → Command              -- path, skipConfirm (--yes)
   CmdStatus  : Maybe FilePath → Command               -- nothing = fleet overview; just p = detail
   CmdUsage   : Maybe ℕ → Command                     -- nothing = default window
 
