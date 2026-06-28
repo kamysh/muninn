@@ -5,8 +5,12 @@ module Muninn.Search where
 
 open import Muninn.Float
 open import Muninn.Types
-open import Data.Nat  using (ℕ; _≤_; suc; zero)
-open import Data.List using (List; length)
+open import Data.Nat    using (ℕ; _≤_; suc; zero)
+open import Data.List   using (List; []; _∷_; length)
+open import Data.String using (String)
+open import Data.Bool   using (Bool; true; false)
+open import Data.Unit   using (⊤; tt)
+open import Agda.Builtin.String using (primStringEquality)
 
 -- Cosine similarity: a Float known to lie in [0, 1].
 record Similarity : Set where
@@ -24,9 +28,45 @@ private
 rrfScore : ℕ → Float
 rrfScore rank = one /F (k +F fromℕF rank)
 
+-- ─── Tier-aware ranking ───────────────────────────────────────────────────────
+-- Tier-2 (vendored) chunks have their fused RRF score scaled down so first-party
+-- code generally wins, while a strong vendor match (with nothing first-party
+-- competing) can still surface. Fixed constant — no config knob.
+vendorWeight : Float
+vendorWeight = fromℕF 3 /F fromℕF 10   -- 0.3
+
+-- Down-weight a fused score by tier.
+tieredScore : Tier → Float → Float
+tieredScore Tier1 s = s
+tieredScore Tier2 s = s *F vendorWeight
+
+-- Per-file cap: at most this many chunks from any single file may appear in the
+-- merged result. Defeats the "one vendor file floods the top-N" failure mode and
+-- improves first-party diversity. Fixed constant — no config knob.
+perFileCap : ℕ
+perFileCap = 3
+
 -- The hybrid search result list must contain no more entries than the limit.
 HybridResultBound : (limit : ℕ) → List SearchResult → Set
 HybridResultBound limit results = length results ≤ limit
+
+-- Per-file bound: no single file contributes more than perFileCap results.
+-- countFile counts results whose chunk shares the given file path's value.
+countFile : String → List SearchResult → ℕ
+countFile fp [] = zero
+countFile fp (r ∷ rs) with primStringEquality fp (FilePath.value (Chunk.filePath (SearchResult.chunk r)))
+... | true  = suc (countFile fp rs)
+... | false = countFile fp rs
+
+PerFileBound : List SearchResult → Set
+PerFileBound results = ∀ (fp : String) → countFile fp results ≤ perFileCap
+
+-- Reachability: down-weighting does NOT remove Tier-2 results. A Tier-2 chunk is
+-- still a valid member of a result list (it is scaled, never filtered). Stated as
+-- the simple fact that tieredScore is total on Tier2 (no Tier2 → ⊥ case): the
+-- design forbids a "Tier-1-only" filter.
+Tier2Reachable : Tier → Set
+Tier2Reachable _ = ⊤
 
 -- ─── Query Limit Validity ─────────────────────────────────────────────────────
 

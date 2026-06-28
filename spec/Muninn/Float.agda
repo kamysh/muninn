@@ -13,10 +13,13 @@ module Muninn.Float where
 
 open import Data.Nat using (ℕ)
 open import Agda.Builtin.Float public using (Float)
-open import Agda.Builtin.Float using (primFloatPlus; primFloatDiv; primNatToFloat)
+open import Agda.Builtin.Float using (primFloatPlus; primFloatTimes; primFloatDiv; primNatToFloat)
 
 _+F_ : Float → Float → Float
 _+F_ = primFloatPlus
+
+_*F_ : Float → Float → Float
+_*F_ = primFloatTimes
 
 _/F_ : Float → Float → Float
 _/F_ = primFloatDiv
@@ -25,4 +28,4 @@ fromℕF : ℕ → Float
 fromℕF = primNatToFloat
 
 infixl 6 _+F_
-infixl 7 _/F_
+infixl 7 _*F_ _/F_

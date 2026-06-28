@@ -10,13 +10,13 @@ module Muninn.Config where
 
 open import Muninn.Types
 open import Muninn.Embeddings
-open import Data.Bool    using (Bool)
+open import Data.Bool    using (Bool; true; false)
 open import Data.String  using (String)
-open import Data.List    using (List)
+open import Data.List    using (List; []; _∷_; _++_; foldl)
 open import Data.Maybe   using (Maybe; just; nothing; map)
 open import Data.Nat     using (ℕ)
 open import Data.Unit    using (⊤; tt)
-open import Data.Product using (_×_)
+open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary using (¬_)
 
@@ -65,14 +65,49 @@ record EmbeddingConfig : Set where
         batchSize : ℕ
 
 -- ─── Index Config ────────────────────────────────────────────────────────────
--- Which paths to exclude from indexing. muninn indexes everything by default
--- (including files normally hidden by .gitignore — node_modules, build output,
--- dotfiles — because they are often worth searching); `exclude` opts specific
--- paths back out. `.git/` is always excluded regardless of this list (not
--- modelled here). Patterns are globs relative to the repo root.
-
+-- Two glob axes, each a list of patterns (globs relative to the repo root):
+--   exclude — paths to DROP entirely (never indexed).
+--   vendor  — paths to index as Tier 2 (down-weighted in search, embedded
+--             lazily). Applied to whatever survives `exclude`.
+-- A leading '!' on a pattern negates a prior match (un-sets it). Both axes
+-- resolve the same way (see resolveAxis below): the effective pattern list is
+-- shipped-defaults ++ global ++ repo, matched LAST-WINS.
 record IndexConfig : Set where
   field exclude : List String
+        vendor  : List String
+
+-- ─── Axis resolution (last-match-wins fold with negation) ────────────────────
+-- The engine matches a path against the ordered pattern list and the LAST
+-- matching pattern decides membership: a bare pattern sets membership true, a
+-- '!'-pattern sets it false. We model this as a left fold over the per-pattern
+-- outcomes `(matched , negated)` already computed by the glob engine for a given
+-- path: only matching patterns move the accumulator; the last one wins.
+--   matched = does this glob match the path
+--   negated = was the pattern '!'-prefixed
+resolveStep : Bool → (Bool × Bool) → Bool
+resolveStep acc (false , _)       = acc          -- no match: unchanged
+resolveStep _   (true  , negated) = neg negated  -- match: set per polarity
+  where
+    neg : Bool → Bool
+    neg true  = false   -- '!pattern' un-sets
+    neg false = true    -- bare pattern sets
+
+-- Whether a path is in the axis, given the per-pattern (matched, negated)
+-- outcomes for the ordered effective list. Default (no match) is false.
+resolveAxis : List (Bool × Bool) → Bool
+resolveAxis = foldl resolveStep false
+
+-- ─── Classification ──────────────────────────────────────────────────────────
+-- exclude wins over vendor; unmatched survivors are Tier 1.
+data Decision : Set where
+  Drop : Decision
+  T1   : Decision
+  T2   : Decision
+
+classify : (excluded vendored : Bool) → Decision
+classify true  _     = Drop
+classify false true  = T2
+classify false false = T1
 
 -- ─── MCP Config ──────────────────────────────────────────────────────────────
 
@@ -117,7 +152,8 @@ record EffectiveConfig : Set where
   field database   : DbConfig
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
-        exclude    : List String     -- resolved exclude globs (whole-list replace)
+        exclude    : List String     -- resolved exclude globs (defaults++global++repo)
+        vendor     : List String     -- resolved vendor globs (defaults++global++repo)
         repoName   : String          -- resolved: repo override or directory name
 
 -- ─── Merge Semantics ─────────────────────────────────────────────────────────
@@ -127,19 +163,46 @@ effective : {A : Set} → Maybe A → A → A
 effective (just x) _ = x
 effective nothing  d = d
 
+-- Shipped defaults for each axis. The authoritative lists live in config.rs
+-- (EXCLUDE_DEFAULTS / VENDOR_DEFAULTS); these mirror them. Only the LAYERING
+-- (defaults ++ global ++ repo) is the spec-level invariant — the specific
+-- patterns are kept here so spec and impl agree, not because the proofs depend
+-- on them. (Concrete, not postulated: --safe forbids postulates.)
+excludeDefaults : List String
+excludeDefaults =
+  ".git/" ∷ "**/*.min.js" ∷ "**/*.min.css" ∷ "**/*.map" ∷ "**/*.snap" ∷
+  "**/package-lock.json" ∷ "**/yarn.lock" ∷ "**/pnpm-lock.yaml" ∷
+  "**/Cargo.lock" ∷ "**/poetry.lock" ∷ "**/Gemfile.lock" ∷ "**/composer.lock" ∷ []
+
+vendorDefaults : List String
+vendorDefaults =
+  "**/node_modules/**" ∷ "**/vendor/**" ∷ "vendor/" ∷
+  "**/.venv/**" ∷ "**/venv/**" ∷ "**/site-packages/**" ∷
+  "**/target/**" ∷ "**/dist/**" ∷ "**/build/**" ∷ "**/.tox/**" ∷ "**/__pycache__/**" ∷ []
+
+-- The repo's axis list (empty when the repo has no [index] section).
+repoAxis : (IndexConfig → List String) → Maybe IndexConfig → List String
+repoAxis f (just ic) = f ic
+repoAxis _ nothing   = []
+
+-- Layered resolution: defaults ++ global ++ repo, IN THIS ORDER. The engine then
+-- matches a path against the concatenated list LAST-WINS with '!' negation (see
+-- resolveAxis). This SUPERSEDES the earlier whole-list-replace exclude merge: a
+-- repo now writes only its delta and inherits the rest, and '!p' can subtract a
+-- default or inherited entry. (Matches impl EffectiveConfig::merge in config.rs.)
+layerAxis : (IndexConfig → List String) → List String → GlobalConfig → RepoConfig → List String
+layerAxis f defaults g r =
+  defaults ++ f (GlobalConfig.index g) ++ repoAxis f (RepoConfig.index r)
+
 -- The effective config for a repo is the per-repo override where present,
--- the global default everywhere else.
+-- the global default everywhere else; the two glob axes use the layered fold.
 merge : GlobalConfig → RepoConfig → String → EffectiveConfig
 merge g r dirName = record
   { database   = effective (RepoConfig.database   r) (GlobalConfig.database   g)
   ; embeddings = effective (RepoConfig.embeddings r) (GlobalConfig.embeddings g)
   ; watcher    = effective (RepoConfig.watcher    r) (GlobalConfig.watcher    g)
-  -- Whole-list REPLACE (not union): a per-repo [index] section's exclude list
-  -- replaces the global one outright; absent, the global list is inherited. To
-  -- add one repo-local pattern you must copy the whole global list. (Matches the
-  -- impl: EffectiveConfig::merge in config.rs.)
-  ; exclude    = effective (map IndexConfig.exclude (RepoConfig.index r))
-                           (IndexConfig.exclude (GlobalConfig.index g))
+  ; exclude    = layerAxis IndexConfig.exclude excludeDefaults g r
+  ; vendor     = layerAxis IndexConfig.vendor  vendorDefaults  g r
   ; repoName   = effective (RepoConfig.repoName   r) dirName
   }
 
