@@ -1,7 +1,7 @@
 use anyhow::Result;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::pipeline::{build_excludes, index_file};
-use muninn_core::types::IndexState;
+use muninn_core::types::{HolderKind, IndexState};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,7 +82,8 @@ pub async fn watch_repo(
                 "reindexStale: expected Stale, got {:?}",
                 *s
             );
-            *s = IndexState::Indexing;
+            // The watcher is the daemon; its reindex always holds the lock as Bg.
+            *s = IndexState::Indexing(HolderKind::Bg);
         }
 
         let mut any_succeeded = false;
@@ -141,8 +142,8 @@ pub async fn watch_repo(
             {
                 let mut s = state.lock().await;
                 debug_assert!(
-                    *s == IndexState::Indexing,
-                    "finishIndex: expected Indexing, got {:?}",
+                    *s == IndexState::Indexing(HolderKind::Bg),
+                    "finishIndex: expected Indexing(Bg), got {:?}",
                     *s
                 );
                 *s = IndexState::Indexed;
@@ -155,8 +156,8 @@ pub async fn watch_repo(
             {
                 let mut s = state.lock().await;
                 debug_assert!(
-                    *s == IndexState::Indexing,
-                    "stay-Stale: expected Indexing, got {:?}",
+                    *s == IndexState::Indexing(HolderKind::Bg),
+                    "stay-Stale: expected Indexing(Bg), got {:?}",
                     *s
                 );
                 *s = IndexState::Stale;

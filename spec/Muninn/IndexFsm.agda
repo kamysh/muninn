@@ -24,25 +24,10 @@ open import Relation.Nullary using (¬_)
 -- ─── Indexing state machine ─────────────────────────────────────────────────────
 -- The transient state of a repo's indexing. Indexing is parameterised by the
 -- holder so the foreground/background distinction is visible in every transition.
---
--- IMPLEMENTATION NOTE (representation divergence, intentional): the Rust
--- IndexState enum (core/src/types.rs) is HOLDERLESS — its Indexing variant takes
--- no HolderKind. The holder parameter here is a SPEC-ONLY device that earns its
--- keep by proving DaemonNeverFirstIndexes and foregroundPriority at the type
--- level. The implementation realises the same guarantees at RUNTIME by other
--- means, not as a field on IndexState:
---   * the foreground/background distinction lives in the advisory lock
---     (Muninn.AdvisoryLock), not in IndexState; migration 012 deliberately
---     DROPPED the `lock_holder` column once liveness became the DB session, so
---     no holder identity survives at runtime by design;
---   * the runtime IndexState is only ever the daemon watcher's in-process
---     Mutex<IndexState> (indexer/src/watcher.rs), which is always background — a
---     holder field there would be a dead constant;
---   * DaemonNeverFirstIndexes holds operationally because the daemon only
---     attaches a watcher to an already-Indexed repo (it never first-indexes).
--- So the spec is intentionally MORE precise than the runtime enum; the extra
--- precision is for proofs, and the impl's holderless enum is the correct
--- representation for code that tracks only the daemon's local view.
+-- The holder is the *task* identity (Muninn.AdvisoryLock.HolderKind), NOT a
+-- property of the advisory lock (which records no holder). The implementation
+-- mirrors this: core/src/types.rs IndexState::Indexing carries a HolderKind, and
+-- the daemon watcher constructs Indexing(Bg) (indexer/src/watcher.rs).
 
 data IndexState : Set where
   Unindexed : IndexState               -- indexedAt = nothing (never / interrupted / reset)

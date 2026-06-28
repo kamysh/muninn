@@ -83,10 +83,24 @@ pub struct StructuralEdge {
     pub relation: StructuralRelation,
 }
 
+/// Who holds the indexing lock during an `Indexing` transition.
+/// Spec: Muninn.AdvisoryLock.HolderKind (the *task* identity used by
+/// Muninn.IndexFsm.Indexing — NOT a property of the advisory lock itself, which
+/// records no holder). The CLI indexes as `Fg`, the daemon as `Bg`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HolderKind {
+    /// Foreground CLI job; never preempted.
+    Fg,
+    /// Background daemon; yields to a waiting foreground job.
+    Bg,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IndexState {
     Unindexed,
-    Indexing,
+    /// A (re)index is running; the lock is held by this task kind.
+    /// Spec: Muninn.IndexFsm.IndexState.Indexing : HolderKind → IndexState.
+    Indexing(HolderKind),
     Indexed,
     Watching,
     Stale,
