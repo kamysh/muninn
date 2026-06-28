@@ -84,7 +84,7 @@ record GlobalConfig : Set where
         mcp        : McpConfig
 
 -- ─── Per-Repo Config ─────────────────────────────────────────────────────────
--- Loaded from <repo-root>/muninn.toml.
+-- Loaded from <repo-root>/.muninn.toml.
 -- Every field is optional; absent = inherit from GlobalConfig.
 -- An empty file (all nothing) is valid and only marks the repo root.
 
