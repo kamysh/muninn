@@ -12,7 +12,8 @@ open import Muninn.Types
 open import Muninn.Embeddings
 open import Data.Bool    using (Bool)
 open import Data.String  using (String)
-open import Data.Maybe   using (Maybe; just; nothing)
+open import Data.List    using (List)
+open import Data.Maybe   using (Maybe; just; nothing; map)
 open import Data.Nat     using (ℕ)
 open import Data.Unit    using (⊤; tt)
 open import Data.Product using (_×_)
@@ -63,6 +64,16 @@ record EmbeddingConfig : Set where
         cacheDir  : Maybe String
         batchSize : ℕ
 
+-- ─── Index Config ────────────────────────────────────────────────────────────
+-- Which paths to exclude from indexing. muninn indexes everything by default
+-- (including files normally hidden by .gitignore — node_modules, build output,
+-- dotfiles — because they are often worth searching); `exclude` opts specific
+-- paths back out. `.git/` is always excluded regardless of this list (not
+-- modelled here). Patterns are globs relative to the repo root.
+
+record IndexConfig : Set where
+  field exclude : List String
+
 -- ─── MCP Config ──────────────────────────────────────────────────────────────
 
 record McpLogConfig : Set where
@@ -83,6 +94,7 @@ record GlobalConfig : Set where
   field database   : DbConfig
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
+        index      : IndexConfig
         mcp        : McpConfig
 
 -- ─── Per-Repo Config ─────────────────────────────────────────────────────────
@@ -95,6 +107,7 @@ record RepoConfig : Set where
         database   : Maybe DbConfig
         embeddings : Maybe EmbeddingConfig
         watcher    : Maybe WatcherConfig
+        index      : Maybe IndexConfig
 
 -- ─── Effective Config ────────────────────────────────────────────────────────
 -- The resolved config for a specific repo: global defaults overlaid with
@@ -104,6 +117,7 @@ record EffectiveConfig : Set where
   field database   : DbConfig
         embeddings : EmbeddingConfig
         watcher    : WatcherConfig
+        exclude    : List String     -- resolved exclude globs (whole-list replace)
         repoName   : String          -- resolved: repo override or directory name
 
 -- ─── Merge Semantics ─────────────────────────────────────────────────────────
@@ -120,6 +134,12 @@ merge g r dirName = record
   { database   = effective (RepoConfig.database   r) (GlobalConfig.database   g)
   ; embeddings = effective (RepoConfig.embeddings r) (GlobalConfig.embeddings g)
   ; watcher    = effective (RepoConfig.watcher    r) (GlobalConfig.watcher    g)
+  -- Whole-list REPLACE (not union): a per-repo [index] section's exclude list
+  -- replaces the global one outright; absent, the global list is inherited. To
+  -- add one repo-local pattern you must copy the whole global list. (Matches the
+  -- impl: EffectiveConfig::merge in config.rs.)
+  ; exclude    = effective (map IndexConfig.exclude (RepoConfig.index r))
+                           (IndexConfig.exclude (GlobalConfig.index g))
   ; repoName   = effective (RepoConfig.repoName   r) dirName
   }
 
