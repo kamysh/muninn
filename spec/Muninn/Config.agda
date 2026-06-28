@@ -123,14 +123,19 @@ merge g r dirName = record
 
 -- ─── DimFrozen Invariant ─────────────────────────────────────────────────────
 -- Once a repo has been indexed its embeddingDim is fixed.
--- Changing the effective backend after first index is forbidden.
--- Formally: if the repo has ever been indexed (indexedAt ≠ nothing) then
--- its stored embeddingDim must equal the canonical dimension of the
--- current effective backend.
+-- Changing the effective backend is forbidden once a repo is registered.
+-- Formally (UNCONDITIONAL): a repo's stored embeddingDim must always equal the
+-- canonical dimension of its current effective backend — not only after first
+-- index. The implementation enforces this on every daemon scan and CLI path
+-- (indexer/main.rs DimFrozen check, before the indexed_at branch; cli
+-- validate_repo_cfg / run_foreground_index), so the spec states the stronger,
+-- always-true invariant the code actually guarantees. (embeddingDim is set from
+-- the backend at registration, so for an unindexed repo the equality holds by
+-- construction unless the configured backend was changed after registration —
+-- exactly the case this rejects.)
 
 DimFrozen : Repo → EffectiveConfig → Set
 DimFrozen repo cfg =
-  ¬ (Repo.indexedAt repo ≡ nothing) →
   Repo.embeddingDim repo ≡ EmbeddingDimension (EmbeddingConfig.backend (EffectiveConfig.embeddings cfg))
 
 -- ─── Repo Root Predicate ─────────────────────────────────────────────────────
