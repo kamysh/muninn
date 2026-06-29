@@ -122,16 +122,52 @@ impl Default for WatcherConfig {
 
 // ── Index config ─────────────────────────────────────────────────────────────
 
+/// Shipped default `exclude` globs (drop — degenerate / generated junk).
+/// Spec: Muninn.Config.excludeDefaults.
+pub const EXCLUDE_DEFAULTS: &[&str] = &[
+    ".git/",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.map",
+    "**/*.snap",
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/pnpm-lock.yaml",
+    "**/Cargo.lock",
+    "**/poetry.lock",
+    "**/Gemfile.lock",
+    "**/composer.lock",
+];
+
+/// Shipped default `vendor` globs (down-weight — real code, rarely wanted first).
+/// Spec: Muninn.Config.vendorDefaults.
+pub const VENDOR_DEFAULTS: &[&str] = &[
+    "**/node_modules/**",
+    "**/vendor/**",
+    "vendor/",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/site-packages/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.tox/**",
+    "**/__pycache__/**",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexConfig {
-    /// Glob patterns (relative to the repo root) to exclude from indexing.
-    /// muninn indexes everything by default — including files normally hidden
-    /// by .gitignore (node_modules, build output, dotfiles), because gitignored
-    /// files are often worth searching. Use this to opt specific paths back
-    /// out, e.g. `exclude = ["target/", "**/*.min.js"]`. `.git/` is always
-    /// excluded regardless of this list.
+    /// Glob patterns (relative to the repo root) to DROP from indexing entirely.
+    /// muninn indexes everything by default — including files normally hidden by
+    /// .gitignore — because they are often worth searching. Resolution layers
+    /// shipped defaults ++ global ++ repo (last-match-wins, `!pattern` negates);
+    /// see `EffectiveConfig::merge`. Spec: Muninn.Config.exclude.
     pub exclude: Vec<String>,
+    /// Glob patterns to classify as Tier 2 (vendored): indexed but down-weighted
+    /// in search and embedded lazily, rather than dropped. Same layered-fold
+    /// resolution as `exclude`. Spec: Muninn.Config.vendor.
+    pub vendor: Vec<String>,
 }
 
 // ── MCP config ───────────────────────────────────────────────────────────────
@@ -517,8 +553,26 @@ pub struct EffectiveConfig {
     pub database: DatabaseConfig,
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
+    /// Resolved exclude globs: shipped defaults ++ global ++ repo (last-match-wins).
     pub exclude: Vec<String>,
+    /// Resolved vendor globs: shipped defaults ++ global ++ repo (last-match-wins).
+    pub vendor: Vec<String>,
     pub repo_name: String,
+}
+
+/// Resolve one glob axis by layering shipped defaults, the global config list,
+/// and the per-repo list IN THAT ORDER. The engine (`build_excludes`) then matches
+/// a path against the concatenated list last-match-wins, with `!pattern` negating
+/// a prior match — so a repo writes only its delta and inherits the rest, and can
+/// `!`-subtract a default. Spec: Muninn.Config.layerAxis (supersedes the earlier
+/// whole-list-replace merge).
+fn layer_axis(defaults: &[&str], global: &[String], repo: Option<&[String]>) -> Vec<String> {
+    let mut out: Vec<String> = defaults.iter().map(|s| s.to_string()).collect();
+    out.extend(global.iter().cloned());
+    if let Some(r) = repo {
+        out.extend(r.iter().cloned());
+    }
+    out
 }
 
 impl EffectiveConfig {
@@ -538,11 +592,16 @@ impl EffectiveConfig {
                 .watcher
                 .clone()
                 .unwrap_or_else(|| global.watcher.clone()),
-            exclude: repo
-                .index
-                .as_ref()
-                .map(|i| i.exclude.clone())
-                .unwrap_or_else(|| global.index.exclude.clone()),
+            exclude: layer_axis(
+                EXCLUDE_DEFAULTS,
+                &global.index.exclude,
+                repo.index.as_ref().map(|i| i.exclude.as_slice()),
+            ),
+            vendor: layer_axis(
+                VENDOR_DEFAULTS,
+                &global.index.vendor,
+                repo.index.as_ref().map(|i| i.vendor.as_slice()),
+            ),
             repo_name: repo
                 .repo_name
                 .clone()
@@ -776,92 +835,93 @@ mod tests {
         assert!(loaded.watcher.is_none());
     }
 
-    // ── exclude merge semantics (spec: Muninn.Config.merge — whole-list REPLACE) ──
+    // ── exclude/vendor merge semantics (spec: Muninn.Config.layerAxis) ──
+    // Resolution layers shipped defaults ++ global ++ repo, IN THAT ORDER; the
+    // engine then matches a path last-match-wins with `!` negation. So the merged
+    // list always starts with the shipped defaults, then global, then repo.
 
     fn global_with_exclude(globs: &[&str]) -> GlobalConfig {
         GlobalConfig {
             index: IndexConfig {
                 exclude: globs.iter().map(|s| s.to_string()).collect(),
+                vendor: vec![],
             },
             ..Default::default()
         }
     }
 
-    fn repo_with_index(index: Option<&[&str]>) -> RepoConfig {
+    fn repo_with_exclude(globs: Option<&[&str]>) -> RepoConfig {
         RepoConfig {
-            index: index.map(|globs| IndexConfig {
-                exclude: globs.iter().map(|s| s.to_string()).collect(),
+            index: globs.map(|gs| IndexConfig {
+                exclude: gs.iter().map(|s| s.to_string()).collect(),
+                vendor: vec![],
             }),
             ..Default::default()
         }
     }
 
     #[test]
-    fn exclude_inherits_global_when_repo_has_no_index() {
-        let global = global_with_exclude(&["node_modules/", "target/"]);
-        let repo = repo_with_index(None);
+    fn exclude_layers_defaults_then_global_then_repo() {
+        let global = global_with_exclude(&["g_only/"]);
+        let repo = repo_with_exclude(Some(&["r_only/"]));
         let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert_eq!(eff.exclude, vec!["node_modules/", "target/"]);
+        // shipped defaults present, then global, then repo — in order, no replace.
+        assert!(eff.exclude.iter().any(|g| g == ".git/")); // a shipped default
+        assert!(eff.exclude.iter().any(|g| g == "g_only/"));
+        assert!(eff.exclude.iter().any(|g| g == "r_only/"));
+        // order: the last two entries are global then repo.
+        let n = eff.exclude.len();
+        assert_eq!(eff.exclude[n - 2], "g_only/");
+        assert_eq!(eff.exclude[n - 1], "r_only/");
     }
 
     #[test]
-    fn exclude_replaced_wholesale_when_repo_has_index() {
-        // The repo [index] section REPLACES the global list outright — it is not
-        // a union. A repo that lists only its own pattern loses the global ones.
-        let global = global_with_exclude(&["node_modules/", "target/"]);
-        let repo = repo_with_index(Some(&["**/_insights/"]));
+    fn exclude_no_repo_index_inherits_defaults_plus_global() {
+        let global = global_with_exclude(&["g_only/"]);
+        let repo = repo_with_exclude(None);
         let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert_eq!(eff.exclude, vec!["**/_insights/"]);
-        assert!(!eff.exclude.iter().any(|g| g == "node_modules/"));
+        assert!(eff.exclude.iter().any(|g| g == ".git/"));
+        assert!(eff.exclude.iter().any(|g| g == "g_only/"));
+        assert!(!eff.exclude.iter().any(|g| g == "r_only/"));
     }
 
     #[test]
-    fn exclude_empty_repo_index_replaces_with_empty() {
-        // An explicit empty repo [index] (exclude = []) means "index everything",
-        // overriding a non-empty global list — distinct from inheriting.
-        let global = global_with_exclude(&["target/"]);
-        let repo = repo_with_index(Some(&[]));
+    fn vendor_layers_defaults_plus_repo() {
+        // vendor resolves the same way; defaults include node_modules.
+        let global = GlobalConfig::default();
+        let repo = RepoConfig {
+            index: Some(IndexConfig {
+                exclude: vec![],
+                vendor: vec!["third_party/".to_string()],
+            }),
+            ..Default::default()
+        };
         let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert!(eff.exclude.is_empty());
+        assert!(eff.vendor.iter().any(|g| g == "**/node_modules/**")); // a default
+        assert!(eff.vendor.iter().any(|g| g == "third_party/")); // repo addition
+        assert_eq!(eff.vendor.last().unwrap(), "third_party/"); // repo is last
     }
 
     use quickcheck::quickcheck;
 
     quickcheck! {
-        // The merged exclude list is EXACTLY the repo's when it has an [index]
-        // section, else exactly the global's. This is the whole-list-replace
-        // contract from the spec's `effective` combinator.
-        fn prop_exclude_merge_is_replace(global_globs: Vec<String>,
+        // The merged list is exactly defaults ++ global ++ repo, in that order.
+        fn prop_exclude_merge_is_layered(global_globs: Vec<String>,
                                          repo_globs: Option<Vec<String>>) -> bool {
             let global = GlobalConfig {
-                index: IndexConfig { exclude: global_globs.clone() },
+                index: IndexConfig { exclude: global_globs.clone(), vendor: vec![] },
                 ..Default::default()
             };
             let repo = RepoConfig {
-                index: repo_globs.clone().map(|g| IndexConfig { exclude: g }),
+                index: repo_globs.clone().map(|g| IndexConfig { exclude: g, vendor: vec![] }),
                 ..Default::default()
             };
             let eff = EffectiveConfig::merge(&global, &repo, "proj");
-            match repo_globs {
-                Some(g) => eff.exclude == g,
-                None     => eff.exclude == global_globs,
-            }
-        }
-
-        // Merge never invents or drops entries: the result is one of the two
-        // inputs verbatim (never a union, intersection, or reordering).
-        fn prop_exclude_merge_no_synthesis(global_globs: Vec<String>,
-                                           repo_globs: Option<Vec<String>>) -> bool {
-            let global = GlobalConfig {
-                index: IndexConfig { exclude: global_globs.clone() },
-                ..Default::default()
-            };
-            let repo = RepoConfig {
-                index: repo_globs.clone().map(|g| IndexConfig { exclude: g }),
-                ..Default::default()
-            };
-            let eff = EffectiveConfig::merge(&global, &repo, "proj");
-            eff.exclude == repo_globs.unwrap_or(global_globs)
+            let mut expected: Vec<String> =
+                EXCLUDE_DEFAULTS.iter().map(|s| s.to_string()).collect();
+            expected.extend(global_globs);
+            expected.extend(repo_globs.unwrap_or_default());
+            eff.exclude == expected
         }
     }
 
@@ -904,7 +964,10 @@ mod tests {
                 .filter(|g| !g.contains(['"', '\\', '\n', '\r', '\t', '#']))
                 .collect();
             let rc = RepoConfig {
-                index: Some(IndexConfig { exclude: safe.clone() }),
+                index: Some(IndexConfig {
+                    exclude: safe.clone(),
+                    vendor: vec![],
+                }),
                 ..Default::default()
             };
             let toml = match toml::to_string(&rc) {

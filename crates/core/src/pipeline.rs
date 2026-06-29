@@ -201,12 +201,14 @@ pub struct SkipRecord {
     pub reason: String,
 }
 
-/// Build an `ignore::overrides::Override` that excludes the given glob patterns
-/// (relative to `repo_path`). With only negated (`!`) globs and no whitelist
-/// globs, the `ignore` crate matches everything by default and ignores only
-/// paths that hit one of these patterns — exactly the "index everything except
-/// these" semantics we want. Shared by the full-repo walk and the file watcher
-/// so both apply identical exclusions. `.git/` is pruned separately.
+/// Build an `ignore::overrides::Override` from a layered glob list (relative to
+/// `repo_path`). A bare pattern `p` adds `p` to the set (an `ignore`-crate
+/// negated glob `!p`, which `path_excluded` reads as "in the set"); a
+/// `!p`-prefixed pattern REMOVES a prior match (an `ignore`-crate whitelist glob
+/// `p`). Patterns are applied in order, last match wins — so a later `!p` can
+/// un-set an earlier `p`. With only these entries the `ignore` crate matches
+/// everything by default and only the resolved set is "ignored". Shared by the
+/// full-repo walk and the file watcher so both apply identical rules.
 pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides::Override {
     use ignore::overrides::OverrideBuilder;
     let mut builder = OverrideBuilder::new(repo_path);
@@ -215,7 +217,14 @@ pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides
         if pat.is_empty() {
             continue;
         }
-        if let Err(e) = builder.add(&format!("!{pat}")) {
+        // A user `!p` (negation) becomes an ignore-crate WHITELIST glob `p`,
+        // which last-match-wins un-sets a prior membership. A bare `p` becomes
+        // the ignore-crate negated glob `!p` (membership).
+        let entry = match pat.strip_prefix('!') {
+            Some(rest) => rest.to_string(),
+            None => format!("!{pat}"),
+        };
+        if let Err(e) = builder.add(&entry) {
             tracing::warn!("ignoring invalid exclude glob {:?}: {}", pat, e);
         }
     }
@@ -249,6 +258,31 @@ pub fn path_excluded(overrides: &ignore::overrides::Override, rel: &Path) -> boo
         .skip(1)
         .take_while(|a| !a.as_os_str().is_empty())
         .any(|ancestor| overrides.matched(ancestor, true).is_ignore())
+}
+
+/// The classification of a repo-relative path. Spec: Muninn.Config.Decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Matched `exclude` — never indexed.
+    Drop,
+    /// First-party source: full weight, eager embed.
+    Tier1,
+    /// Matched `vendor` — indexed but down-weighted and lazily embedded.
+    Tier2,
+}
+
+/// Classify a repo-relative path against the two glob axes. `exclude` drops first
+/// and wins on overlap; `vendor` then classifies survivors as Tier 2; everything
+/// else is Tier 1. Both axes use the same last-match-wins / `!`-negation matcher
+/// as `build_excludes`. Spec: Muninn.Config.classify.
+pub fn classify(repo_root: &Path, exclude: &[String], vendor: &[String], rel: &Path) -> Decision {
+    if path_excluded(&build_excludes(repo_root, exclude), rel) {
+        return Decision::Drop;
+    }
+    if path_excluded(&build_excludes(repo_root, vendor), rel) {
+        return Decision::Tier2;
+    }
+    Decision::Tier1
 }
 
 /// Index all files in a repo.
@@ -392,6 +426,44 @@ mod tests {
     fn ov(globs: &[&str]) -> ignore::overrides::Override {
         let v: Vec<String> = globs.iter().map(|s| s.to_string()).collect();
         build_excludes(Path::new("/repo"), &v)
+    }
+
+    fn cls(exclude: &[&str], vendor: &[&str], rel: &str) -> Decision {
+        let ex: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+        let vn: Vec<String> = vendor.iter().map(|s| s.to_string()).collect();
+        classify(Path::new("/repo"), &ex, &vn, Path::new(rel))
+    }
+
+    #[test]
+    fn classify_exclude_wins_over_vendor() {
+        // A path matching both axes is dropped (exclude wins).
+        assert_eq!(cls(&["**/x/**"], &["**/x/**"], "x/a.js"), Decision::Drop);
+    }
+
+    #[test]
+    fn classify_vendor_then_tier1() {
+        assert_eq!(
+            cls(&[], &["**/node_modules/**"], "node_modules/p/i.js"),
+            Decision::Tier2
+        );
+        assert_eq!(
+            cls(&[], &["**/node_modules/**"], "src/main.rs"),
+            Decision::Tier1
+        );
+    }
+
+    #[test]
+    fn classify_negation_reclaims_tier1() {
+        // vendor matches target/, but a repo `!` negation un-sets it → Tier 1.
+        assert_eq!(
+            cls(&[], &["**/target/**", "!**/target/**"], "target/x.rs"),
+            Decision::Tier1
+        );
+    }
+
+    #[test]
+    fn classify_unmatched_is_tier1() {
+        assert_eq!(cls(&[], &[], "src/lib.rs"), Decision::Tier1);
     }
 
     #[test]
