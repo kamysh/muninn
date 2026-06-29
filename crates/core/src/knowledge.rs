@@ -5,7 +5,7 @@ use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 use crate::search::rrf_merge;
-use crate::types::{Chunk, LineRange, SearchResult};
+use crate::types::{Chunk, EmbeddingState, LineRange, SearchResult, Tier};
 
 // ─── Domain type ─────────────────────────────────────────────────────────────
 
@@ -245,6 +245,9 @@ fn knowledge_to_search_result(r: &KnowledgeResult) -> SearchResult {
             range: LineRange { start: 0, end: 0 },
             content: r.item.body.clone(),
             embedding: None,
+            tier: Tier::Tier1,
+            embedding_state: EmbeddingState::Embedded,
+            content_hash: None,
         },
     }
 }

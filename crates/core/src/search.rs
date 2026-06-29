@@ -1,5 +1,5 @@
 use crate::store::chunks_table;
-use crate::types::{Chunk, LineRange, SearchResult};
+use crate::types::{Chunk, EmbeddingState, LineRange, SearchResult, Tier};
 use anyhow::Result;
 use pgvector::Vector;
 use std::collections::HashMap;
@@ -55,6 +55,11 @@ pub async fn fulltext_search(
                     },
                     content: row.try_get("content")?,
                     embedding: None,
+                    // tier is surfaced into ranking in Task 6 (SELECT + read);
+                    // until then the row-map defaults to Tier1.
+                    tier: Tier::Tier1,
+                    embedding_state: EmbeddingState::Embedded,
+                    content_hash: None,
                 },
             })
         })
@@ -102,6 +107,11 @@ pub async fn semantic_search(
                     },
                     content: row.try_get("content")?,
                     embedding: None,
+                    // tier is surfaced into ranking in Task 6 (SELECT + read);
+                    // until then the row-map defaults to Tier1.
+                    tier: Tier::Tier1,
+                    embedding_state: EmbeddingState::Embedded,
+                    content_hash: None,
                 },
             })
         })
@@ -163,6 +173,9 @@ mod tests {
                 range: LineRange { start: 1, end: 1 },
                 content: "fn foo() {}".to_string(),
                 embedding: None,
+                tier: Tier::Tier1,
+                embedding_state: EmbeddingState::Embedded,
+                content_hash: None,
             },
         }
     }
@@ -250,6 +263,9 @@ mod tests {
                 range: LineRange { start: 1, end: 1 },
                 content: "x".into(),
                 embedding: None,
+                tier: Tier::Tier1,
+                embedding_state: EmbeddingState::Embedded,
+                content_hash: None,
             },
         }
     }

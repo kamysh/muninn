@@ -401,6 +401,11 @@ pub fn chunk_file(
                     },
                     content: acc,
                     embedding: None,
+                    // Defaults; pipeline.rs::index_file sets the real tier,
+                    // embedding_state, and content_hash per file.
+                    tier: crate::types::Tier::Tier1,
+                    embedding_state: crate::types::EmbeddingState::Embedded,
+                    content_hash: None,
                 });
             }
             local_start = local_end;
@@ -446,6 +451,9 @@ pub fn chunk_file(
                 range: sym.range.clone(),
                 content: full_content,
                 embedding: None,
+                tier: crate::types::Tier::Tier1,
+                embedding_state: crate::types::EmbeddingState::Embedded,
+                content_hash: None,
             });
         } else {
             accumulate(span, sym.range.start, &mut chunks);

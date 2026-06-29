@@ -35,6 +35,69 @@ pub struct Repo {
     pub paused: bool,
 }
 
+/// Which tier a chunk belongs to. Spec: Muninn.Types.Tier.
+/// Tier 1 (first-party) is embedded eagerly and ranked at full weight; Tier 2
+/// (vendored) is embedded lazily by the daemon and down-weighted in search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Tier {
+    Tier1,
+    Tier2,
+}
+
+impl Tier {
+    pub fn as_i16(self) -> i16 {
+        match self {
+            Tier::Tier1 => 1,
+            Tier::Tier2 => 2,
+        }
+    }
+    pub fn from_i16(v: i16) -> Option<Tier> {
+        match v {
+            1 => Some(Tier::Tier1),
+            2 => Some(Tier::Tier2),
+            _ => None,
+        }
+    }
+}
+
+/// A chunk's embedding lifecycle state. Spec: Muninn.Types.EmbeddingState.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EmbeddingState {
+    /// Vector present.
+    Embedded,
+    /// Tier-2 chunk awaiting daemon backfill (full-text searchable only).
+    Pending,
+    /// Embedder returned an empty vector (distinct from Pending).
+    Absent,
+}
+
+impl EmbeddingState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Pending => "pending",
+            Self::Absent => "absent",
+        }
+    }
+    /// Parse from the DB text representation (named to avoid colliding with the
+    /// std `FromStr::from_str` trait method).
+    pub fn from_db_str(s: &str) -> Option<EmbeddingState> {
+        match s {
+            "embedded" => Some(Self::Embedded),
+            "pending" => Some(Self::Pending),
+            "absent" => Some(Self::Absent),
+            _ => None,
+        }
+    }
+}
+
+/// SHA-256 of chunk content, used to deduplicate identical Tier-2 chunks so the
+/// daemon embeds each unique content only once. Computed for all chunks.
+pub fn content_sha256(content: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(content.as_bytes()).to_vec()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub id: Uuid,
@@ -43,6 +106,12 @@ pub struct Chunk {
     pub range: LineRange,
     pub content: String,
     pub embedding: Option<Vec<f32>>,
+    /// Tier 1 (first-party) or Tier 2 (vendored). Spec: Muninn.Types.Chunk.tier.
+    pub tier: Tier,
+    /// Embedding lifecycle. Spec: Muninn.Types.Chunk.embeddingState.
+    pub embedding_state: EmbeddingState,
+    /// SHA-256 of `content` for Tier-2 dedup; set at index time for all chunks.
+    pub content_hash: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +205,31 @@ impl Similarity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tier_round_trips_i16() {
+        assert_eq!(Tier::from_i16(1), Some(Tier::Tier1));
+        assert_eq!(Tier::from_i16(2), Some(Tier::Tier2));
+        assert_eq!(Tier::Tier2.as_i16(), 2);
+        assert_eq!(Tier::from_i16(7), None);
+    }
+
+    #[test]
+    fn embedding_state_round_trips_str() {
+        assert_eq!(
+            EmbeddingState::from_db_str("pending"),
+            Some(EmbeddingState::Pending)
+        );
+        assert_eq!(EmbeddingState::Embedded.as_str(), "embedded");
+        assert_eq!(EmbeddingState::from_db_str("nonsense"), None);
+    }
+
+    #[test]
+    fn content_sha256_is_stable_and_distinct() {
+        assert_eq!(content_sha256("abc"), content_sha256("abc"));
+        assert_ne!(content_sha256("abc"), content_sha256("abd"));
+        assert_eq!(content_sha256("abc").len(), 32);
+    }
 
     #[test]
     fn line_range_valid_when_start_equals_end() {

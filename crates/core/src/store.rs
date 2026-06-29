@@ -62,14 +62,18 @@ pub async fn register_repo(
             &format!(
                 r#"
         CREATE TABLE IF NOT EXISTS "{table}" (
-            id          UUID PRIMARY KEY,
-            repo_id     UUID NOT NULL,
-            file_path   TEXT NOT NULL,
-            start_line  INT NOT NULL,
-            end_line    INT NOT NULL CHECK (end_line >= start_line),
-            content     TEXT NOT NULL CHECK (content <> ''),
-            ts_vector   TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
-            embedding   VECTOR({embedding_dim})
+            id              UUID PRIMARY KEY,
+            repo_id         UUID NOT NULL,
+            file_path       TEXT NOT NULL,
+            start_line      INT NOT NULL,
+            end_line        INT NOT NULL CHECK (end_line >= start_line),
+            content         TEXT NOT NULL CHECK (content <> ''),
+            ts_vector       TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+            embedding       VECTOR({embedding_dim}),
+            tier            SMALLINT NOT NULL DEFAULT 1,
+            embedding_state TEXT NOT NULL DEFAULT 'embedded'
+                            CHECK (embedding_state IN ('embedded','pending','absent')),
+            content_hash    BYTEA
         )
         "#
             ),
@@ -77,10 +81,38 @@ pub async fn register_repo(
         )
         .await?;
 
+    // Self-heal pre-tiering tables: add the tiering columns idempotently so a
+    // repo registered before this feature gains them when next touched. (Per-repo
+    // tables are managed here, not by the static migration chain.) The CHECK on
+    // embedding_state is only on the CREATE path; the enum mapping in Rust
+    // enforces validity for ADD COLUMN'd tables.
+    for ddl in [
+        format!(
+            r#"ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS tier SMALLINT NOT NULL DEFAULT 1"#
+        ),
+        format!(
+            r#"ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS embedding_state TEXT NOT NULL DEFAULT 'embedded'"#
+        ),
+        format!(r#"ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS content_hash BYTEA"#),
+    ] {
+        client.execute(&ddl, &[]).await?;
+    }
+
     client
         .execute(
             &format!(
                 r#"CREATE INDEX IF NOT EXISTS "{table}_ts_idx" ON "{table}" USING GIN (ts_vector)"#
+            ),
+            &[],
+        )
+        .await?;
+
+    // Partial index over the Tier-2 backfill backlog — the daemon's "find work"
+    // query is WHERE embedding_state = 'pending'.
+    client
+        .execute(
+            &format!(
+                r#"CREATE INDEX IF NOT EXISTS "{table}_pending_idx" ON "{table}" (embedding_state) WHERE embedding_state = 'pending'"#
             ),
             &[],
         )
@@ -284,14 +316,18 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
 
     let sql = format!(
         r#"
-        INSERT INTO "{table}" (id, repo_id, file_path, start_line, end_line, content, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO "{table}" (id, repo_id, file_path, start_line, end_line, content, embedding,
+                               tier, embedding_state, content_hash)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
-            SET file_path  = EXCLUDED.file_path,
-                start_line = EXCLUDED.start_line,
-                end_line   = EXCLUDED.end_line,
-                content    = EXCLUDED.content,
-                embedding  = EXCLUDED.embedding
+            SET file_path       = EXCLUDED.file_path,
+                start_line      = EXCLUDED.start_line,
+                end_line        = EXCLUDED.end_line,
+                content         = EXCLUDED.content,
+                embedding       = EXCLUDED.embedding,
+                tier            = EXCLUDED.tier,
+                embedding_state = EXCLUDED.embedding_state,
+                content_hash    = EXCLUDED.content_hash
         RETURNING id
         "#
     );
@@ -307,6 +343,9 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
                 &(chunk.range.end as i32),
                 &chunk.content,
                 &embedding,
+                &chunk.tier.as_i16(),
+                &chunk.embedding_state.as_str(),
+                &chunk.content_hash,
             ],
         )
         .await?;
