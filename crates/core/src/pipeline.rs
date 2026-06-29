@@ -3,7 +3,7 @@ use crate::{
     graph,
     parser::{chunk_file, detect_language, extract_edges, parse_file},
     store::{delete_file_chunks, upsert_chunk},
-    types::{BatchOutcome, StructuralEdge},
+    types::{content_sha256, BatchOutcome, EmbeddingState, StructuralEdge, Tier},
 };
 use anyhow::Result;
 use std::path::Path;
@@ -37,6 +37,7 @@ const MAX_PARSER_BYTES: u64 = 1024 * 1024; // 1 MiB
 /// referencing them either).
 const FILE_INDEX_TIMEOUT_SECS: u64 = 120;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn index_file(
     client: &Client,
     repo_id: Uuid,
@@ -45,6 +46,7 @@ pub async fn index_file(
     max_chars: usize,
     embed_batch_size: usize,
     expected_dim: usize,
+    tier: Tier,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
     if let Ok(meta) = std::fs::metadata(path) {
@@ -82,6 +84,10 @@ pub async fn index_file(
     for c in &mut chunks {
         c.repo_id = repo_id;
         c.file_path = file_path.clone();
+        // Tier and content_hash are set for every chunk at index time. The hash
+        // lets the daemon dedup identical Tier-2 content during backfill.
+        c.tier = tier;
+        c.content_hash = Some(content_sha256(&c.content));
     }
 
     if chunks.is_empty() {
@@ -100,30 +106,45 @@ pub async fn index_file(
         return Ok(());
     }
 
-    let batch_size = if embed_batch_size == 0 {
-        chunks.len().max(1)
-    } else {
-        embed_batch_size
-    };
-    for chunk_batch in chunks.chunks_mut(batch_size) {
-        let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
-        let embeddings = embedder.embed(&texts).await?;
-        for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
-            if emb.is_empty() {
-                tracing::warn!(
-                    "embedder returned empty vector for chunk in {}; storing without embedding",
-                    file_path
-                );
-            } else if emb.len() != expected_dim {
-                return Err(anyhow::anyhow!(
-                    "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
-                     for chunk in {}; switching backends requires unregister + re-index",
-                    emb.len(),
-                    expected_dim,
-                    file_path
-                ));
+    match tier {
+        // Tier 1 (first-party): embed eagerly. Spec: Muninn.Types.Tier1NeverPending.
+        Tier::Tier1 => {
+            let batch_size = if embed_batch_size == 0 {
+                chunks.len().max(1)
             } else {
-                c.embedding = Some(emb);
+                embed_batch_size
+            };
+            for chunk_batch in chunks.chunks_mut(batch_size) {
+                let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
+                let embeddings = embedder.embed(&texts).await?;
+                for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
+                    if emb.is_empty() {
+                        tracing::warn!(
+                            "embedder returned empty vector for chunk in {}; storing without embedding",
+                            file_path
+                        );
+                        c.embedding_state = EmbeddingState::Absent;
+                    } else if emb.len() != expected_dim {
+                        return Err(anyhow::anyhow!(
+                            "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
+                             for chunk in {}; switching backends requires unregister + re-index",
+                            emb.len(),
+                            expected_dim,
+                            file_path
+                        ));
+                    } else {
+                        c.embedding = Some(emb);
+                        c.embedding_state = EmbeddingState::Embedded;
+                    }
+                }
+            }
+        }
+        // Tier 2 (vendored): full-text indexed now, embedded lazily by the daemon.
+        // Leave embedding = None and mark Pending; the backfill task fills it in.
+        Tier::Tier2 => {
+            for c in &mut chunks {
+                c.embedding = None;
+                c.embedding_state = EmbeddingState::Pending;
             }
         }
     }
@@ -306,6 +327,7 @@ pub async fn index_repo(
     embed_batch_size: usize,
     expected_dim: usize,
     exclude: &[String],
+    vendor: &[String],
     on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     use ignore::WalkBuilder;
@@ -316,6 +338,10 @@ pub async fn index_repo(
         .overrides(overrides)
         .filter_entry(|e| e.file_name() != ".git")
         .build();
+
+    // The walker prunes `exclude` (Drop) during traversal; survivors are then
+    // classified Tier 1 vs Tier 2 by the vendor override (hoisted once here).
+    let vendor_overrides = build_excludes(repo_path, vendor);
 
     let mut files: Vec<std::path::PathBuf> = vec![];
     for entry in walker.flatten() {
@@ -335,6 +361,14 @@ pub async fn index_repo(
     let mut skips: Vec<SkipRecord> = Vec::new();
 
     for file in &files {
+        // Survivors of the exclude-pruned walk: Tier 2 if the vendor override
+        // matches, else Tier 1. Spec: Muninn.Config.classify.
+        let rel = file.strip_prefix(repo_path).unwrap_or(file);
+        let tier = if path_excluded(&vendor_overrides, rel) {
+            Tier::Tier2
+        } else {
+            Tier::Tier1
+        };
         let work = index_file(
             client,
             repo_id,
@@ -343,6 +377,7 @@ pub async fn index_repo(
             1500,
             embed_batch_size,
             expected_dim,
+            tier,
         );
         match tokio::time::timeout(
             std::time::Duration::from_secs(FILE_INDEX_TIMEOUT_SECS),

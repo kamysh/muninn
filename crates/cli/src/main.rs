@@ -267,6 +267,7 @@ async fn run_foreground_index(
             eff.embeddings.batch_size,
             repo_dim,
             &eff.exclude,
+            &eff.vendor,
             |done, total, file| {
                 let rel = file.strip_prefix(&repo_path_for_progress).unwrap_or(file);
                 let prefix = format!(
