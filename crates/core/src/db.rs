@@ -13,15 +13,21 @@ use crate::config::{DatabaseConfig, SslMode};
 //   ag_catalog — needed for AGE operator resolution (agtype @>, etc.)
 const SEARCH_PATH: &str = "public,ag_catalog";
 
-// Embed the entire migrations directory at compile time.
+// Embed the two migration sets at compile time.
 // include_dir! embeds all files recursively; we iterate .files() sorted by name.
-static MIGRATIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../migrations");
+//
+// public/ — the static, single-schema migration chain (repos, knowledge,
+// mcp_usage, ...), applied once via kryzhen::migrate(..., None, ...).
+// repo/   — the per-repo schema template, applied once per repo via
+// kryzhen::migrate(..., Some(schema), ...). See run_repo_migrations.
+static PUBLIC_MIGRATIONS_DIR: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../migrations/public");
+static REPO_MIGRATIONS_DIR: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../migrations/repo");
 
-const RECEIPT_JSON: &str = include_str!("../../../migrations/.kryzhen-import-receipt.json");
-
-fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
+fn parse_migrations_dir(dir: &Dir<'static>) -> anyhow::Result<Vec<kryzhen::Migration>> {
     // Collect .sql files sorted by name (001_, 002_, … ordering).
-    let mut files: Vec<_> = MIGRATIONS_DIR
+    let mut files: Vec<_> = dir
         .files()
         .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("sql"))
         .collect();
@@ -41,6 +47,14 @@ fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
         all.extend(kryzhen::file::apply_implicit_deps(blocks));
     }
     Ok(all)
+}
+
+fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
+    parse_migrations_dir(&PUBLIC_MIGRATIONS_DIR)
+}
+
+fn embedded_repo_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
+    parse_migrations_dir(&REPO_MIGRATIONS_DIR)
 }
 
 /// Read password for (host, port, dbname, user) from ~/.pgpass.
@@ -155,15 +169,31 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
 
 /// Apply all pending migrations (embedded at compile time via include_dir!).
 /// Safe to call repeatedly — kryzhen tracks applied migrations in its own table.
-/// If `_sqlx_migrations` still exists, runs sqlx_import first to transfer the
-/// history into kryzhen's table.
 pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
     let migrations = embedded_migrations()?;
-    let receipt: kryzhen::sqlx_import::Receipt = serde_json::from_str(RECEIPT_JSON)?;
-    kryzhen::sqlx_import::import(client, &receipt, &migrations)
-        .await
-        .map_err(anyhow::Error::from)?;
-    kryzhen::migrate(client, &migrations, false).await?;
+    kryzhen::migrate(client, &migrations, None, false).await?;
+    Ok(())
+}
+
+/// Apply the per-repo schema template (`migrations/repo/`) to `schema`.
+/// Safe to call repeatedly — kryzhen tracks per-schema application, so an
+/// already-up-to-date schema is a no-op and a schema missing only the newest
+/// migration picks up just that one. This is what fixes the old
+/// hand-rolled-`ALTER TABLE`-in-`register_repo` backfill gap: any call site
+/// that touches a repo (not just first registration) can call this to bring
+/// that repo's schema current.
+///
+/// kryzhen's `migrate` does not create `schema` itself (verified: the only
+/// `CREATE SCHEMA` in kryzhen is for its own `mallard` bookkeeping schema,
+/// not the caller-supplied template target) — that looks like a gap in
+/// kryzhen's own schema-templating feature, worth fixing upstream, but this
+/// works around it here for now rather than blocking on that fix.
+pub async fn run_repo_migrations(client: &mut Client, schema: &str) -> anyhow::Result<()> {
+    client
+        .execute(&format!(r#"CREATE SCHEMA IF NOT EXISTS "{schema}""#), &[])
+        .await?;
+    let migrations = embedded_repo_migrations()?;
+    kryzhen::migrate(client, &migrations, Some(schema), false).await?;
     Ok(())
 }
 

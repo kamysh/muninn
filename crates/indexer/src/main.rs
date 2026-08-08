@@ -220,7 +220,7 @@ async fn scan_and_dispatch(
             let db_cfg = cfg.database.clone();
             tokio::spawn(async move {
                 // Open a dedicated client for this background reindex task.
-                let index_client =
+                let mut index_client =
                     match db::connect_with_app_name(&db_cfg, "muninn-index-reindex").await {
                         Ok(c) => c,
                         Err(e) => {
@@ -233,6 +233,22 @@ async fn scan_and_dispatch(
                             return;
                         }
                     };
+
+                // Bring this repo's schema current via kryzhen before touching its
+                // table — covers repos registered on an older version of the schema
+                // template. Done as its own short &mut borrow, before index_repo
+                // (which only needs &Client and runs concurrently with the preempt
+                // polling loop below).
+                if let Err(e) = db::run_repo_migrations(
+                    &mut index_client,
+                    &muninn_core::store::repo_schema(repo_id),
+                )
+                .await
+                {
+                    tracing::error!("schema backfill for {} failed: {}", repo_path_str, e);
+                    reindexing2.lock().await.remove(&repo_id);
+                    return;
+                }
 
                 // Run the index while polling the preempt flag every 10 s. If a
                 // foreground job requests the lock, abort (drop the index future)
@@ -316,8 +332,25 @@ async fn scan_and_dispatch(
             continue;
         }
 
-        // indexed_at IS NOT NULL — start watcher if not already watching, or
-        // restart it if the exclude/vendor config has changed.
+        // indexed_at IS NOT NULL: this repo is Indexed. Drain ONE bounded batch
+        // of its Tier-2 embedding backlog (pending chunks embedded lazily during
+        // the foreground index). One batch per scan tick keeps the tick
+        // cooperative; the NOTIFY + 60s fallback poll re-scans until the backlog
+        // is empty. Spec: Muninn.IndexFsm.EmbedStep.
+        {
+            let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
+                Arc::from(make_backend(&eff.embeddings));
+            match muninn_core::pipeline::backfill_once(client, repo.id, embedder.as_ref(), repo_dim)
+                .await
+            {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("backfilled {} Tier-2 embedding(s) for {}", n, repo.path),
+                Err(e) => tracing::warn!("backfill for {} failed: {}", repo.path, e),
+            }
+        }
+
+        // start watcher if not already watching, or restart it if the
+        // exclude/vendor config has changed.
         if let Some((handle, running_globs)) = watched.get(&repo.id) {
             if *running_globs == (eff.exclude.clone(), eff.vendor.clone()) {
                 continue; // watcher is running with the correct exclude+vendor config

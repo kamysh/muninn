@@ -190,7 +190,7 @@ fn edit_toml_in_temp(
 /// then release the lock. Reads the effective config from the repo's
 /// `.muninn.toml` on disk (caller must have written it already).
 async fn run_foreground_index(
-    client: &Client,
+    client: &mut Client,
     cfg: &GlobalConfig,
     repo_path: &Path,
 ) -> anyhow::Result<()> {
@@ -243,6 +243,12 @@ async fn run_foreground_index(
     // the repo needing a reindex rather than pointing at a half-rebuilt index.
     store::mark_unindexed(client, repo.id).await?;
 
+    // Bring this repo's schema current via kryzhen before touching its table —
+    // covers repos registered on an older version of the schema template.
+    // Done as its own short &mut borrow, before index_repo (which only needs
+    // &Client and runs concurrently with preempt polling below).
+    muninn_core::db::run_repo_migrations(client, &store::repo_schema(repo.id)).await?;
+
     println!(
         "Indexing {} ({} dims, {} backend)…",
         repo_path.display(),
@@ -260,7 +266,7 @@ async fn run_foreground_index(
     // Spec: Muninn.IndexFsm.interrupt.
     let index_result = tokio::select! {
         r = muninn_core::pipeline::index_repo(
-            client,
+            &*client,
             repo.id,
             repo_path,
             embedder,
@@ -378,7 +384,7 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
 /// `config <op> --repo <path>`: edits a repo's `.muninn.toml`, then reindexes in
 /// the foreground if the content changed or the index is owed.
 async fn handle_repo_config(
-    client: &Client,
+    client: &mut Client,
     cfg: &GlobalConfig,
     scope: ScopeArgs,
     op: ConfigOp,
@@ -486,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = GlobalConfig::load()?;
-    let client = db::connect(&cfg.database).await?;
+    let mut client = db::connect(&cfg.database).await?;
     // Self-apply migrations so any command works against a DB that hasn't been
     // migrated yet (e.g. right after a binary upgrade). Idempotent.
     let mut migrate_client = db::connect(&cfg.database).await?;
@@ -494,7 +500,7 @@ async fn main() -> anyhow::Result<()> {
     drop(migrate_client);
 
     match cli.command {
-        Commands::Config { scope, op } => handle_repo_config(&client, &cfg, scope, op).await?,
+        Commands::Config { scope, op } => handle_repo_config(&mut client, &cfg, scope, op).await?,
 
         Commands::Add {
             path,
@@ -525,19 +531,39 @@ async fn main() -> anyhow::Result<()> {
                 .to_string_lossy()
                 .to_string();
             let toml_path = repo_path.join(RepoConfig::FILE_NAME);
-            let template = RepoConfig::template_content(&dir_name);
 
-            let content = apply_assigns(&template, &set)?;
+            // A .muninn.toml already on disk is real config (possibly hand-edited)
+            // and must never be silently regenerated from the blank template --
+            // that would destroy it even though the repo isn't registered (e.g.
+            // it was unregistered via `remove` or a direct DB edit but the marker
+            // file was intentionally left in place). Use it as-is; only a
+            // brand-new repo root gets the fresh template.
+            let base = match std::fs::read_to_string(&toml_path) {
+                Ok(existing) => existing,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    RepoConfig::template_content(&dir_name)
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let existed = toml_path.exists();
+
+            let content = apply_assigns(&base, &set)?;
             RepoConfig::from_toml_str(&content)?.validate()?;
 
-            std::fs::write(&toml_path, &content)?;
-            println!("Created {}", toml_path.display());
+            if content != base {
+                std::fs::write(&toml_path, &content)?;
+            }
+            if existed && content == base {
+                println!("Using existing {}", toml_path.display());
+            } else {
+                println!("Created {}", toml_path.display());
+            }
 
             let rc = RepoConfig::from_toml_str(&content)?;
             let eff = config::EffectiveConfig::merge(&cfg, &rc, &dir_name);
             let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
             store::register_repo(
-                &client,
+                &mut client,
                 &repo_path.to_string_lossy(),
                 &eff.repo_name,
                 repo_dim,
@@ -550,7 +576,7 @@ async fn main() -> anyhow::Result<()> {
                     path
                 );
             } else {
-                run_foreground_index(&client, &cfg, &repo_path).await?;
+                run_foreground_index(&mut client, &cfg, &repo_path).await?;
             }
         }
 
@@ -582,7 +608,7 @@ async fn main() -> anyhow::Result<()> {
                         resolved.display()
                     );
                 } else {
-                    run_foreground_index(&client, &cfg, &resolved).await?;
+                    run_foreground_index(&mut client, &cfg, &resolved).await?;
                 }
             } else {
                 eprintln!("Specify a path or --all");

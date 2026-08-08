@@ -13,14 +13,14 @@ use muninn_core::{
     config::GlobalConfig,
     db,
     embeddings::EmbeddingBackend,
-    pipeline::index_repo,
-    store::{self, chunks_table},
-    types::{EmbeddingState, Tier},
+    pipeline::{backfill_once, index_repo},
+    store::{self, chunks_ref},
+    types::{content_sha256, Chunk, EmbeddingState, LineRange, Tier},
 };
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-// (no std::path::Path import needed; tmp.path() returns &Path)
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -61,14 +61,14 @@ struct ChunkRow {
 }
 
 async fn read_chunks(client: &Client, repo_id: Uuid) -> Vec<ChunkRow> {
-    let table = chunks_table(repo_id);
+    let table = chunks_ref(repo_id);
     let rows = client
         .query(
             &format!(
                 r#"SELECT file_path, tier, embedding_state,
                           (embedding IS NOT NULL) AS has_emb,
                           (content_hash IS NOT NULL) AS has_hash
-                   FROM "{table}""#
+                   FROM {table}"#
             ),
             &[],
         )
@@ -89,7 +89,7 @@ async fn read_chunks(client: &Client, repo_id: Uuid) -> Vec<ChunkRow> {
 
 #[tokio::test]
 async fn foreground_index_splits_tier1_eager_tier2_pending() {
-    let client = connect().await;
+    let mut client = connect().await;
 
     // Build a temp repo: first-party src, a vendored node_modules file, and an
     // excluded minified file.
@@ -106,7 +106,7 @@ async fn foreground_index_splits_tier1_eager_tier2_pending() {
     std::fs::write(root.join("bundle.min.js"), "var a=1;var b=2;var c=3;\n").unwrap();
 
     let repo = store::register_repo(
-        &client,
+        &mut client,
         &format!("/tmp/tiered-test-{}", Uuid::new_v4()),
         "tiered-test",
         TEST_DIM,
@@ -174,6 +174,101 @@ async fn foreground_index_splits_tier1_eager_tier2_pending() {
     // Always clean up the test repo, even on assertion failure, then re-raise.
     let _ = store::delete_repo(&client, repo_id).await;
     drop(tmp); // remove the temp repo dir
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// An embedder that counts how many texts it was asked to embed.
+struct CountingEmbedder {
+    dim: usize,
+    calls: Arc<AtomicUsize>,
+}
+impl EmbeddingBackend for CountingEmbedder {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>> {
+        let dim = self.dim;
+        let n = texts.len();
+        self.calls.fetch_add(n, Ordering::SeqCst);
+        Box::pin(async move { Ok((0..n).map(|_| vec![0.2f32; dim]).collect()) })
+    }
+}
+
+fn pending_chunk(repo_id: Uuid, file_path: &str, content: &str) -> Chunk {
+    Chunk {
+        id: Uuid::new_v4(),
+        repo_id,
+        file_path: file_path.to_string(),
+        range: LineRange { start: 1, end: 1 },
+        content: content.to_string(),
+        embedding: None,
+        tier: Tier::Tier2,
+        embedding_state: EmbeddingState::Pending,
+        content_hash: Some(content_sha256(content)),
+    }
+}
+
+#[tokio::test]
+async fn backfill_dedups_identical_content() {
+    let mut client = connect().await;
+    let repo = store::register_repo(
+        &mut client,
+        &format!("/tmp/backfill-test-{}", Uuid::new_v4()),
+        "backfill-test",
+        TEST_DIM,
+    )
+    .await
+    .expect("register repo");
+    let repo_id = repo.id;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let outcome = AssertUnwindSafe(async {
+        // Three pending chunks: two share identical content (same hash), one distinct.
+        store::upsert_chunk(&client, &pending_chunk(repo_id, "a.js", "DUPLICATE BODY"))
+            .await
+            .unwrap();
+        store::upsert_chunk(&client, &pending_chunk(repo_id, "b.js", "DUPLICATE BODY"))
+            .await
+            .unwrap();
+        store::upsert_chunk(&client, &pending_chunk(repo_id, "c.js", "UNIQUE BODY"))
+            .await
+            .unwrap();
+
+        let embedder = CountingEmbedder {
+            dim: TEST_DIM,
+            calls: calls.clone(),
+        };
+        let updated = backfill_once(&client, repo_id, &embedder, TEST_DIM)
+            .await
+            .expect("backfill_once");
+
+        // Two unique contents embedded (not three) — dedup by content_hash.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "embed called per unique content"
+        );
+        // All three chunks updated (the shared embedding fanned out to both dupes).
+        assert_eq!(updated, 3, "all 3 pending chunks become embedded");
+
+        // Every chunk is now embedded; the two dupes share the same vector.
+        let chunks = read_chunks(&client, repo_id).await;
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|c| c.embedding_state == "embedded"));
+        assert!(chunks.iter().all(|c| c.has_embedding));
+
+        // A second pass finds nothing left to do.
+        let again = backfill_once(&client, repo_id, &embedder, TEST_DIM)
+            .await
+            .expect("backfill_once #2");
+        assert_eq!(again, 0, "no pending chunks remain");
+    })
+    .catch_unwind()
+    .await;
+
+    let _ = store::delete_repo(&client, repo_id).await;
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

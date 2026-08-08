@@ -35,7 +35,7 @@ async fn connect() -> Client {
 }
 
 /// Register an ephemeral test repo (embedding_dim=64).
-async fn setup_repo(client: &Client) -> Uuid {
+async fn setup_repo(client: &mut Client) -> Uuid {
     let repo = store::register_repo(
         client,
         &format!("/tmp/test-repo-{}", Uuid::new_v4()),
@@ -61,8 +61,8 @@ where
     F: FnOnce(Client, Uuid) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let client = connect().await;
-    let repo_id = setup_repo(&client).await;
+    let mut client = connect().await;
+    let repo_id = setup_repo(&mut client).await;
     // Run the body; catch any panic so we can clean up first.
     let result = std::panic::AssertUnwindSafe(body(client, repo_id))
         .catch_unwind()
@@ -82,9 +82,9 @@ where
     F: FnOnce(Client, Uuid, Uuid) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let client = connect().await;
-    let repo_a = setup_repo(&client).await;
-    let repo_b = setup_repo(&client).await;
+    let mut client = connect().await;
+    let repo_a = setup_repo(&mut client).await;
+    let repo_b = setup_repo(&mut client).await;
     let result = std::panic::AssertUnwindSafe(body(client, repo_a, repo_b))
         .catch_unwind()
         .await;

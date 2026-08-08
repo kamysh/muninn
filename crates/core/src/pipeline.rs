@@ -454,6 +454,53 @@ pub async fn index_repo(
     }
 }
 
+/// Max distinct contents embedded per backfill pass — bounds one daemon tick.
+const BACKFILL_BATCH: i64 = 128;
+
+/// Drain one batch of the repo's Tier-2 embedding backlog: embed each UNIQUE
+/// pending content once (deduped by content_hash) and fan the vector out to all
+/// pending chunks sharing that hash. Returns the number of chunk rows updated.
+/// The daemon calls this repeatedly until it returns 0. Spec: Muninn.IndexFsm
+/// .EmbedStep (Pending → Embedded; only ever advances pending chunks).
+pub async fn backfill_once(
+    client: &Client,
+    repo_id: Uuid,
+    embedder: &dyn EmbeddingBackend,
+    expected_dim: usize,
+) -> Result<usize> {
+    let groups = crate::store::pending_content_groups(client, repo_id, BACKFILL_BATCH).await?;
+    if groups.is_empty() {
+        return Ok(0);
+    }
+    let texts: Vec<String> = groups.iter().map(|(_, c)| c.clone()).collect();
+    let embeddings = embedder.embed(&texts).await?;
+    let mut updated = 0usize;
+    for ((hash, _), emb) in groups.iter().zip(embeddings) {
+        if emb.is_empty() {
+            tracing::warn!(
+                "backfill: embedder returned empty vector for a Tier-2 content in repo {}; \
+                 leaving those chunks pending",
+                repo_id
+            );
+            continue;
+        }
+        if emb.len() != expected_dim {
+            // Dim mismatch is a hard misconfiguration; skip rather than corrupt
+            // the VECTOR(n) column. Spec: ValidStoredEmbedding.
+            tracing::error!(
+                "backfill: embedding dim {} != expected {} in repo {}; skipping",
+                emb.len(),
+                expected_dim,
+                repo_id
+            );
+            continue;
+        }
+        updated +=
+            crate::store::set_embedding_for_hash(client, repo_id, hash, &emb).await? as usize;
+    }
+    Ok(updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
