@@ -524,10 +524,23 @@ impl RepoConfig {
                  \n\
                  # [index]\n\
                  # muninn indexes everything under the repo root by default (including\n\
-                 # gitignored files like node_modules). Add globs (relative to the repo\n\
-                 # root) to exclude specific paths. `.git/`, binaries, and files over\n\
-                 # 10 MiB are always skipped.\n\
-                 # exclude = [\"target/\", \"dist/\", \"**/*.min.js\"]\n",
+                 # gitignored files like node_modules — deliberately: dependency source\n\
+                 # stays searchable). The list below excludes only generated,\n\
+                 # non-searchable files and build/cache output; edit or clear it as\n\
+                 # needed. `.git/`, binaries, and files over 10 MiB are always skipped.\n\
+                 [index]\n\
+                 exclude = [\n\
+                 \x20 # generated / non-searchable — noise even inside node_modules\n\
+                 \x20 \"**/*.map\",                # source maps\n\
+                 \x20 \"**/*.min.js\",             # minified bundles\n\
+                 \x20 \"**/package-lock.json\", \"**/pnpm-lock.yaml\", \"**/yarn.lock\", \"**/go.sum\",\n\
+                 \n\
+                 \x20 # build output / caches — regenerated, not source (search src/ instead)\n\
+                 \x20 \"**/dist/\", \"**/build/\", \"**/target/\", \"**/.vite/\", \"**/.next/\",\n\
+                 \x20 \"**/coverage/\", \"**/.nyc_output/\",\n\
+                 \x20 \"**/__pycache__/\", \"**/.pytest_cache/\", \"**/.mypy_cache/\",\n\
+                 \x20 \"**/.terraform/\",\n\
+                 ]\n",
             dir_name = dir_name
         )
     }
@@ -828,11 +841,20 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         RepoConfig::create_template(tmp.path(), "test-repo").unwrap();
         let loaded = RepoConfig::load(tmp.path()).unwrap();
-        // template has everything commented out — should load as all-None
+        // Every section except [index] is commented out — should load as None.
         assert!(loaded.repo_name.is_none());
         assert!(loaded.database.is_none());
         assert!(loaded.embeddings.is_none());
         assert!(loaded.watcher.is_none());
+        // [index] ships active with the recommended noise-filtering default
+        // (issue #3) — node_modules itself must stay searchable, so only
+        // generated/build-output globs are excluded, never the tree itself.
+        let exclude = &loaded
+            .index
+            .expect("template ships an active [index]")
+            .exclude;
+        assert!(!exclude.is_empty());
+        assert!(!exclude.iter().any(|p| p.contains("node_modules")));
     }
 
     // ── exclude/vendor merge semantics (spec: Muninn.Config.layerAxis) ──
