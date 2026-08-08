@@ -18,7 +18,41 @@ fn one_giant_single_line() {
     for c in &chunks {
         assert!(c.range.is_valid());
         assert!(!c.content.is_empty());
+        // The single-line fallback must itself be byte-bounded — an
+        // unbounded chunk here is exactly what let a multi-MB single-line
+        // file (e.g. minified JSON with an embedded base64 blob) through to
+        // Postgres's ~1MB tsvector limit and fail to index. Some slack for
+        // multi-byte UTF-8 boundary rounding, none for "just emit it whole".
+        assert!(
+            c.content.len() <= 1500 + 4,
+            "single-line fallback chunk exceeds max_chars: {} bytes",
+            c.content.len()
+        );
     }
+}
+
+#[test]
+fn one_giant_single_line_past_tsvector_limit() {
+    // Reproduces the real-world failure directly: a single line large enough
+    // to exceed Postgres's tsvector size limit (1_048_575 bytes) if emitted
+    // as one unbounded chunk. Every chunk must stay well under that.
+    const TSVECTOR_LIMIT: usize = 1_048_575;
+    let src = "y".repeat(TSVECTOR_LIMIT * 3);
+    let chunks = chunk_file(&src, &[], 1500);
+    assert!(!chunks.is_empty());
+    for c in &chunks {
+        assert!(
+            c.content.len() < TSVECTOR_LIMIT,
+            "chunk of {} bytes would still overflow tsvector's {} byte limit",
+            c.content.len(),
+            TSVECTOR_LIMIT
+        );
+    }
+    // No content lost: total bytes across chunks (minus trailing newlines
+    // the accumulator wouldn't add here, since it's all one line split into
+    // pieces with no separators) reconstructs the source length.
+    let total: usize = chunks.iter().map(|c| c.content.len()).sum();
+    assert_eq!(total, src.len());
 }
 
 #[test]
@@ -128,4 +162,18 @@ fn nul_byte_in_content() {
     for c in &chunks {
         assert!(c.range.is_valid());
     }
+}
+
+#[test]
+fn giant_single_line_multibyte_utf8_no_panic() {
+    // Multi-byte chars near a max_chars boundary must never split mid-codepoint.
+    let src = "€".repeat(2000); // 3 bytes/char in UTF-8, 6000 bytes total
+    let chunks = chunk_file(&src, &[], 1500);
+    assert!(!chunks.is_empty());
+    for c in &chunks {
+        assert!(c.content.len() <= 1500 + 4);
+        assert!(std::str::from_utf8(c.content.as_bytes()).is_ok());
+    }
+    let total: usize = chunks.iter().map(|c| c.content.len()).sum();
+    assert_eq!(total, src.len());
 }

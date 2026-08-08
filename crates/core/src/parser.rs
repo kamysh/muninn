@@ -383,6 +383,36 @@ fn extract_symbols(
     }
 }
 
+/// Split `s` into pieces of at most `max_bytes` bytes each, cutting only at
+/// UTF-8 char boundaries. Used by `chunk_file`'s single-line fallback so an
+/// oversized line (no newlines to split on) still yields byte-bounded pieces
+/// instead of one unbounded chunk.
+fn split_by_char_boundary(s: &str, max_bytes: usize) -> Vec<&str> {
+    if s.len() <= max_bytes.max(1) {
+        return vec![s];
+    }
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let mut end = (start + max_bytes.max(1)).min(s.len());
+        while end < s.len() && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end <= start {
+            // max_bytes smaller than this char's own byte width — force
+            // progress by taking exactly one char.
+            end = s[start..]
+                .chars()
+                .next()
+                .map(|c| start + c.len_utf8())
+                .unwrap_or(s.len());
+        }
+        pieces.push(&s[start..end]);
+        start = end;
+    }
+    pieces
+}
+
 /// Chunk file content by symbol boundaries; fall back to max_chars splitting
 pub fn chunk_file(
     source: &str,
@@ -413,8 +443,34 @@ pub fn chunk_file(
                 local_end += 1;
             }
             if local_end == local_start {
-                acc = span[local_start].to_string();
-                local_end += 1;
+                // Even this one line alone doesn't fit under max_chars —
+                // split the line itself into max_chars-sized (byte) pieces on
+                // char boundaries instead of emitting it whole. A single
+                // chunk with no byte cap can exceed Postgres's tsvector size
+                // limit (observed live: a multi-MB single-line minified/
+                // generated JSON file — e.g. a base64-embedded blob — blowing
+                // past the ~1MB tsvector cap and failing to index).
+                let line_no = base_line_1idx + local_start as u32;
+                for piece in split_by_char_boundary(span[local_start], max_chars) {
+                    if !piece.trim().is_empty() {
+                        out.push(crate::types::Chunk {
+                            id: Uuid::new_v4(),
+                            repo_id: Uuid::nil(),
+                            file_path: String::new(),
+                            range: LineRange {
+                                start: line_no,
+                                end: line_no,
+                            },
+                            content: piece.to_string(),
+                            embedding: None,
+                            tier: crate::types::Tier::Tier1,
+                            embedding_state: crate::types::EmbeddingState::Embedded,
+                            content_hash: None,
+                        });
+                    }
+                }
+                local_start += 1;
+                continue;
             }
             if !acc.trim().is_empty() {
                 out.push(crate::types::Chunk {
