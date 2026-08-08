@@ -42,7 +42,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sid=$(jq -r .session_id 2>/dev/null); touch \"/tmp/claude-mm-muninn-$sid\""
+            "command": "sid=$(jq -r .session_id 2>/dev/null); touch \"/tmp/claude-mm-muninn-$sid\"; jq -n '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:\"POLICY REQUIREMENT: Output exactly one line before proceeding — [muninn] N/10: <reason> — where N is YOUR assessment of how useful the muninn results are for the current task. 1=empty/irrelevant, 5=partial match, 9-10=exact code locations found. You are the only one who can evaluate this. Omitting this line is a policy violation.\"}}'",
+            "timeout": 5
           }
         ]
       }

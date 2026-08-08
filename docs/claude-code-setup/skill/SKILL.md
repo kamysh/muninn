@@ -7,7 +7,7 @@ description: Use when mcp__muninn tools are available — guides how to call the
 
 Muninn indexes your repositories and exposes search tools so you can answer questions about a codebase by semantic/structural/full-text search instead of reading or grepping file-by-file.
 
-The `UserPromptSubmit` hook fires `search_hybrid` before every message. **Querying is not the goal — using the result is.** Act on what comes back, or refine and re-query. Do not clear the hook and then grep for the same thing.
+The `UserPromptSubmit` hook does not run any search for you — it only prints a reminder before every message. **You must call a search tool yourself**, and **querying is not the goal — evaluating and using the result is.** Judge whether what came back actually answers the task; act on it, or refine and re-query. Do not fire a query, decide it "counts," and then grep for the same thing anyway.
 
 ## How to call
 
@@ -17,15 +17,17 @@ Every search tool takes:
 - **`cwd`** — use only to let muninn walk up from your current directory to the nearest `.muninn.toml`.
 - **`limit`** — pass a generous value (≈15–20) for discovery; the default is small.
 
-## Reading results — act on what comes back
+## Reading results — evaluate relevance, then act
 
 Each hit gives `file_path` plus a `start_line..end_line` range.
 
-**Required discipline:** read the pointed-to range *before* doing anything else
-with that file. Do not open the file from line 1 when muninn already told you
-where the relevant section is. Do not grep for the same symbol you just searched.
+**Required discipline:** for each result, judge whether it is actually relevant
+to the task before using it — do not treat "the query ran" as satisfying the
+requirement. Then read the pointed-to range *before* doing anything else with
+that file. Do not open the file from line 1 when muninn already told you where
+the relevant section is. Do not grep for the same symbol you just searched.
 
-If the top results are not what you need:
+If the top results are not relevant / not what you need:
 - Switch tool (see table below) — do not silently fall back to Bash grep.
 - Surface the miss to the user if the search should have found something and
   didn't (stale index, missing exclude, wrong repo path). This is a product signal.
@@ -48,9 +50,13 @@ check the repo's `.muninn.toml` excludes, and say so.
 | Retrieve stored notes | `search_knowledge` |
 | General / unsure | `search_hybrid` (semantic + full-text via RRF) |
 
+**`search_structural` caveats:**
+- Matches are **name-scoped, not path-scoped** — if multiple files define a same-named symbol (e.g. every crate's own `main`), a `callers`/`callees` result set can mix matches for different actual functions. Always check each result's `file_path`, don't assume the first hit is the one you meant.
+- Cross-file call edges are only fully resolved by a **full reindex** (`muninn reindex <repo>` / `muninn add`). The daemon's incremental single-file watcher only re-resolves same-file calls, so a call added to a live-edited repo may not show up as a caller/callee until the next full reindex.
+
 **Reach for muninn over grep/Read when:** you don't know the exact name (conceptual search → `search_hybrid`/`search_semantic`); you need the call graph (→ `search_structural` — its killer use); or you're searching across files/repos. **grep/Read are fine** when you already know the exact string *and* which file it's in. For an exact identifier across the whole repo, **`search_fulltext` is the muninn equivalent of grep** — prefer it; it is also the robust fallback when `search_hybrid` is drowned by a dominating corpus (vendored deps, generated files, `target/`).
 
-**Anti-pattern:** fire the hook's search, ignore it, then grep for the same thing. If a search misses what it should find, that is a product signal — refine the query or switch tool, and surface the miss. Don't silently fall back to grep.
+**Anti-pattern:** call a search tool, ignore what it returned, then grep for the same thing. If a search misses what it should find, that is a product signal — refine the query or switch tool, and surface the miss. Don't silently fall back to grep.
 
 ## When to record knowledge
 
