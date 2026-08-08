@@ -1,7 +1,7 @@
 use anyhow::Result;
 use muninn_core::embeddings::EmbeddingBackend;
 use muninn_core::pipeline::{build_excludes, index_file};
-use muninn_core::types::{HolderKind, IndexState};
+use muninn_core::types::{HolderKind, IndexState, Tier};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use uuid::Uuid;
 // concerns; bundling them into a struct would not improve clarity.
 #[allow(clippy::too_many_arguments)]
 pub async fn watch_repo(
-    client: Arc<Client>,
+    mut client: Arc<Client>,
     repo_id: Uuid,
     repo_path: PathBuf,
     embedder: Arc<dyn EmbeddingBackend>,
@@ -24,8 +24,23 @@ pub async fn watch_repo(
     embed_batch_size: usize,
     expected_dim: usize,
     exclude: Vec<String>,
+    vendor: Vec<String>,
 ) -> Result<()> {
+    // Bring this repo's schema current via kryzhen before the watcher starts
+    // writing to it — this is the steady-state path most repos spend most of
+    // their time on (not reindex), so it must backfill too, not just
+    // register_repo/index_repo. `client` is a freshly-constructed Arc with no
+    // other holders yet, so get_mut succeeds.
+    {
+        let schema = muninn_core::store::repo_schema(repo_id);
+        let client_mut = Arc::get_mut(&mut client).ok_or_else(|| {
+            anyhow::anyhow!("watch_repo: client Arc unexpectedly shared at startup")
+        })?;
+        muninn_core::db::run_repo_migrations(client_mut, &schema).await?;
+    }
+
     let overrides = build_excludes(&repo_path, &exclude);
+    let vendor_overrides = build_excludes(&repo_path, &vendor);
 
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
 
@@ -98,6 +113,18 @@ pub async fn watch_repo(
             }
 
             if path.is_file() {
+                // Classify the changed file: Tier 2 if it matches the vendor
+                // override, else Tier 1. Spec: Muninn.Config.classify.
+                let tier = path
+                    .strip_prefix(&repo_path)
+                    .map(|rel| {
+                        if muninn_core::pipeline::path_excluded(&vendor_overrides, rel) {
+                            Tier::Tier2
+                        } else {
+                            Tier::Tier1
+                        }
+                    })
+                    .unwrap_or(Tier::Tier1);
                 match index_file(
                     &client,
                     repo_id,
@@ -106,6 +133,7 @@ pub async fn watch_repo(
                     1500,
                     embed_batch_size,
                     expected_dim,
+                    tier,
                 )
                 .await
                 {

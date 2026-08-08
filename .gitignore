@@ -5,3 +5,4 @@ config.toml
 result
 .claude/
 .fastembed_cache/
+/.direnv/

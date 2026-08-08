@@ -57,7 +57,13 @@ mcp__muninn__search_structural
 **Hooks:**
 - **`SessionStart`**: muninn skill reminder echo
 - **`UserPromptSubmit`**: muninn search reminder + per-prompt sentinel reset
-- **`PostToolUse`** (matcher `mcp__muninn__search_hybrid|…`): muninn sentinel creation
+- **`PostToolUse`** (matcher `mcp__muninn__search_hybrid|…`): muninn sentinel creation,
+  plus an `additionalContext` injection that requires the agent to state a `[muninn]
+  N/10: <reason>` relevance rating for that call's results before doing anything else.
+  This is the actual enforcement for "evaluate the results, don't just fire the
+  query" — the `UserPromptSubmit` reminder text alone cannot make that happen, only
+  this hook can, because it is emitted after the tool call completes and the agent
+  must act on it in its next output.
 
 See `settings.json` for the exact commands.
 

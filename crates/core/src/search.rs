@@ -1,5 +1,5 @@
-use crate::store::chunks_table;
-use crate::types::{Chunk, LineRange, SearchResult};
+use crate::store::chunks_ref;
+use crate::types::{Chunk, EmbeddingState, LineRange, SearchResult, Tier};
 use anyhow::Result;
 use pgvector::Vector;
 use std::collections::HashMap;
@@ -24,14 +24,14 @@ pub async fn fulltext_search(
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
-    let table = chunks_table(repo_id);
+    let table = chunks_ref(repo_id);
     let rows = client
         .query(
             &format!(
                 r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
                ts_rank(ts_vector, plainto_tsquery('english', $1)) AS score
-        FROM "{table}"
+        FROM {table}
         WHERE ts_vector @@ plainto_tsquery('english', $1)
         ORDER BY score DESC
         LIMIT $2
@@ -55,6 +55,11 @@ pub async fn fulltext_search(
                     },
                     content: row.try_get("content")?,
                     embedding: None,
+                    // tier is surfaced into ranking in Task 6 (SELECT + read);
+                    // until then the row-map defaults to Tier1.
+                    tier: Tier::Tier1,
+                    embedding_state: EmbeddingState::Embedded,
+                    content_hash: None,
                 },
             })
         })
@@ -68,7 +73,7 @@ pub async fn semantic_search(
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
-    let table = chunks_table(repo_id);
+    let table = chunks_ref(repo_id);
     let vec = Vector::from(query_embedding.to_vec());
 
     let rows = client
@@ -77,7 +82,7 @@ pub async fn semantic_search(
                 r#"
         SELECT id, repo_id, file_path, start_line, end_line, content,
                (1 - (embedding <=> $1))::float4 AS score
-        FROM "{table}"
+        FROM {table}
         WHERE embedding IS NOT NULL
           AND (1 - (embedding <=> $1)) > 0.0
         ORDER BY embedding <=> $1
@@ -102,6 +107,11 @@ pub async fn semantic_search(
                     },
                     content: row.try_get("content")?,
                     embedding: None,
+                    // tier is surfaced into ranking in Task 6 (SELECT + read);
+                    // until then the row-map defaults to Tier1.
+                    tier: Tier::Tier1,
+                    embedding_state: EmbeddingState::Embedded,
+                    content_hash: None,
                 },
             })
         })
@@ -163,6 +173,9 @@ mod tests {
                 range: LineRange { start: 1, end: 1 },
                 content: "fn foo() {}".to_string(),
                 embedding: None,
+                tier: Tier::Tier1,
+                embedding_state: EmbeddingState::Embedded,
+                content_hash: None,
             },
         }
     }
@@ -250,6 +263,9 @@ mod tests {
                 range: LineRange { start: 1, end: 1 },
                 content: "x".into(),
                 embedding: None,
+                tier: Tier::Tier1,
+                embedding_state: EmbeddingState::Embedded,
+                content_hash: None,
             },
         }
     }

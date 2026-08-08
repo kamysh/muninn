@@ -13,6 +13,7 @@
 module Muninn.IndexFsm where
 
 open import Muninn.AdvisoryLock using (HolderKind; Fg; Bg)
+open import Muninn.Types using (EmbeddingState; Embedded; Pending; Absent)
 open import Data.Bool   using (Bool; true; false)
 open import Data.Maybe  using (Maybe; nothing; just)
 open import Data.Nat    using (ℕ)
@@ -132,3 +133,18 @@ configureAction false nothing  = ReindexFg
 configureNeverSkipsOwed : ∀ {A : Set} {c} → configureAction {A} c nothing ≡ ReindexFg
 configureNeverSkipsOwed {c = true}  = refl
 configureNeverSkipsOwed {c = false} = refl
+
+-- ─── Chunk-level embedding backfill (daemon, Bg) ──────────────────────────────
+-- Distinct from the repo-level IndexState FSM above: this is the per-chunk
+-- embedding lifecycle. The foreground indexer leaves a Tier-2 chunk Pending
+-- (full-text indexed, no vector); the always-present daemon (Bg) embeds it later.
+-- The ONLY transition is Pending → Embedded: backfill never touches an already
+-- Embedded or Absent chunk, and (not modelled as state here) never changes the
+-- chunk's tier or content. Tier-1 chunks are embedded eagerly and so never enter
+-- this relation (see Muninn.Types.Tier1NeverPending).
+data EmbedStep : EmbeddingState → EmbeddingState → Set where
+  backfill : EmbedStep Pending Embedded
+
+-- Backfill only advances out of Pending: there is no step from Embedded/Absent.
+backfillOnlyFromPending : ¬ EmbedStep Embedded Embedded
+backfillOnlyFromPending ()

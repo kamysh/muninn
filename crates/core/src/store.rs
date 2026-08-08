@@ -13,10 +13,18 @@ use uuid::Uuid;
 const REPO_COLUMNS: &str = "id, path, name, indexed_at, ever_indexed, \
      embedding_dim, preempt_requested, paused";
 
-/// Derive the per-repo chunks table name from the repo UUID.
-/// Uses the simple (no-hyphen) UUID hex so the name is a valid SQL identifier.
-pub fn chunks_table(repo_id: Uuid) -> String {
-    format!("chunks_{}", repo_id.as_simple())
+/// Derive the per-repo Postgres schema name from the repo UUID. Each repo gets
+/// its own schema (via kryzhen's schema-templating — see db::run_repo_migrations)
+/// containing a single `chunks` table. Uses the simple (no-hyphen) UUID hex so
+/// the name is a valid SQL identifier.
+pub fn repo_schema(repo_id: Uuid) -> String {
+    format!("repo_{}", repo_id.as_simple())
+}
+
+/// The schema-qualified `chunks` table reference for a repo, e.g.
+/// `"repo_<uuid>"."chunks"`. Used to interpolate into SQL text.
+pub fn chunks_ref(repo_id: Uuid) -> String {
+    format!(r#""{}"."chunks""#, repo_schema(repo_id))
 }
 
 /// Derive the per-repo AGE graph name from the repo UUID.
@@ -25,7 +33,7 @@ pub fn graph_name(repo_id: Uuid) -> String {
 }
 
 pub async fn register_repo(
-    client: &Client,
+    client: &mut Client,
     path: &str,
     name: &str,
     embedding_dim: usize,
@@ -55,52 +63,14 @@ pub async fn register_repo(
         embedding_dim
     );
 
-    // Create per-repo chunks table (idempotent)
-    let table = chunks_table(repo.id);
-    client
-        .execute(
-            &format!(
-                r#"
-        CREATE TABLE IF NOT EXISTS "{table}" (
-            id          UUID PRIMARY KEY,
-            repo_id     UUID NOT NULL,
-            file_path   TEXT NOT NULL,
-            start_line  INT NOT NULL,
-            end_line    INT NOT NULL CHECK (end_line >= start_line),
-            content     TEXT NOT NULL CHECK (content <> ''),
-            ts_vector   TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
-            embedding   VECTOR({embedding_dim})
-        )
-        "#
-            ),
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            &format!(
-                r#"CREATE INDEX IF NOT EXISTS "{table}_ts_idx" ON "{table}" USING GIN (ts_vector)"#
-            ),
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            &format!(
-                r#"CREATE INDEX IF NOT EXISTS "{table}_emb_idx" ON "{table}" USING hnsw (embedding vector_cosine_ops)"#
-            ),
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            &format!(r#"CREATE INDEX IF NOT EXISTS "{table}_file_idx" ON "{table}" (file_path)"#),
-            &[],
-        )
-        .await?;
+    // Create/backfill the repo's own schema + `chunks` table (including the
+    // dimension-typed `embedding` column) via kryzhen's schema-templating
+    // (migrations/repo/, applied identically to every repo's schema; idempotent
+    // — kryzhen tracks what's applied per schema). This repos row must exist
+    // first: the migration's dynamic embedding-column step reads embedding_dim
+    // back from it via current_schema().
+    let schema = repo_schema(repo.id);
+    crate::db::run_repo_migrations(client, &schema).await?;
 
     // Create per-repo AGE graph (idempotent: check before create)
     let gname = graph_name(repo.id);
@@ -193,9 +163,9 @@ pub async fn register_repo(
 }
 
 pub async fn delete_repo(client: &Client, repo_id: Uuid) -> Result<()> {
-    let table = chunks_table(repo_id);
+    let schema = repo_schema(repo_id);
     client
-        .execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
+        .execute(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#), &[])
         .await?;
 
     let gname = graph_name(repo_id);
@@ -276,7 +246,7 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
         "chunk content must not be empty (ValidChunk invariant)"
     );
 
-    let table = chunks_table(chunk.repo_id);
+    let table = chunks_ref(chunk.repo_id);
     let embedding: Option<Vector> = chunk
         .embedding
         .as_ref()
@@ -284,14 +254,18 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
 
     let sql = format!(
         r#"
-        INSERT INTO "{table}" (id, repo_id, file_path, start_line, end_line, content, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO {table} (id, repo_id, file_path, start_line, end_line, content, embedding,
+                               tier, embedding_state, content_hash)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
-            SET file_path  = EXCLUDED.file_path,
-                start_line = EXCLUDED.start_line,
-                end_line   = EXCLUDED.end_line,
-                content    = EXCLUDED.content,
-                embedding  = EXCLUDED.embedding
+            SET file_path       = EXCLUDED.file_path,
+                start_line      = EXCLUDED.start_line,
+                end_line        = EXCLUDED.end_line,
+                content         = EXCLUDED.content,
+                embedding       = EXCLUDED.embedding,
+                tier            = EXCLUDED.tier,
+                embedding_state = EXCLUDED.embedding_state,
+                content_hash    = EXCLUDED.content_hash
         RETURNING id
         "#
     );
@@ -307,6 +281,9 @@ pub async fn upsert_chunk(client: &Client, chunk: &Chunk) -> Result<Uuid> {
                 &(chunk.range.end as i32),
                 &chunk.content,
                 &embedding,
+                &chunk.tier.as_i16(),
+                &chunk.embedding_state.as_str(),
+                &chunk.content_hash,
             ],
         )
         .await?;
@@ -320,22 +297,75 @@ pub async fn delete_file_chunks(client: &Client, repo_id: Uuid, file_path: &str)
         !file_path.is_empty(),
         "NonEmptyFilePath violation: file_path must not be empty"
     );
-    let table = chunks_table(repo_id);
+    let table = chunks_ref(repo_id);
     client
         .execute(
-            &format!(r#"DELETE FROM "{table}" WHERE file_path = $1"#),
+            &format!(r#"DELETE FROM {table} WHERE file_path = $1"#),
             &[&file_path],
         )
         .await?;
     Ok(())
 }
 
-/// Delete every chunk for a repo whose `file_path` is not in `keep`.
-pub async fn prune_chunks_not_in(client: &Client, repo_id: Uuid, keep: &[String]) -> Result<u64> {
-    let table = chunks_table(repo_id);
+/// Distinct (content_hash, representative content) for the repo's chunks still
+/// awaiting embedding (`embedding_state = 'pending'`). One row per unique
+/// content_hash so the daemon embeds each unique content only once. Spec:
+/// Muninn.IndexFsm.EmbedStep (the backfill source set).
+pub async fn pending_content_groups(
+    client: &Client,
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<Vec<(Vec<u8>, String)>> {
+    let table = chunks_ref(repo_id);
+    let rows = client
+        .query(
+            &format!(
+                r#"SELECT DISTINCT ON (content_hash) content_hash, content
+                   FROM {table}
+                   WHERE embedding_state = 'pending' AND content_hash IS NOT NULL
+                   ORDER BY content_hash
+                   LIMIT $1"#
+            ),
+            &[&limit],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get::<_, Vec<u8>>(0), r.get::<_, String>(1)))
+        .collect())
+}
+
+/// Set the embedding (and flip `embedding_state` to 'embedded') for every still
+/// -pending chunk whose `content_hash` matches — fanning one embedding out to all
+/// duplicate chunks. Returns the number of rows updated. Spec: Muninn.IndexFsm
+/// .EmbedStep (Pending → Embedded; never touches an already-embedded chunk).
+pub async fn set_embedding_for_hash(
+    client: &Client,
+    repo_id: Uuid,
+    content_hash: &[u8],
+    embedding: &[f32],
+) -> Result<u64> {
+    let table = chunks_ref(repo_id);
+    let vec = Vector::from(embedding.to_vec());
     let n = client
         .execute(
-            &format!(r#"DELETE FROM "{table}" WHERE file_path <> ALL($1)"#),
+            &format!(
+                r#"UPDATE {table}
+                   SET embedding = $1, embedding_state = 'embedded'
+                   WHERE content_hash = $2 AND embedding_state = 'pending'"#
+            ),
+            &[&vec, &content_hash],
+        )
+        .await?;
+    Ok(n)
+}
+
+/// Delete every chunk for a repo whose `file_path` is not in `keep`.
+pub async fn prune_chunks_not_in(client: &Client, repo_id: Uuid, keep: &[String]) -> Result<u64> {
+    let table = chunks_ref(repo_id);
+    let n = client
+        .execute(
+            &format!(r#"DELETE FROM {table} WHERE file_path <> ALL($1)"#),
             &[&keep],
         )
         .await?;
@@ -348,10 +378,10 @@ pub async fn file_paths_not_in(
     repo_id: Uuid,
     keep: &[String],
 ) -> Result<Vec<String>> {
-    let table = chunks_table(repo_id);
+    let table = chunks_ref(repo_id);
     let rows = client
         .query(
-            &format!(r#"SELECT DISTINCT file_path FROM "{table}" WHERE file_path <> ALL($1)"#),
+            &format!(r#"SELECT DISTINCT file_path FROM {table} WHERE file_path <> ALL($1)"#),
             &[&keep],
         )
         .await?;

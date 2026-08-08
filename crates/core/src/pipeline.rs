@@ -3,7 +3,7 @@ use crate::{
     graph,
     parser::{chunk_file, detect_language, extract_edges, parse_file},
     store::{delete_file_chunks, upsert_chunk},
-    types::{BatchOutcome, StructuralEdge},
+    types::{content_sha256, BatchOutcome, EmbeddingState, StructuralEdge, Tier},
 };
 use anyhow::Result;
 use std::path::Path;
@@ -37,6 +37,7 @@ const MAX_PARSER_BYTES: u64 = 1024 * 1024; // 1 MiB
 /// referencing them either).
 const FILE_INDEX_TIMEOUT_SECS: u64 = 120;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn index_file(
     client: &Client,
     repo_id: Uuid,
@@ -45,6 +46,7 @@ pub async fn index_file(
     max_chars: usize,
     embed_batch_size: usize,
     expected_dim: usize,
+    tier: Tier,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
     if let Ok(meta) = std::fs::metadata(path) {
@@ -82,6 +84,10 @@ pub async fn index_file(
     for c in &mut chunks {
         c.repo_id = repo_id;
         c.file_path = file_path.clone();
+        // Tier and content_hash are set for every chunk at index time. The hash
+        // lets the daemon dedup identical Tier-2 content during backfill.
+        c.tier = tier;
+        c.content_hash = Some(content_sha256(&c.content));
     }
 
     if chunks.is_empty() {
@@ -100,30 +106,45 @@ pub async fn index_file(
         return Ok(());
     }
 
-    let batch_size = if embed_batch_size == 0 {
-        chunks.len().max(1)
-    } else {
-        embed_batch_size
-    };
-    for chunk_batch in chunks.chunks_mut(batch_size) {
-        let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
-        let embeddings = embedder.embed(&texts).await?;
-        for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
-            if emb.is_empty() {
-                tracing::warn!(
-                    "embedder returned empty vector for chunk in {}; storing without embedding",
-                    file_path
-                );
-            } else if emb.len() != expected_dim {
-                return Err(anyhow::anyhow!(
-                    "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
-                     for chunk in {}; switching backends requires unregister + re-index",
-                    emb.len(),
-                    expected_dim,
-                    file_path
-                ));
+    match tier {
+        // Tier 1 (first-party): embed eagerly. Spec: Muninn.Types.Tier1NeverPending.
+        Tier::Tier1 => {
+            let batch_size = if embed_batch_size == 0 {
+                chunks.len().max(1)
             } else {
-                c.embedding = Some(emb);
+                embed_batch_size
+            };
+            for chunk_batch in chunks.chunks_mut(batch_size) {
+                let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
+                let embeddings = embedder.embed(&texts).await?;
+                for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
+                    if emb.is_empty() {
+                        tracing::warn!(
+                            "embedder returned empty vector for chunk in {}; storing without embedding",
+                            file_path
+                        );
+                        c.embedding_state = EmbeddingState::Absent;
+                    } else if emb.len() != expected_dim {
+                        return Err(anyhow::anyhow!(
+                            "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
+                             for chunk in {}; switching backends requires unregister + re-index",
+                            emb.len(),
+                            expected_dim,
+                            file_path
+                        ));
+                    } else {
+                        c.embedding = Some(emb);
+                        c.embedding_state = EmbeddingState::Embedded;
+                    }
+                }
+            }
+        }
+        // Tier 2 (vendored): full-text indexed now, embedded lazily by the daemon.
+        // Leave embedding = None and mark Pending; the backfill task fills it in.
+        Tier::Tier2 => {
+            for c in &mut chunks {
+                c.embedding = None;
+                c.embedding_state = EmbeddingState::Pending;
             }
         }
     }
@@ -166,7 +187,9 @@ pub async fn index_file(
     }
 
     if let Some(lang) = language {
-        let parsed_edges = extract_edges(&symbols, &source, &lang);
+        let known: std::collections::HashSet<String> =
+            symbols.iter().map(|s| s.name.clone()).collect();
+        let parsed_edges = extract_edges(&symbols, &source, &lang, &known);
         let mut edges: Vec<StructuralEdge> = Vec::new();
         for pe in parsed_edges {
             let from_id = range_to_chunk.get(&(pe.from_range.start, pe.from_range.end));
@@ -192,6 +215,81 @@ pub async fn index_file(
     Ok(())
 }
 
+/// Second pass over `files`, run once per `index_repo` call after every file
+/// has had its own chunks and symbol nodes written. `index_file`'s immediate
+/// pass can only resolve CALLS edges within the same file — its `known` set
+/// is that file's own symbols, so a function in file A calling one in file B
+/// is invisible to A's pass, regardless of walk order. This pass re-parses
+/// each file with the now-complete repo-wide name -> chunk_id table as
+/// `known`, so cross-file calls resolve, and writes any newly-found edges via
+/// the same idempotent MERGE `upsert_edges` already uses.
+///
+/// Read-only w.r.t. chunks: never re-chunks, re-embeds, or rewrites symbol
+/// nodes, only adds edges. Only called from `index_repo` (bulk add/reindex);
+/// the daemon's incremental single-file watcher path does not call this — a
+/// newly-added cross-file call is only picked up by the next full reindex.
+async fn backfill_structural_edges(
+    client: &Client,
+    repo_id: Uuid,
+    files: &[std::path::PathBuf],
+) -> Result<()> {
+    let known_ids = graph::all_symbol_chunk_ids(client, repo_id).await?;
+    if known_ids.is_empty() {
+        return Ok(());
+    }
+    let known_names: std::collections::HashSet<String> = known_ids.keys().cloned().collect();
+
+    for file in files {
+        let file_path = file.to_string_lossy().to_string();
+        let Some(lang) = detect_language(&file_path) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(file) else {
+            continue;
+        };
+        if bytes.len() as u64 > MAX_PARSER_BYTES || bytes.contains(&0u8) {
+            continue;
+        }
+        let Ok(source) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let symbols = parse_file(&source, lang).unwrap_or_default();
+        if symbols.is_empty() {
+            continue;
+        }
+
+        // Resolve the caller (`from`) side against this file's own nodes
+        // only — the repo-wide `known_ids` map is ambiguous whenever two
+        // files define a same-named symbol (e.g. every crate's own `main`),
+        // and the caller is always defined in this file.
+        let local_ids = graph::symbol_chunk_ids_for_file(client, repo_id, &file_path).await?;
+        let range_to_name: std::collections::HashMap<(u32, u32), &str> = symbols
+            .iter()
+            .map(|s| ((s.range.start, s.range.end), s.name.as_str()))
+            .collect();
+
+        let parsed_edges = extract_edges(&symbols, &source, &lang, &known_names);
+        let mut edges: Vec<StructuralEdge> = Vec::new();
+        for pe in parsed_edges {
+            let from_id = range_to_name
+                .get(&(pe.from_range.start, pe.from_range.end))
+                .and_then(|n| local_ids.get(*n));
+            let to_id = known_ids.get(&pe.to_name);
+            if let (Some(&from), Some(&to)) = (from_id, to_id) {
+                edges.push(StructuralEdge {
+                    from,
+                    to,
+                    relation: pe.relation,
+                });
+            }
+        }
+        if !edges.is_empty() {
+            graph::upsert_edges(client, repo_id, &edges).await?;
+        }
+    }
+    Ok(())
+}
+
 /// A file that failed to index, along with the reason. The reason string is
 /// the full anyhow-style cause chain rendered once at skip-time so the CLI
 /// can print it later without holding the underlying error.
@@ -201,12 +299,14 @@ pub struct SkipRecord {
     pub reason: String,
 }
 
-/// Build an `ignore::overrides::Override` that excludes the given glob patterns
-/// (relative to `repo_path`). With only negated (`!`) globs and no whitelist
-/// globs, the `ignore` crate matches everything by default and ignores only
-/// paths that hit one of these patterns — exactly the "index everything except
-/// these" semantics we want. Shared by the full-repo walk and the file watcher
-/// so both apply identical exclusions. `.git/` is pruned separately.
+/// Build an `ignore::overrides::Override` from a layered glob list (relative to
+/// `repo_path`). A bare pattern `p` adds `p` to the set (an `ignore`-crate
+/// negated glob `!p`, which `path_excluded` reads as "in the set"); a
+/// `!p`-prefixed pattern REMOVES a prior match (an `ignore`-crate whitelist glob
+/// `p`). Patterns are applied in order, last match wins — so a later `!p` can
+/// un-set an earlier `p`. With only these entries the `ignore` crate matches
+/// everything by default and only the resolved set is "ignored". Shared by the
+/// full-repo walk and the file watcher so both apply identical rules.
 pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides::Override {
     use ignore::overrides::OverrideBuilder;
     let mut builder = OverrideBuilder::new(repo_path);
@@ -215,7 +315,14 @@ pub fn build_excludes(repo_path: &Path, exclude: &[String]) -> ignore::overrides
         if pat.is_empty() {
             continue;
         }
-        if let Err(e) = builder.add(&format!("!{pat}")) {
+        // A user `!p` (negation) becomes an ignore-crate WHITELIST glob `p`,
+        // which last-match-wins un-sets a prior membership. A bare `p` becomes
+        // the ignore-crate negated glob `!p` (membership).
+        let entry = match pat.strip_prefix('!') {
+            Some(rest) => rest.to_string(),
+            None => format!("!{pat}"),
+        };
+        if let Err(e) = builder.add(&entry) {
             tracing::warn!("ignoring invalid exclude glob {:?}: {}", pat, e);
         }
     }
@@ -251,6 +358,31 @@ pub fn path_excluded(overrides: &ignore::overrides::Override, rel: &Path) -> boo
         .any(|ancestor| overrides.matched(ancestor, true).is_ignore())
 }
 
+/// The classification of a repo-relative path. Spec: Muninn.Config.Decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Matched `exclude` — never indexed.
+    Drop,
+    /// First-party source: full weight, eager embed.
+    Tier1,
+    /// Matched `vendor` — indexed but down-weighted and lazily embedded.
+    Tier2,
+}
+
+/// Classify a repo-relative path against the two glob axes. `exclude` drops first
+/// and wins on overlap; `vendor` then classifies survivors as Tier 2; everything
+/// else is Tier 1. Both axes use the same last-match-wins / `!`-negation matcher
+/// as `build_excludes`. Spec: Muninn.Config.classify.
+pub fn classify(repo_root: &Path, exclude: &[String], vendor: &[String], rel: &Path) -> Decision {
+    if path_excluded(&build_excludes(repo_root, exclude), rel) {
+        return Decision::Drop;
+    }
+    if path_excluded(&build_excludes(repo_root, vendor), rel) {
+        return Decision::Tier2;
+    }
+    Decision::Tier1
+}
+
 /// Index all files in a repo.
 ///
 /// Returns the overall `BatchOutcome` plus a list of files that were skipped
@@ -272,6 +404,7 @@ pub async fn index_repo(
     embed_batch_size: usize,
     expected_dim: usize,
     exclude: &[String],
+    vendor: &[String],
     on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     use ignore::WalkBuilder;
@@ -282,6 +415,10 @@ pub async fn index_repo(
         .overrides(overrides)
         .filter_entry(|e| e.file_name() != ".git")
         .build();
+
+    // The walker prunes `exclude` (Drop) during traversal; survivors are then
+    // classified Tier 1 vs Tier 2 by the vendor override (hoisted once here).
+    let vendor_overrides = build_excludes(repo_path, vendor);
 
     let mut files: Vec<std::path::PathBuf> = vec![];
     for entry in walker.flatten() {
@@ -301,6 +438,14 @@ pub async fn index_repo(
     let mut skips: Vec<SkipRecord> = Vec::new();
 
     for file in &files {
+        // Survivors of the exclude-pruned walk: Tier 2 if the vendor override
+        // matches, else Tier 1. Spec: Muninn.Config.classify.
+        let rel = file.strip_prefix(repo_path).unwrap_or(file);
+        let tier = if path_excluded(&vendor_overrides, rel) {
+            Tier::Tier2
+        } else {
+            Tier::Tier1
+        };
         let work = index_file(
             client,
             repo_id,
@@ -309,6 +454,7 @@ pub async fn index_repo(
             1500,
             embed_batch_size,
             expected_dim,
+            tier,
         );
         match tokio::time::timeout(
             std::time::Duration::from_secs(FILE_INDEX_TIMEOUT_SECS),
@@ -365,6 +511,15 @@ pub async fn index_repo(
             Ok(_) => {}
             Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
         }
+        if any_succeeded {
+            if let Err(e) = backfill_structural_edges(client, repo_id, &files).await {
+                tracing::warn!(
+                    "cross-file structural edge backfill failed for repo {}: {}",
+                    repo_id,
+                    e
+                );
+            }
+        }
         crate::store::mark_indexed(client, repo_id).await?;
         let outcome = if any_failed {
             BatchOutcome::SomeSucceeded
@@ -385,6 +540,53 @@ pub async fn index_repo(
     }
 }
 
+/// Max distinct contents embedded per backfill pass — bounds one daemon tick.
+const BACKFILL_BATCH: i64 = 128;
+
+/// Drain one batch of the repo's Tier-2 embedding backlog: embed each UNIQUE
+/// pending content once (deduped by content_hash) and fan the vector out to all
+/// pending chunks sharing that hash. Returns the number of chunk rows updated.
+/// The daemon calls this repeatedly until it returns 0. Spec: Muninn.IndexFsm
+/// .EmbedStep (Pending → Embedded; only ever advances pending chunks).
+pub async fn backfill_once(
+    client: &Client,
+    repo_id: Uuid,
+    embedder: &dyn EmbeddingBackend,
+    expected_dim: usize,
+) -> Result<usize> {
+    let groups = crate::store::pending_content_groups(client, repo_id, BACKFILL_BATCH).await?;
+    if groups.is_empty() {
+        return Ok(0);
+    }
+    let texts: Vec<String> = groups.iter().map(|(_, c)| c.clone()).collect();
+    let embeddings = embedder.embed(&texts).await?;
+    let mut updated = 0usize;
+    for ((hash, _), emb) in groups.iter().zip(embeddings) {
+        if emb.is_empty() {
+            tracing::warn!(
+                "backfill: embedder returned empty vector for a Tier-2 content in repo {}; \
+                 leaving those chunks pending",
+                repo_id
+            );
+            continue;
+        }
+        if emb.len() != expected_dim {
+            // Dim mismatch is a hard misconfiguration; skip rather than corrupt
+            // the VECTOR(n) column. Spec: ValidStoredEmbedding.
+            tracing::error!(
+                "backfill: embedding dim {} != expected {} in repo {}; skipping",
+                emb.len(),
+                expected_dim,
+                repo_id
+            );
+            continue;
+        }
+        updated +=
+            crate::store::set_embedding_for_hash(client, repo_id, hash, &emb).await? as usize;
+    }
+    Ok(updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +594,44 @@ mod tests {
     fn ov(globs: &[&str]) -> ignore::overrides::Override {
         let v: Vec<String> = globs.iter().map(|s| s.to_string()).collect();
         build_excludes(Path::new("/repo"), &v)
+    }
+
+    fn cls(exclude: &[&str], vendor: &[&str], rel: &str) -> Decision {
+        let ex: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+        let vn: Vec<String> = vendor.iter().map(|s| s.to_string()).collect();
+        classify(Path::new("/repo"), &ex, &vn, Path::new(rel))
+    }
+
+    #[test]
+    fn classify_exclude_wins_over_vendor() {
+        // A path matching both axes is dropped (exclude wins).
+        assert_eq!(cls(&["**/x/**"], &["**/x/**"], "x/a.js"), Decision::Drop);
+    }
+
+    #[test]
+    fn classify_vendor_then_tier1() {
+        assert_eq!(
+            cls(&[], &["**/node_modules/**"], "node_modules/p/i.js"),
+            Decision::Tier2
+        );
+        assert_eq!(
+            cls(&[], &["**/node_modules/**"], "src/main.rs"),
+            Decision::Tier1
+        );
+    }
+
+    #[test]
+    fn classify_negation_reclaims_tier1() {
+        // vendor matches target/, but a repo `!` negation un-sets it → Tier 1.
+        assert_eq!(
+            cls(&[], &["**/target/**", "!**/target/**"], "target/x.rs"),
+            Decision::Tier1
+        );
+    }
+
+    #[test]
+    fn classify_unmatched_is_tier1() {
+        assert_eq!(cls(&[], &[], "src/lib.rs"), Decision::Tier1);
     }
 
     #[test]

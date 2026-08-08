@@ -15,6 +15,11 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+/// A running watcher's task handle plus the (exclude, vendor) glob lists it was
+/// started with. A change to either list restarts the watcher so a stale list
+/// can't mis-exclude or mis-classify changed files.
+type WatcherEntry = (JoinHandle<()>, (Vec<String>, Vec<String>));
+
 #[derive(Parser)]
 #[command(name = "muninn-index", about = "muninn indexer daemon", version)]
 struct Cli {}
@@ -49,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     // watcher before a full reindex; storing the exclude list lets us detect
     // config changes and restart the watcher so newly-excluded paths stop
     // being re-indexed by a stale watcher after a foreground CLI reindex.
-    let mut watched: HashMap<Uuid, (JoinHandle<()>, Vec<String>)> = HashMap::new();
+    let mut watched: HashMap<Uuid, WatcherEntry> = HashMap::new();
     // Track repos with a reindex in flight to prevent duplicate spawns.
     let reindexing: Arc<Mutex<std::collections::HashSet<Uuid>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
@@ -84,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
 async fn scan_and_dispatch(
     cfg: &GlobalConfig,
     client: &tokio_postgres::Client,
-    watched: &mut HashMap<Uuid, (JoinHandle<()>, Vec<String>)>,
+    watched: &mut HashMap<Uuid, WatcherEntry>,
     reindexing: &Arc<Mutex<std::collections::HashSet<Uuid>>>,
 ) {
     let repos = match store::list_repos(client).await {
@@ -207,6 +212,7 @@ async fn scan_and_dispatch(
                 Arc::from(make_backend(&eff.embeddings));
             let batch_size = eff.embeddings.batch_size;
             let exclude = eff.exclude.clone();
+            let vendor = eff.vendor.clone();
             let repo_id = repo.id;
             let repo_path_owned = repo_path.to_path_buf();
             let repo_path_str = repo.path.clone();
@@ -214,7 +220,7 @@ async fn scan_and_dispatch(
             let db_cfg = cfg.database.clone();
             tokio::spawn(async move {
                 // Open a dedicated client for this background reindex task.
-                let index_client =
+                let mut index_client =
                     match db::connect_with_app_name(&db_cfg, "muninn-index-reindex").await {
                         Ok(c) => c,
                         Err(e) => {
@@ -228,6 +234,22 @@ async fn scan_and_dispatch(
                         }
                     };
 
+                // Bring this repo's schema current via kryzhen before touching its
+                // table — covers repos registered on an older version of the schema
+                // template. Done as its own short &mut borrow, before index_repo
+                // (which only needs &Client and runs concurrently with the preempt
+                // polling loop below).
+                if let Err(e) = db::run_repo_migrations(
+                    &mut index_client,
+                    &muninn_core::store::repo_schema(repo_id),
+                )
+                .await
+                {
+                    tracing::error!("schema backfill for {} failed: {}", repo_path_str, e);
+                    reindexing2.lock().await.remove(&repo_id);
+                    return;
+                }
+
                 // Run the index while polling the preempt flag every 10 s. If a
                 // foreground job requests the lock, abort (drop the index future)
                 // and yield by releasing the advisory lock — the foreground job's
@@ -240,6 +262,7 @@ async fn scan_and_dispatch(
                     batch_size,
                     repo_dim,
                     &exclude,
+                    &vendor,
                     |_, _, _| {},
                 );
                 tokio::pin!(index_fut);
@@ -309,16 +332,33 @@ async fn scan_and_dispatch(
             continue;
         }
 
-        // indexed_at IS NOT NULL — start watcher if not already watching, or
-        // restart it if the exclude config has changed.
-        if let Some((handle, running_exclude)) = watched.get(&repo.id) {
-            if *running_exclude == eff.exclude {
-                continue; // watcher is running with the correct exclude config
+        // indexed_at IS NOT NULL: this repo is Indexed. Drain ONE bounded batch
+        // of its Tier-2 embedding backlog (pending chunks embedded lazily during
+        // the foreground index). One batch per scan tick keeps the tick
+        // cooperative; the NOTIFY + 60s fallback poll re-scans until the backlog
+        // is empty. Spec: Muninn.IndexFsm.EmbedStep.
+        {
+            let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
+                Arc::from(make_backend(&eff.embeddings));
+            match muninn_core::pipeline::backfill_once(client, repo.id, embedder.as_ref(), repo_dim)
+                .await
+            {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("backfilled {} Tier-2 embedding(s) for {}", n, repo.path),
+                Err(e) => tracing::warn!("backfill for {} failed: {}", repo.path, e),
+            }
+        }
+
+        // start watcher if not already watching, or restart it if the
+        // exclude/vendor config has changed.
+        if let Some((handle, running_globs)) = watched.get(&repo.id) {
+            if *running_globs == (eff.exclude.clone(), eff.vendor.clone()) {
+                continue; // watcher is running with the correct exclude+vendor config
             }
             handle.abort();
             watched.remove(&repo.id);
             tracing::info!(
-                "restarting watcher for {} (exclude config changed)",
+                "restarting watcher for {} (exclude/vendor config changed)",
                 repo.path
             );
         }
@@ -333,6 +373,7 @@ async fn scan_and_dispatch(
         let debounce = eff.watcher.debounce_ms;
         let batch_size = eff.embeddings.batch_size;
         let exclude = eff.exclude.clone();
+        let vendor = eff.vendor.clone();
         let id = repo.id;
         let repo_path_owned = repo_path.to_path_buf();
         let initial_state = Arc::new(Mutex::new(IndexState::Watching));
@@ -358,6 +399,7 @@ async fn scan_and_dispatch(
                 batch_size,
                 repo_dim,
                 exclude,
+                vendor,
             )
             .await
             {
@@ -365,6 +407,6 @@ async fn scan_and_dispatch(
             }
         });
 
-        watched.insert(repo.id, (handle, eff.exclude.clone()));
+        watched.insert(repo.id, (handle, (eff.exclude.clone(), eff.vendor.clone())));
     }
 }
