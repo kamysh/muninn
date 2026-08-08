@@ -42,16 +42,20 @@ pub struct ParsedEdge {
 ///
 /// Produces two kinds of edges:
 /// - DEFINES: a Class/Module whose range contains a Function's range.
-/// - CALLS: call expressions found inside a Function body that name another
-///   symbol in the same file (same-file resolution only; cross-file calls
-///   are not resolved here).
+/// - CALLS: call expressions found inside a Function body whose callee name
+///   is in `known`. `known` is caller-supplied so the same extraction logic
+///   serves both same-file-only resolution (`index_file`, passing that
+///   file's own symbol names) and repo-wide resolution (the cross-file
+///   backfill pass in `pipeline.rs`, passing every symbol name in the repo's
+///   graph).
 pub fn extract_edges(
     symbols: &[ParsedSymbol],
     source: &str,
     language: &Language,
+    known: &std::collections::HashSet<String>,
 ) -> Vec<ParsedEdge> {
     let mut edges = extract_defines(symbols);
-    edges.extend(extract_calls(symbols, source, language));
+    edges.extend(extract_calls(symbols, source, language, known));
     edges
 }
 
@@ -82,10 +86,12 @@ fn extract_defines(symbols: &[ParsedSymbol]) -> Vec<ParsedEdge> {
 /// CALLS edges: for each Function symbol, walk its subtree in the tree-sitter
 /// parse tree, find call expressions, and match callee names against other
 /// symbols in the same file.
-fn extract_calls(symbols: &[ParsedSymbol], source: &str, language: &Language) -> Vec<ParsedEdge> {
-    // Build a set of known symbol names for fast lookup.
-    let known: std::collections::HashSet<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
-
+fn extract_calls(
+    symbols: &[ParsedSymbol],
+    source: &str,
+    language: &Language,
+    known: &std::collections::HashSet<String>,
+) -> Vec<ParsedEdge> {
     let mut parser = tree_sitter::Parser::new();
     let ts_lang = match language {
         Language::Rust => tree_sitter_rust::language(),
@@ -124,7 +130,7 @@ fn extract_calls(symbols: &[ParsedSymbol], source: &str, language: &Language) ->
         for callee in callees {
             // Only emit edges to symbols we know exist in this file, and skip
             // self-calls.
-            if callee != sym.name && known.contains(callee.as_str()) {
+            if callee != sym.name && known.contains(&callee) {
                 edges.push(ParsedEdge {
                     from_range: sym.range.clone(),
                     to_name: callee,
@@ -136,7 +142,20 @@ fn extract_calls(symbols: &[ParsedSymbol], source: &str, language: &Language) ->
     edges
 }
 
-/// Find the tree-sitter node whose start/end lines match the given LineRange.
+/// Find the tree-sitter node whose end line matches the given LineRange,
+/// starting no earlier than it.
+///
+/// `range.start` may be widened earlier than the node's own start row by
+/// `extend_over_leading_doc`, which pulls a symbol's range up over its
+/// leading `///` doc comments / `#[attr]` lines so the *chunk* includes its
+/// own documentation. Those comment/attribute lines are separate sibling
+/// nodes in the tree-sitter tree, not part of the item node's own span, so
+/// requiring exact start-row equality here fails for any documented or
+/// annotated item — which is most idiomatic Rust — and silently drops all
+/// of its CALLS edges. End-row is never widened, so match on that exactly
+/// and allow the node to start anywhere at or after the (possibly widened)
+/// target start; since a DFS visits a node before any of its descendants,
+/// the outermost (correct) match is always found first.
 fn find_node_at_range<'a>(
     root: tree_sitter::Node<'a>,
     _source: &str,
@@ -145,12 +164,11 @@ fn find_node_at_range<'a>(
     let target_start = (range.start as usize).saturating_sub(1); // 0-based row
     let target_end = range.end as usize;
 
-    // Depth-first search for the node whose row span matches.
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         let start_row = node.start_position().row;
         let end_row = node.end_position().row + 1; // make inclusive end 1-past
-        if start_row == target_start && end_row == target_end {
+        if start_row >= target_start && end_row == target_end {
             return Some(node);
         }
         let mut cursor = node.walk();
@@ -207,6 +225,14 @@ fn extract_callee_name(node: tree_sitter::Node, source: &str) -> String {
         "identifier" | "field_identifier" => {
             node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
         }
+        // Rust: `path::to::func(...)` (module-qualified calls, e.g.
+        // `store::register_repo(...)`, `crate::db::run_migrations(...)`) →
+        // the `name` field is the final segment.
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            .unwrap_or("")
+            .to_string(),
         // Rust: `field_expression` → last child is the method name
         // Python: `attribute` → `attribute` field
         // JS/TS: `member_expression` → `property` field

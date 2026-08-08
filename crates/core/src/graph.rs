@@ -351,6 +351,92 @@ pub async fn query_related(
     Ok(symbols)
 }
 
+/// All symbol names currently in the repo's graph, mapped to their chunk_id.
+/// This is repo-wide (every file already indexed), unlike the per-file
+/// `name_to_chunk` map `index_file` builds from a single file's own symbols —
+/// used to resolve cross-file CALLS edges. See
+/// `pipeline::backfill_structural_edges`.
+pub async fn all_symbol_chunk_ids(
+    client: &Client,
+    repo_id: Uuid,
+) -> Result<std::collections::HashMap<String, Uuid>> {
+    let gname = graph_name(repo_id);
+    let query = format!(
+        "SELECT r::text FROM ag_catalog.cypher('{gname}', \
+         $$ MATCH (n) RETURN {{name: n.name, chunk_id: n.chunk_id}} $$) AS (r ag_catalog.agtype)"
+    );
+    let msgs = client.simple_query(&query).await?;
+
+    let mut map = std::collections::HashMap::new();
+    for msg in msgs {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            let raw = row.get(0).unwrap_or_default();
+            let val: serde_json::Value =
+                serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+            let name = val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_matches('"').to_string());
+            let chunk_id = val
+                .get("chunk_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.trim_matches('"').parse::<Uuid>().ok());
+            if let (Some(name), Some(chunk_id)) = (name, chunk_id) {
+                map.entry(name).or_insert(chunk_id);
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Symbol names to chunk_id, scoped to one file. Unlike `all_symbol_chunk_ids`
+/// (repo-wide, ambiguous whenever two files define a same-named symbol — e.g.
+/// every crate's own `main`), this is used to resolve a CALLS edge's *caller*
+/// side unambiguously: the caller is always defined in the file currently
+/// being processed. See `pipeline::backfill_structural_edges`.
+pub async fn symbol_chunk_ids_for_file(
+    client: &Client,
+    repo_id: Uuid,
+    file_path: &str,
+) -> Result<std::collections::HashMap<String, Uuid>> {
+    let gname = graph_name(repo_id);
+    let params = serde_json::json!({ "sym_file_path": file_path });
+    let agtype_json = params.to_string();
+    let stmt = format!("muninn_filenames_{}", Uuid::new_v4().simple());
+    let prepare = format!(
+        "PREPARE {stmt}(agtype) AS SELECT r::text FROM ag_catalog.cypher('{gname}', \
+         $$ MATCH (n {{file_path: $sym_file_path}}) RETURN {{name: n.name, chunk_id: n.chunk_id}} $$, \
+         $1) AS (r ag_catalog.agtype)"
+    );
+
+    client.simple_query(&prepare).await?;
+    let exec = format!("EXECUTE {}('{}')", stmt, sql_esc(&agtype_json));
+    let msgs = client.simple_query(&exec).await;
+    let _ = client.simple_query(&format!("DEALLOCATE {}", stmt)).await;
+    let msgs = msgs?;
+
+    let mut map = std::collections::HashMap::new();
+    for msg in msgs {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            let raw = row.get(0).unwrap_or_default();
+            let val: serde_json::Value =
+                serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+            let name = val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim_matches('"').to_string());
+            let chunk_id = val
+                .get("chunk_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.trim_matches('"').parse::<Uuid>().ok());
+            if let (Some(name), Some(chunk_id)) = (name, chunk_id) {
+                map.entry(name).or_insert(chunk_id);
+            }
+        }
+    }
+    Ok(map)
+}
+
 fn parse_symbol_kind(s: &str) -> SymbolKind {
     match s {
         "Function" => SymbolKind::Function,

@@ -187,7 +187,9 @@ pub async fn index_file(
     }
 
     if let Some(lang) = language {
-        let parsed_edges = extract_edges(&symbols, &source, &lang);
+        let known: std::collections::HashSet<String> =
+            symbols.iter().map(|s| s.name.clone()).collect();
+        let parsed_edges = extract_edges(&symbols, &source, &lang, &known);
         let mut edges: Vec<StructuralEdge> = Vec::new();
         for pe in parsed_edges {
             let from_id = range_to_chunk.get(&(pe.from_range.start, pe.from_range.end));
@@ -210,6 +212,81 @@ pub async fn index_file(
         }
     }
 
+    Ok(())
+}
+
+/// Second pass over `files`, run once per `index_repo` call after every file
+/// has had its own chunks and symbol nodes written. `index_file`'s immediate
+/// pass can only resolve CALLS edges within the same file — its `known` set
+/// is that file's own symbols, so a function in file A calling one in file B
+/// is invisible to A's pass, regardless of walk order. This pass re-parses
+/// each file with the now-complete repo-wide name -> chunk_id table as
+/// `known`, so cross-file calls resolve, and writes any newly-found edges via
+/// the same idempotent MERGE `upsert_edges` already uses.
+///
+/// Read-only w.r.t. chunks: never re-chunks, re-embeds, or rewrites symbol
+/// nodes, only adds edges. Only called from `index_repo` (bulk add/reindex);
+/// the daemon's incremental single-file watcher path does not call this — a
+/// newly-added cross-file call is only picked up by the next full reindex.
+async fn backfill_structural_edges(
+    client: &Client,
+    repo_id: Uuid,
+    files: &[std::path::PathBuf],
+) -> Result<()> {
+    let known_ids = graph::all_symbol_chunk_ids(client, repo_id).await?;
+    if known_ids.is_empty() {
+        return Ok(());
+    }
+    let known_names: std::collections::HashSet<String> = known_ids.keys().cloned().collect();
+
+    for file in files {
+        let file_path = file.to_string_lossy().to_string();
+        let Some(lang) = detect_language(&file_path) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(file) else {
+            continue;
+        };
+        if bytes.len() as u64 > MAX_PARSER_BYTES || bytes.contains(&0u8) {
+            continue;
+        }
+        let Ok(source) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let symbols = parse_file(&source, lang).unwrap_or_default();
+        if symbols.is_empty() {
+            continue;
+        }
+
+        // Resolve the caller (`from`) side against this file's own nodes
+        // only — the repo-wide `known_ids` map is ambiguous whenever two
+        // files define a same-named symbol (e.g. every crate's own `main`),
+        // and the caller is always defined in this file.
+        let local_ids = graph::symbol_chunk_ids_for_file(client, repo_id, &file_path).await?;
+        let range_to_name: std::collections::HashMap<(u32, u32), &str> = symbols
+            .iter()
+            .map(|s| ((s.range.start, s.range.end), s.name.as_str()))
+            .collect();
+
+        let parsed_edges = extract_edges(&symbols, &source, &lang, &known_names);
+        let mut edges: Vec<StructuralEdge> = Vec::new();
+        for pe in parsed_edges {
+            let from_id = range_to_name
+                .get(&(pe.from_range.start, pe.from_range.end))
+                .and_then(|n| local_ids.get(*n));
+            let to_id = known_ids.get(&pe.to_name);
+            if let (Some(&from), Some(&to)) = (from_id, to_id) {
+                edges.push(StructuralEdge {
+                    from,
+                    to,
+                    relation: pe.relation,
+                });
+            }
+        }
+        if !edges.is_empty() {
+            graph::upsert_edges(client, repo_id, &edges).await?;
+        }
+    }
     Ok(())
 }
 
@@ -433,6 +510,15 @@ pub async fn index_repo(
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
+        }
+        if any_succeeded {
+            if let Err(e) = backfill_structural_edges(client, repo_id, &files).await {
+                tracing::warn!(
+                    "cross-file structural edge backfill failed for repo {}: {}",
+                    repo_id,
+                    e
+                );
+            }
         }
         crate::store::mark_indexed(client, repo_id).await?;
         let outcome = if any_failed {
