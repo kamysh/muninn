@@ -2,7 +2,7 @@
   description = "muninn: indexed code search MCP server for Claude Code";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -48,7 +48,7 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "0.9.3";
+          version = "0.9.4";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
