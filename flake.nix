@@ -48,7 +48,7 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "0.9.2";
+          version = "0.9.3";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -64,8 +64,17 @@
 
         # Nix-managed install (may carry a few /nix/store refs, e.g. libiconv
         # on darwin). Use `nix profile install .` to keep them as a GC root.
+        #
+        # native-tls (pulled in unconditionally by postgres-native-tls) needs
+        # openssl-sys, so this package needs pkgs.openssl explicitly — nothing
+        # else in the build propagates it. This was missing and building
+        # anyway (implicitly, via some other propagated buildInput) until a
+        # `nix flake update` nixpkgs bump broke that implicit path with
+        # "Could not find directory of OpenSSL installation"; muninnStatic
+        # below already carries the equivalent fix for pkgsStatic.
         muninn = pkgs.rustPlatform.buildRustPackage (commonAttrs // {
           pname = "muninn";
+          buildInputs = [ pkgs.openssl ];
         });
 
         # Portable static build: pkgsStatic links everything reachable
