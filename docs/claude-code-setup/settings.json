@@ -31,6 +31,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "echo 'Also query muninn recorded knowledge for this repo (mcp__muninn__search_knowledge) at the same time as mimir — it holds durable, non-obvious facts past sessions wrote back about this specific codebase.'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "sid=$(jq -r .session_id 2>/dev/null); rm -f \"/tmp/claude-mm-muninn-$sid\""
           }
         ]
