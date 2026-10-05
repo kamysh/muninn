@@ -24,6 +24,9 @@ pub async fn fulltext_search(
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
+    if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
+        return crate::worktrees::fulltext_search(client, &target, query, limit).await;
+    }
     let table = chunks_ref(repo_id);
     let rows = client
         .query(
@@ -73,6 +76,9 @@ pub async fn semantic_search(
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate_limit(limit)?;
+    if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
+        return crate::worktrees::semantic_search(client, &target, query_embedding, limit).await;
+    }
     let table = chunks_ref(repo_id);
     let vec = Vector::from(query_embedding.to_vec());
 

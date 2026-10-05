@@ -6,6 +6,9 @@ use muninn_core::{
 use std::io::Write as _;
 use std::path::Path;
 use tokio_postgres::Client;
+mod readonly;
+mod tui;
+mod writes;
 
 #[derive(Parser)]
 #[command(name = "muninn", about = "muninn repository index manager", version)]
@@ -22,23 +25,55 @@ enum Commands {
         #[arg(value_name = "KEY=VALUE")]
         set: Vec<String>,
     },
-    /// Get, set, edit, or unset config keys (--global or --repo <path>)
+    /// Configure a family in the TUI, use --json, or legacy --global/--repo operations
     Config {
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(subcommand)]
-        op: ConfigOp,
+        op: Option<ConfigOp>,
+        /// Selected checkout/directory for family policy operations
+        #[arg(value_name = "PATH", conflicts_with = "ScopeArgs")]
+        path: Option<std::path::PathBuf>,
+        #[arg(long, requires = "path")]
+        json: bool,
+        /// Validate a complete candidate from stdin without saving
+        #[arg(long, value_name = "-", value_parser = ["-"], requires = "json", conflicts_with = "apply")]
+        check: Option<String>,
+        /// Atomically replace policy from stdin using expected family/revision
+        #[arg(long, value_name = "-", value_parser = ["-"], requires = "json")]
+        apply: Option<String>,
     },
-    /// Register a repository and run its initial index
+    /// Bounded metadata inventory; never registers, migrates or starts indexing
+    Preflight {
+        path: std::path::PathBuf,
+        #[arg(long, required = true)]
+        json: bool,
+    },
+    /// Configure/register a family interactively or with --json
     Add {
         /// Repository path
-        path: String,
+        path: std::path::PathBuf,
         /// Initial key=value settings for the repo's .muninn.toml
         #[arg(value_name = "KEY=VALUE")]
         set: Vec<String>,
         /// Register without running the initial index
         #[arg(long)]
         no_index: bool,
+        /// Database-backed registration only; never starts indexing
+        #[arg(long, conflicts_with_all = ["set", "no_index"])]
+        json: bool,
+        /// Initial complete JSON policy from stdin (new family or incomplete retry)
+        #[arg(long, value_name = "-", value_parser = ["-"], requires = "json")]
+        input: Option<String>,
+    },
+    /// Explicitly enable a configured family and run its index in the foreground
+    Start {
+        path: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+        /// Guarded start request with expected_family_id and expected_revision
+        #[arg(long, value_name = "-", value_parser = ["-"], requires = "json")]
+        input: Option<String>,
     },
     /// Re-index a repository in the foreground (or all repos / detached)
     Reindex {
@@ -73,13 +108,13 @@ enum Commands {
 /// Scope selector for `config`: exactly one of --global or --repo <path>.
 /// There is no cwd default — the repo is always explicit.
 #[derive(Args)]
-#[group(required = true, multiple = false)]
+#[group(multiple = false)]
 struct ScopeArgs {
     /// Target the global config (~/.config/muninn/config.toml)
-    #[arg(long)]
+    #[arg(long, global = true)]
     global: bool,
     /// Target a repository's .muninn.toml at this path
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH")]
     repo: Option<String>,
 }
 
@@ -187,28 +222,32 @@ fn edit_toml_in_temp(
 }
 
 /// Acquire the repo's advisory lock, run a foreground index with a progress bar,
-/// then release the lock. Reads the effective config from the repo's
-/// `.muninn.toml` on disk (caller must have written it already).
+/// then release the lock. Stored-policy families use the DB; legacy registrations
+/// retain their file configuration.
 async fn run_foreground_index(
     client: &mut Client,
     cfg: &GlobalConfig,
     repo_path: &Path,
 ) -> anyhow::Result<()> {
-    let dir_name = repo_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let repo_cfg = RepoConfig::load(repo_path)?;
-    let eff = config::EffectiveConfig::merge(cfg, &repo_cfg, &dir_name);
+    let family = muninn_core::worktrees::registered_family(client, repo_path)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("repo not found in database"))?;
+    let root =
+        muninn_core::family_policy::runtime::root(client, family.id, Path::new(&family.path))
+            .await?;
+    let repo_path = root.as_path();
+    let (eff, policy) =
+        muninn_core::family_policy::runtime::config(client, family.id, repo_path, cfg).await?;
+    anyhow::ensure!(
+        !policy.as_ref().is_some_and(|p| !p.indexing_enabled),
+        "Use muninn start PATH for the first index"
+    );
 
     let embedder: std::sync::Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         std::sync::Arc::from(muninn_core::embeddings::make_backend(&eff.embeddings));
     let repo_dim = muninn_core::embeddings::expected_dimension(&eff.embeddings);
 
-    let repo = store::get_repo_by_path(client, &repo_path.to_string_lossy())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("repo not found in database"))?;
+    let repo = family;
 
     if repo.embedding_dim as usize != repo_dim {
         anyhow::bail!(
@@ -266,7 +305,7 @@ async fn run_foreground_index(
     // Spec: Muninn.IndexFsm.interrupt.
     let index_result = tokio::select! {
         r = muninn_core::pipeline::index_repo(
-            &*client,
+            client,
             repo.id,
             repo_path,
             embedder,
@@ -481,13 +520,111 @@ async fn handle_repo_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.use_stderr() && std::env::args_os().any(|arg| arg == "--json") {
+                readonly::finish(Err(readonly::error(
+                    "invalid_request",
+                    "invalid command arguments; see command --help",
+                )));
+            }
+            error.exit();
+        }
+    };
+
+    // Family TUI/JSON routes MUST return before legacy migration/indexing startup.
+    match &cli.command {
+        Commands::Start { path, json, input } => {
+            let result = writes::start(path, input.is_some()).await;
+            if *json {
+                readonly::finish(result);
+            }
+            let data = result?;
+            println!(
+                "Indexing enabled. Pass completed: {}. Skipped: {}.",
+                data["indexing_completed"], data["skipped_checkouts_or_files"]
+            );
+            return Ok(());
+        }
+        Commands::Add {
+            path,
+            json: false,
+            set,
+            no_index: false,
+            ..
+        } if set.is_empty() => {
+            return tui::run(path, true).await;
+        }
+        Commands::Config {
+            path: Some(path),
+            json: false,
+            op: None,
+            ..
+        } => {
+            return tui::run(path, false).await;
+        }
+        Commands::Config {
+            path: Some(_),
+            json: false,
+            op: Some(_),
+            ..
+        } => {
+            anyhow::bail!("Legacy config operations cannot be combined with a family PATH");
+        }
+        Commands::Add {
+            path,
+            json: true,
+            input,
+            ..
+        } => {
+            readonly::finish(writes::add(path, input.is_some()).await);
+        }
+        Commands::Config {
+            path: Some(path),
+            json: true,
+            check,
+            apply,
+            op,
+            ..
+        } => {
+            if op.is_some() {
+                readonly::finish(Err(readonly::error(
+                    "invalid_request",
+                    "legacy operations cannot be combined with family JSON",
+                )));
+            }
+            if apply.is_some() {
+                readonly::finish(writes::apply(path).await);
+            }
+            let mode = if check.is_some() {
+                readonly::Mode::Check
+            } else {
+                readonly::Mode::Inspect
+            };
+            readonly::finish(readonly::run(path, mode).await);
+        }
+        Commands::Preflight { path, .. } => {
+            readonly::finish(readonly::run(path, readonly::Mode::Preflight).await)
+        }
+        Commands::Config { scope, op, .. } => {
+            anyhow::ensure!(
+                op.is_some() && (scope.global || scope.repo.is_some()),
+                "use config PATH --json, or a legacy operation with --global/--repo"
+            );
+        }
+        _ => {}
+    }
 
     // Bootstrap-ish commands manage the global config and do NOT require an
     // already-loaded config: `init`, and any `config … --global`.
     match &cli.command {
         Commands::Init { set } => return handle_init(set).await,
-        Commands::Config { scope, op } if scope.global => return handle_global_config(op).await,
+        Commands::Config {
+            scope,
+            op: Some(op),
+            ..
+        } if scope.global => return handle_global_config(op).await,
         _ => {}
     }
 
@@ -500,13 +637,24 @@ async fn main() -> anyhow::Result<()> {
     drop(migrate_client);
 
     match cli.command {
-        Commands::Config { scope, op } => handle_repo_config(&mut client, &cfg, scope, op).await?,
+        Commands::Config {
+            scope,
+            op: Some(op),
+            ..
+        } => handle_repo_config(&mut client, &cfg, scope, op).await?,
+        Commands::Config { .. } | Commands::Preflight { .. } | Commands::Start { .. } => {
+            unreachable!("read-only commands dispatched before migrations")
+        }
 
         Commands::Add {
             path,
             set,
             no_index,
+            ..
         } => {
+            let path = path.to_str().ok_or_else(|| {
+                anyhow::anyhow!("legacy add requires a UTF-8 path; JSON add supports native paths")
+            })?;
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
             anyhow::ensure!(
                 repo_path.exists(),
@@ -590,6 +738,12 @@ async fn main() -> anyhow::Result<()> {
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
             } else if let Some(p) = path {
                 let resolved = muninn_core::repo_resolver::resolve_path(&p)?;
+                let family = muninn_core::worktrees::registered_family(&client, &resolved)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no registered repository for {}", resolved.display())
+                    })?;
+                let resolved = std::path::PathBuf::from(family.path);
                 anyhow::ensure!(
                     store::get_repo_by_path(&client, &resolved.to_string_lossy()).await?.is_some(),
                     "no registered repo found at '{}' — run `muninn status` to see registered repos",
@@ -703,7 +857,7 @@ async fn main() -> anyhow::Result<()> {
                     std::fs::remove_file(&toml_path)?;
                 }
                 if let Some(ref r) = repo {
-                    store::delete_repo(&client, r.id).await?;
+                    store::delete_repo(&mut client, r.id).await?;
                     println!("Removed index data for: {}", repo_path.display());
                 }
                 println!("Removed: {}", repo_path.display());
@@ -830,6 +984,124 @@ async fn handle_init(set: &[String]) -> anyhow::Result<()> {
     let mut client = db::connect(&cfg.database).await?;
     println!("Applying database migrations…");
     db::run_migrations(&mut client).await?;
-    println!("Done. Run `muninn add <repo-path>` to index a repository.");
+    println!("Done. Run `muninn add <repo-path>` to configure a repository.");
     Ok(())
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+    #[test]
+    fn native_family_forms_parse_without_legacy_arguments() {
+        assert!(matches!(
+            Cli::try_parse_from(["muninn", "config", "/repo"])
+                .unwrap()
+                .command,
+            Commands::Config {
+                path: Some(_),
+                json: false,
+                op: None,
+                ..
+            }
+        ));
+        assert!(
+            matches!(Cli::try_parse_from(["muninn", "add", "/repo"]).unwrap().command,
+            Commands::Add {json: false, no_index: false, set, ..} if set.is_empty())
+        );
+    }
+    #[test]
+    fn family_read_commands_and_legacy_config_parse_without_overlap() {
+        for args in [
+            vec!["muninn", "config", "/repo", "--json"],
+            vec!["muninn", "config", "/repo", "--check", "-", "--json"],
+            vec!["muninn", "config", "/repo", "--apply", "-", "--json"],
+        ] {
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Commands::Config {
+                    path: Some(_),
+                    json: true,
+                    op: None,
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["muninn", "preflight", "/repo", "--json"])
+                .unwrap()
+                .command,
+            Commands::Preflight { .. }
+        ));
+        for args in [
+            vec!["muninn", "config", "--global", "get"],
+            vec!["muninn", "config", "get", "--global"],
+            vec!["muninn", "config", "set", "--repo", "/repo", "name=fixture"],
+            vec!["muninn", "config", "--repo", "/repo", "edit"],
+        ] {
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Commands::Config {
+                    path: None,
+                    json: false,
+                    op: Some(_),
+                    ..
+                }
+            ));
+        }
+    }
+    #[test]
+    fn incomplete_or_mixed_json_forms_are_rejected_by_parser() {
+        for args in [
+            vec!["muninn", "config", "--json"],
+            vec!["muninn", "config", "/repo", "--json", "--global"],
+            vec![
+                "muninn", "config", "/repo", "--json", "--apply", "-", "--check", "-",
+            ],
+            vec!["muninn", "add", "/repo", "--json", "--no-index"],
+            vec!["muninn", "add", "/repo", "--json", "name=legacy"],
+            vec!["muninn", "add", "/repo", "--input", "-"],
+            vec![
+                "muninn",
+                "config",
+                "/repo",
+                "--json",
+                "--check",
+                "file.json",
+            ],
+            vec!["muninn", "preflight", "/repo"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args.clone()).is_err(),
+                "accepted {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn json_registration_and_legacy_add_are_distinct() {
+        for args in [
+            vec!["muninn", "add", "/repo", "--json"],
+            vec!["muninn", "add", "/repo", "--json", "--input", "-"],
+        ] {
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Commands::Add {
+                    json: true,
+                    no_index: false,
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["muninn", "add", "/repo", "name=legacy", "--no-index"])
+                .unwrap()
+                .command,
+            Commands::Add {
+                json: false,
+                no_index: true,
+                input: None,
+                ..
+            }
+        ));
+    }
 }

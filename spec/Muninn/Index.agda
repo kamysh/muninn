@@ -13,12 +13,13 @@ module Muninn.Index where
 open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
+open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool   using (Bool; true; false)
 open import Data.List   using (List)
 open import Data.Maybe  using (Maybe; nothing; just)
 open import Data.Nat    using (_≤_)
 open import Data.String using (String)
-open import Relation.Binary.PropositionalEquality using (_≡_)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 open import Relation.Nullary using (¬_)
 
 -- ─── Lock Precondition for Indexing Transitions ──────────────────────────────
@@ -27,6 +28,9 @@ open import Relation.Nullary using (¬_)
 
 IndexingPre : Lock → Set
 IndexingPre lk = lk ≡ Free
+
+-- Legacy pre-worktree dispatch retained to document the existing Rust behavior.
+-- The proposed implementation must use worktreeDecision below.
 
 -- ─── Daemon Reindex Decision ─────────────────────────────────────────────────
 -- The indexer daemon decides what to do for each repo on every scan cycle from
@@ -49,8 +53,8 @@ data DaemonAction : Set where
   Reindex : DaemonAction   -- acquire the lock, spawn a full reindex
   Watch   : DaemonAction   -- attach a file-change watcher
 
-daemonDecision : Repo → DaemonAction
-daemonDecision repo with Repo.paused repo
+legacyDaemonDecision : Repo → DaemonAction
+legacyDaemonDecision repo with Repo.paused repo
 ... | true  = Skip
 ... | false with Repo.indexedAt repo
 ...           | just _  = Watch
@@ -92,3 +96,46 @@ ValidRange r = LineRange.start r ≤ LineRange.end r
 -- A chunk's content must be non-empty.
 ValidChunk : Chunk → Set
 ValidChunk c = ¬ (Chunk.content c ≡ "")
+
+-- Proposed dispatch. familyStarted replaces per-checkout everIndexed for
+-- automatic first indexing; transient Git state gates all indexing work.
+worktreeDecision : Bool → SchemaState → GitState →
+  (paused occupied foregroundWaiting needsIndex : Bool) → DaemonAction
+worktreeDecision false _ _ _ _ _ _ = Skip
+worktreeDecision true Missing _ _ _ _ _ = Skip
+worktreeDecision true Migrating _ _ _ _ _ = Skip
+worktreeDecision true Ready Operating _ _ _ _ = Skip
+worktreeDecision true Ready Conflicted _ _ _ _ = Skip
+worktreeDecision true Ready Settled true _ _ _ = Skip
+worktreeDecision true Ready Settled false true _ _ = Skip
+worktreeDecision true Ready Settled false false true _ = Skip
+worktreeDecision true Ready Settled false false false true = Reindex
+worktreeDecision true Ready Settled false false false false = Watch
+
+dispatchNeedsExplicitFirstStart : ∀ schema git paused occupied waiting needed →
+  worktreeDecision false schema git paused occupied waiting needed ≡ Skip
+dispatchNeedsExplicitFirstStart schema git paused occupied waiting needed = refl
+
+blockedDispatchSkips : ∀ started schema git paused occupied waiting needed →
+  GitBlocked git → worktreeDecision started schema git paused occupied waiting needed ≡ Skip
+blockedDispatchSkips false schema git paused occupied waiting needed blocked = refl
+blockedDispatchSkips true Missing git paused occupied waiting needed blocked = refl
+blockedDispatchSkips true Migrating git paused occupied waiting needed blocked = refl
+blockedDispatchSkips true Ready .Operating paused occupied waiting needed operationBlocked = refl
+blockedDispatchSkips true Ready .Conflicted paused occupied waiting needed conflictBlocked = refl
+
+-- A background dispatch corresponds to a permitted FSM edge, including first
+-- indexing of a linked worktree and resumption after an aborted Git operation.
+dispatchPermitsBackgroundStart : ∀ started schema git paused occupied waiting needed →
+  worktreeDecision started schema git paused occupied waiting needed ≡ Reindex →
+  Step started schema git Unindexed true (Indexing Bg)
+dispatchPermitsBackgroundStart false schema git paused occupied waiting needed ()
+dispatchPermitsBackgroundStart true Missing git paused occupied waiting needed ()
+dispatchPermitsBackgroundStart true Migrating git paused occupied waiting needed ()
+dispatchPermitsBackgroundStart true Ready Operating paused occupied waiting needed ()
+dispatchPermitsBackgroundStart true Ready Conflicted paused occupied waiting needed ()
+dispatchPermitsBackgroundStart true Ready Settled true occupied waiting needed ()
+dispatchPermitsBackgroundStart true Ready Settled false true waiting needed ()
+dispatchPermitsBackgroundStart true Ready Settled false false true needed ()
+dispatchPermitsBackgroundStart true Ready Settled false false false false ()
+dispatchPermitsBackgroundStart true Ready Settled false false false true chosen = autoDiscovered

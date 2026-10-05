@@ -2,7 +2,7 @@ mod watcher;
 
 use clap::Parser;
 use muninn_core::{
-    config::{EffectiveConfig, GlobalConfig, RepoConfig},
+    config::GlobalConfig,
     db,
     embeddings::{expected_dimension, make_backend},
     pipeline::index_repo,
@@ -18,7 +18,10 @@ use uuid::Uuid;
 /// A running watcher's task handle plus the (exclude, vendor) glob lists it was
 /// started with. A change to either list restarts the watcher so a stale list
 /// can't mis-exclude or mis-classify changed files.
-type WatcherEntry = (JoinHandle<()>, (Vec<String>, Vec<String>));
+type WatcherEntry = (
+    JoinHandle<()>,
+    (Vec<String>, Vec<String>, u64, usize, Option<u64>),
+);
 
 #[derive(Parser)]
 #[command(name = "muninn-index", about = "muninn indexer daemon", version)]
@@ -45,6 +48,10 @@ async fn main() -> anyhow::Result<()> {
     let (listen_client, mut notify_rx) = db::connect_listener(&cfg.database).await?;
     listen_client
         .execute("LISTEN muninn_repos_changed", &[])
+        .await?;
+
+    listen_client
+        .execute("LISTEN muninn_family_policy_changed", &[])
         .await?;
 
     tracing::info!("muninn-index started — watching all repos registered in the database");
@@ -126,22 +133,48 @@ async fn scan_and_dispatch(
             continue;
         }
 
-        let repo_path = std::path::Path::new(&repo.path);
-
-        let dir_name = repo_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        let repo_cfg = match RepoConfig::load(repo_path) {
-            Ok(c) => c,
+        let root = match muninn_core::family_policy::runtime::root(
+            client,
+            repo.id,
+            std::path::Path::new(&repo.path),
+        )
+        .await
+        {
+            Ok(path) => path,
             Err(e) => {
-                tracing::warn!("skipping {}: could not load repo config: {}", repo.path, e);
+                tracing::warn!("cannot resolve family root {}: {}", repo.id, e);
                 continue;
             }
         };
-        let eff = EffectiveConfig::merge(cfg, &repo_cfg, &dir_name);
+        let repo_path = root.as_path();
+
+        let (eff, policy) = match muninn_core::family_policy::runtime::config(
+            client, repo.id, repo_path, cfg,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(e) => {
+                if let Some((handle, _)) = watched.remove(&repo.id) {
+                    handle.abort();
+                }
+                tracing::warn!("skipping {}: {}", repo.path, e);
+                continue;
+            }
+        };
+        if policy.as_ref().is_some_and(|p| !p.indexing_enabled) {
+            if let Some((handle, _)) = watched.remove(&repo.id) {
+                handle.abort();
+            }
+            continue;
+        }
+        let signature = (
+            eff.exclude.clone(),
+            eff.vendor.clone(),
+            eff.watcher.debounce_ms,
+            eff.embeddings.batch_size,
+            policy.as_ref().map(|p| p.revision),
+        );
         let repo_dim = expected_dimension(&eff.embeddings);
 
         // DimFrozen check: stored dimension must match configured backend.
@@ -157,7 +190,7 @@ async fn scan_and_dispatch(
         }
 
         if repo.indexed_at.is_none() {
-            if !repo.ever_indexed {
+            if !repo.ever_indexed && policy.is_none() {
                 // Freshly registered, never indexed. Daemon never first-indexes;
                 // the user must run `muninn add` (foreground). Spec:
                 // Muninn.IndexFsm.DaemonNeverFirstIndexes.
@@ -255,7 +288,7 @@ async fn scan_and_dispatch(
                 // and yield by releasing the advisory lock — the foreground job's
                 // blocking acquire then wakes. Spec: Muninn.AdvisoryLock.
                 let index_fut = index_repo(
-                    &index_client,
+                    &mut index_client,
                     repo_id,
                     &repo_path_owned,
                     embedder,
@@ -273,7 +306,7 @@ async fn scan_and_dispatch(
                     tokio::select! {
                         r = &mut index_fut => break Some(r),
                         _ = ticker.tick() => {
-                            match store::is_preempt_requested(&index_client, repo_id).await {
+                            match store::is_preempt_requested(&lock_conn, repo_id).await {
                                 Ok(true) => break None,
                                 Ok(false) => {}
                                 Err(e) => tracing::warn!(
@@ -304,7 +337,7 @@ async fn scan_and_dispatch(
                                 }
                                 // mark_indexed was called inside index_repo; now notify
                                 // so the daemon re-scans and re-attaches the watcher.
-                                if let Err(e) = store::notify_repos_changed(&index_client).await {
+                                if let Err(e) = store::notify_repos_changed(&lock_conn).await {
                                     tracing::warn!(
                                         "reindex of {} complete but notify failed: {}",
                                         repo_path_str,
@@ -352,7 +385,7 @@ async fn scan_and_dispatch(
         // start watcher if not already watching, or restart it if the
         // exclude/vendor config has changed.
         if let Some((handle, running_globs)) = watched.get(&repo.id) {
-            if *running_globs == (eff.exclude.clone(), eff.vendor.clone()) {
+            if !handle.is_finished() && *running_globs == signature {
                 continue; // watcher is running with the correct exclude+vendor config
             }
             handle.abort();
@@ -407,6 +440,9 @@ async fn scan_and_dispatch(
             }
         });
 
-        watched.insert(repo.id, (handle, (eff.exclude.clone(), eff.vendor.clone())));
+        watched.insert(repo.id, (handle, signature));
     }
 }
+
+#[cfg(test)]
+mod tests;

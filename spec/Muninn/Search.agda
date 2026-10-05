@@ -5,6 +5,14 @@ module Muninn.Search where
 
 open import Muninn.Float
 open import Muninn.Types
+open import Muninn.Worktree using (Views; Checkout; CheckoutResult; Baselines; FileEntry)
+open import Muninn.Storage using (World; viewsOf)
+open import Muninn.IndexFsm using (GitState; SnapshotStatus; snapshotStatus)
+open import Data.Maybe using (just; nothing)
+open import Data.Product using (_,_)
+open import Data.Empty using (⊥)
+open import Relation.Nullary using (¬_)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; trans; sym)
 open import Data.Nat    using (ℕ; _≤_; suc; zero)
 open import Data.List   using (List; []; _∷_; length)
 open import Data.String using (String)
@@ -50,6 +58,16 @@ perFileCap = 3
 HybridResultBound : (limit : ℕ) → List SearchResult → Set
 HybridResultBound limit results = length results ≤ limit
 
+-- New worktree-aware retrieval returns only results constructed with
+-- visibility evidence from the selected checkout's published manifest.
+record ScopedSearchResult (views : Views) (checkout : Checkout) : Set where
+  field result : CheckoutResult views checkout
+        score : Float
+
+ScopedHybridResultBound : ∀ views checkout → ℕ →
+  List (ScopedSearchResult views checkout) → Set
+ScopedHybridResultBound views checkout limit results = length results ≤ limit
+
 -- Per-file bound: no single file contributes more than perFileCap results.
 -- countFile counts results whose chunk shares the given file path's value.
 countFile : String → List SearchResult → ℕ
@@ -81,3 +99,20 @@ MAX_LIMIT = 1000
 record ValidLimit (n : ℕ) : Set where
   field positive : 1 ≤ n
         bounded  : n ≤ MAX_LIMIT
+
+
+-- The response must expose the same snapshot's freshness/suspension state.
+-- Runtime establishes the current flag; Git blockage overrides it regardless.
+record SnapshotSearchResponse (baselines : Baselines) (world : World baselines)
+                              (checkout : Checkout) (git : GitState) (current : Bool) : Set where
+  field status : SnapshotStatus
+        statusMatches : status ≡ snapshotStatus git (world (Checkout.id checkout)) current
+        results : List (ScopedSearchResult (viewsOf world) checkout)
+
+noCodeWithoutSnapshot : ∀ baselines (world : World baselines) checkout →
+  world (Checkout.id checkout) ≡ nothing →
+  ¬ CheckoutResult (viewsOf world) checkout
+noCodeWithoutSnapshot baselines world checkout missing result
+  with world (Checkout.id checkout) | missing | CheckoutResult.visible result
+... | nothing | refl | (entry , () , matches)
+... | just snapshot | () | visible

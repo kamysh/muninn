@@ -48,7 +48,7 @@ async fn setup_repo(client: &mut Client) -> Uuid {
 }
 
 /// Drop the test repo's chunks table + AGE graph + repos row.
-async fn cleanup(client: &Client, repo_id: Uuid) {
+async fn cleanup(client: &mut Client, repo_id: Uuid) {
     store::delete_repo(client, repo_id)
         .await
         .expect("delete test repo");
@@ -68,8 +68,8 @@ where
         .catch_unwind()
         .await;
     // Always clean up — use a fresh connection in case the test connection is broken.
-    let cleanup_client = connect().await;
-    cleanup(&cleanup_client, repo_id).await;
+    let mut cleanup_client = connect().await;
+    cleanup(&mut cleanup_client, repo_id).await;
     // Re-raise the panic after cleanup.
     if let Err(e) = result {
         std::panic::resume_unwind(e);
@@ -88,9 +88,9 @@ where
     let result = std::panic::AssertUnwindSafe(body(client, repo_a, repo_b))
         .catch_unwind()
         .await;
-    let cleanup_client = connect().await;
-    cleanup(&cleanup_client, repo_a).await;
-    cleanup(&cleanup_client, repo_b).await;
+    let mut cleanup_client = connect().await;
+    cleanup(&mut cleanup_client, repo_a).await;
+    cleanup(&mut cleanup_client, repo_b).await;
     if let Err(e) = result {
         std::panic::resume_unwind(e);
     }

@@ -513,10 +513,17 @@ pub fn chunk_file(
         }
     }
 
-    // Emit one chunk per symbol; if a symbol's body exceeds max_chars, split
+    // Emit each distinct symbol line range once. Minified files can put
+    // hundreds of symbols on one line; repeating that span multiplies both
+    // stored text and embedding work without adding searchable content.
+    // If a symbol's body exceeds max_chars, split
     // via accumulate (the first sub-chunk inherits the symbol's start line
     // so pipeline.rs can still match symbol→chunk for the graph node).
+    let mut emitted_ranges = std::collections::HashSet::new();
     for sym in symbols {
+        if !emitted_ranges.insert((sym.range.start, sym.range.end)) {
+            continue;
+        }
         let s = (sym.range.start as usize).saturating_sub(1);
         let e = sym.range.end as usize;
         let span = lines.get(s..e.min(lines.len())).unwrap_or(&[]);
@@ -567,6 +574,25 @@ pub fn chunk_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minified_symbols_do_not_duplicate_the_same_source_span() {
+        let source: String = (0..500)
+            .map(|i| format!("function f{i}(){{return 'λ';}}"))
+            .collect();
+        let symbols = parse_file(&source, Language::JavaScript).unwrap();
+        assert_eq!(symbols.len(), 500);
+        let chunks = chunk_file(&source, &symbols, 1500);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| c.content.as_str())
+                .collect::<String>(),
+            source
+        );
+        assert!(chunks.len() <= source.len() / 1496 + 1);
+        assert!(chunks.iter().all(|c| c.content.len() <= 1500));
+    }
 
     #[test]
     fn detect_rust_language() {

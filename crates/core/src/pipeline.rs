@@ -63,90 +63,20 @@ pub async fn index_file(
         Err(_) => return Ok(()),
     };
 
-    let detected_language = detect_language(&file_path);
-    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
-        tracing::info!(
-            file = %file_path,
-            size_bytes = source.len(),
-            threshold_bytes = MAX_PARSER_BYTES,
-            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
-        );
-        None
-    } else {
-        detected_language
-    };
-    let symbols = match &language {
-        Some(lang) => parse_file(&source, *lang).unwrap_or_default(),
-        None => vec![],
-    };
-
-    let mut chunks = chunk_file(&source, &symbols, max_chars);
-    for c in &mut chunks {
-        c.repo_id = repo_id;
-        c.file_path = file_path.clone();
-        // Tier and content_hash are set for every chunk at index time. The hash
-        // lets the daemon dedup identical Tier-2 content during backfill.
-        c.tier = tier;
-        c.content_hash = Some(content_sha256(&c.content));
-    }
-
+    let language = detect_language(&file_path).filter(|_| source.len() as u64 <= MAX_PARSER_BYTES);
+    let (chunks, symbols) = prepare_chunks(
+        repo_id,
+        file_path.clone(),
+        source.clone(),
+        embedder,
+        max_chars,
+        embed_batch_size,
+        expected_dim,
+        tier,
+    )
+    .await?;
     if chunks.is_empty() {
         return Ok(());
-    }
-
-    chunks.retain(|c| {
-        if c.content.is_empty() {
-            tracing::warn!("dropping empty-content chunk in {}", file_path);
-            false
-        } else {
-            true
-        }
-    });
-    if chunks.is_empty() {
-        return Ok(());
-    }
-
-    match tier {
-        // Tier 1 (first-party): embed eagerly. Spec: Muninn.Types.Tier1NeverPending.
-        Tier::Tier1 => {
-            let batch_size = if embed_batch_size == 0 {
-                chunks.len().max(1)
-            } else {
-                embed_batch_size
-            };
-            for chunk_batch in chunks.chunks_mut(batch_size) {
-                let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
-                let embeddings = embedder.embed(&texts).await?;
-                for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
-                    if emb.is_empty() {
-                        tracing::warn!(
-                            "embedder returned empty vector for chunk in {}; storing without embedding",
-                            file_path
-                        );
-                        c.embedding_state = EmbeddingState::Absent;
-                    } else if emb.len() != expected_dim {
-                        return Err(anyhow::anyhow!(
-                            "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
-                             for chunk in {}; switching backends requires unregister + re-index",
-                            emb.len(),
-                            expected_dim,
-                            file_path
-                        ));
-                    } else {
-                        c.embedding = Some(emb);
-                        c.embedding_state = EmbeddingState::Embedded;
-                    }
-                }
-            }
-        }
-        // Tier 2 (vendored): full-text indexed now, embedded lazily by the daemon.
-        // Leave embedding = None and mark Pending; the backfill task fills it in.
-        Tier::Tier2 => {
-            for c in &mut chunks {
-                c.embedding = None;
-                c.embedding_state = EmbeddingState::Pending;
-            }
-        }
     }
 
     delete_file_chunks(client, repo_id, &file_path).await?;
@@ -213,6 +143,108 @@ pub async fn index_file(
     }
 
     Ok(())
+}
+
+/// Prepare chunks without changing the database. Shared by ordinary indexing
+/// and atomic worktree publication.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_chunks(
+    repo_id: Uuid,
+    file_path: String,
+    source: String,
+    embedder: &dyn EmbeddingBackend,
+    max_chars: usize,
+    embed_batch_size: usize,
+    expected_dim: usize,
+    tier: Tier,
+) -> Result<(Vec<crate::types::Chunk>, Vec<crate::parser::ParsedSymbol>)> {
+    let detected_language = detect_language(&file_path);
+    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
+        tracing::info!(
+            file = %file_path,
+            size_bytes = source.len(),
+            threshold_bytes = MAX_PARSER_BYTES,
+            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
+        );
+        None
+    } else {
+        detected_language
+    };
+    let symbols = match &language {
+        Some(lang) => parse_file(&source, *lang).unwrap_or_default(),
+        None => vec![],
+    };
+
+    let mut chunks = chunk_file(&source, &symbols, max_chars);
+    for c in &mut chunks {
+        c.repo_id = repo_id;
+        c.file_path = file_path.clone();
+        // Tier and content_hash are set for every chunk at index time. The hash
+        // lets the daemon dedup identical Tier-2 content during backfill.
+        c.tier = tier;
+        c.content_hash = Some(content_sha256(&c.content));
+    }
+
+    if chunks.is_empty() {
+        return Ok((vec![], symbols));
+    }
+
+    chunks.retain(|c| {
+        if c.content.is_empty() {
+            tracing::warn!("dropping empty-content chunk in {}", file_path);
+            false
+        } else {
+            true
+        }
+    });
+    if chunks.is_empty() {
+        return Ok((vec![], symbols));
+    }
+
+    match tier {
+        // Tier 1 (first-party): embed eagerly. Spec: Muninn.Types.Tier1NeverPending.
+        Tier::Tier1 => {
+            let batch_size = if embed_batch_size == 0 {
+                chunks.len().max(1)
+            } else {
+                embed_batch_size
+            };
+            for chunk_batch in chunks.chunks_mut(batch_size) {
+                let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
+                let embeddings = embedder.embed(&texts).await?;
+                for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
+                    if emb.is_empty() {
+                        tracing::warn!(
+                            "embedder returned empty vector for chunk in {}; storing without embedding",
+                            file_path
+                        );
+                        c.embedding_state = EmbeddingState::Absent;
+                    } else if emb.len() != expected_dim {
+                        return Err(anyhow::anyhow!(
+                            "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
+                             for chunk in {}; switching backends requires unregister + re-index",
+                            emb.len(),
+                            expected_dim,
+                            file_path
+                        ));
+                    } else {
+                        c.embedding = Some(emb);
+                        c.embedding_state = EmbeddingState::Embedded;
+                    }
+                }
+            }
+        }
+        // Tier 2 (vendored): full-text indexed now, embedded lazily by the daemon.
+        // Leave embedding = None and mark Pending; the backfill task fills it in.
+        Tier::Tier2 => {
+            for c in &mut chunks {
+                c.embedding = None;
+                c.embedding_state = EmbeddingState::Pending;
+            }
+        }
+    }
+
+    Ok((chunks, symbols))
 }
 
 /// One file's worth of work for `backfill_structural_edges`, factored out so
@@ -440,7 +472,7 @@ pub fn classify(repo_root: &Path, exclude: &[String], vendor: &[String], rel: &P
 // concerns; a param struct would obscure more than it clarifies.
 #[allow(clippy::too_many_arguments)]
 pub async fn index_repo(
-    client: &Client,
+    client: &mut Client,
     repo_id: Uuid,
     repo_path: &Path,
     embedder: Arc<dyn EmbeddingBackend>,
@@ -450,21 +482,79 @@ pub async fn index_repo(
     vendor: &[String],
     on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
-    use ignore::WalkBuilder;
+    if crate::repo_resolver::discover_git_checkout(repo_path)
+        .await?
+        .is_some_and(|g| g.root == repo_path)
+    {
+        return crate::worktrees::reconcile_family(
+            client,
+            repo_id,
+            repo_path,
+            embedder,
+            embed_batch_size,
+            expected_dim,
+            exclude,
+            vendor,
+            on_progress,
+        )
+        .await;
+    }
+    if crate::family_policy::runtime::policy(client, repo_id)
+        .await?
+        .is_none()
+    {
+        let selection =
+            crate::family_policy::runtime::Selection::new(repo_path, None, exclude, vendor)?;
+        return index_directory(
+            client,
+            repo_id,
+            repo_path,
+            embedder,
+            embed_batch_size,
+            expected_dim,
+            &selection,
+            on_progress,
+        )
+        .await;
+    }
+    let tx = client.transaction().await?;
+    crate::worktrees::lock(&tx, repo_id).await?;
+    let view = crate::family_policy::runtime::lock_policy(&tx, repo_id).await?;
+    let selection =
+        crate::family_policy::runtime::Selection::new(repo_path, view.as_ref(), exclude, vendor)?;
+    let embed_batch_size = view.as_ref().map_or(embed_batch_size, |v| {
+        v.policy.embeddings.batch_size as usize
+    });
+    let result = index_directory(
+        tx.client(),
+        repo_id,
+        repo_path,
+        embedder,
+        embed_batch_size,
+        expected_dim,
+        &selection,
+        on_progress,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(result)
+}
 
-    let overrides = build_excludes(repo_path, exclude);
-    let walker = WalkBuilder::new(repo_path)
-        .standard_filters(false)
-        .overrides(overrides)
-        .filter_entry(|e| e.file_name() != ".git")
-        .build();
-
-    // The walker prunes `exclude` (Drop) during traversal; survivors are then
-    // classified Tier 1 vs Tier 2 by the vendor override (hoisted once here).
-    let vendor_overrides = build_excludes(repo_path, vendor);
-
+#[allow(clippy::too_many_arguments)]
+async fn index_directory(
+    client: &Client,
+    repo_id: Uuid,
+    repo_path: &Path,
+    embedder: Arc<dyn EmbeddingBackend>,
+    embed_batch_size: usize,
+    expected_dim: usize,
+    selection: &crate::family_policy::runtime::Selection,
+    on_progress: impl Fn(usize, usize, &Path),
+) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
+    let walker = selection.walker(repo_path);
     let mut files: Vec<std::path::PathBuf> = vec![];
-    for entry in walker.flatten() {
+    for entry in walker {
+        let entry = entry?;
         if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             files.push(entry.path().to_owned());
         }
@@ -484,7 +574,7 @@ pub async fn index_repo(
         // Survivors of the exclude-pruned walk: Tier 2 if the vendor override
         // matches, else Tier 1. Spec: Muninn.Config.classify.
         let rel = file.strip_prefix(repo_path).unwrap_or(file);
-        let tier = if path_excluded(&vendor_overrides, rel) {
+        let tier = if selection.classify(rel, false) == Decision::Tier2 {
             Tier::Tier2
         } else {
             Tier::Tier1

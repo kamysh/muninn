@@ -1,84 +1,107 @@
 {-# OPTIONS --safe #-}
--- Muninn/IndexFsm.agda
--- The index lifecycle state machine and the configure decision. The lock/liveness
--- mechanism lives in Muninn.AdvisoryLock (the session-scoped advisory lock); this
--- module imports HolderKind from there to parameterise the Indexing state.
---
--- Properties this module pins down (--safe, postulate-free):
---   * DaemonNeverFirstIndexes — the daemon never performs a first-time index.
---   * foregroundPriority — a foreground waiter forces the daemon's poll to Yield.
---   * configureNeverSkipsOwed — `configure` decides from DB state (indexedAt),
---     never from the config byte-diff, so a saved exclude list always reaches a
---     stale index.
+-- Proposed lifecycle: explicit first family start, automatic linked worktrees,
+-- application/AGE pair readiness, and snapshot retention during Git operations.
 module Muninn.IndexFsm where
 
 open import Muninn.AdvisoryLock using (HolderKind; Fg; Bg)
 open import Muninn.Types using (EmbeddingState; Embedded; Pending; Absent)
-open import Data.Bool   using (Bool; true; false)
-open import Data.Maybe  using (Maybe; nothing; just)
-open import Data.Nat    using (ℕ)
-open import Data.Unit   using (⊤; tt)
-open import Data.Empty  using (⊥)
+open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
+open import Data.Bool using (Bool; true; false)
+open import Data.Maybe using (Maybe; nothing; just)
+open import Data.Nat using (ℕ)
+open import Data.Unit using (⊤; tt)
+open import Data.Empty using (⊥)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 open import Relation.Nullary using (¬_)
 
--- ─── Indexing state machine ─────────────────────────────────────────────────────
--- The transient state of a repo's indexing. Indexing is parameterised by the
--- holder so the foreground/background distinction is visible in every transition.
--- The holder is the *task* identity (Muninn.AdvisoryLock.HolderKind), NOT a
--- property of the advisory lock (which records no holder). The implementation
--- mirrors this: core/src/types.rs IndexState::Indexing carries a HolderKind, and
--- the daemon watcher constructs Indexing(Bg) (indexer/src/watcher.rs).
+data GitState : Set where
+  Settled : GitState -- ordinary uncommitted edits are allowed
+  Operating : GitState -- merge/rebase in progress, including a paused operation
+  Conflicted : GitState -- unresolved index conflicts, even without operation metadata
+
+data GitBlocked : GitState → Set where
+  operationBlocked : GitBlocked Operating
+  conflictBlocked : GitBlocked Conflicted
 
 data IndexState : Set where
-  Unindexed : IndexState               -- indexedAt = nothing (never / interrupted / reset)
-  Indexing  : HolderKind → IndexState   -- a (re)index is running; lock held by this holder
-  Indexed   : IndexState               -- indexedAt = just _, no active task
-  Watching  : IndexState               -- indexed + file-watcher active
-  Stale     : IndexState               -- watcher saw changes; reindex owed
+  Unindexed : IndexState
+  Indexing : HolderKind → IndexState
+  Indexed Watching Stale : IndexState
 
--- The outcome of processing a batch of files. NoneSucceeded is intentionally
--- absent: a totally-failed batch must NOT close the Indexing state.
 data BatchOutcome : Set where
-  AllSucceeded  : BatchOutcome
-  SomeSucceeded : BatchOutcome
+  AllSucceeded SomeSucceeded : BatchOutcome
 
--- ─── Transitions ────────────────────────────────────────────────────────────────
--- Encoded as an indexed inductive type so only the permitted edges exist. Every
--- edge INTO Indexing requires the advisory lock to be free at the call site (the
--- foreground blocking-acquire or the daemon try-acquire). Every edge OUT OF
--- Indexing releases the lock.
+-- Source and destination family-start flags are explicit. Only a CLI start
+-- can change false to true. Background indexing of any worktree requires true.
+-- The pair's readiness and Git state are observations rechecked during work.
+-- SchemaStep supplies the migration/AGE receipt contract for a Ready report;
+-- this job FSM consumes that report, not the physical database catalog.
+data Step : Bool → SchemaState → GitState → IndexState → Bool → IndexState → Set where
+  cliIndex : ∀ {started} → Step started Ready Settled Unindexed true (Indexing Fg)
+  cliReindex : Step true Ready Settled Indexed true (Indexing Fg)
+  cliReindexStale : Step true Ready Settled Stale true (Indexing Fg)
+  autoDiscovered : Step true Ready Settled Unindexed true (Indexing Bg)
+  bgReindex : Step true Ready Settled Indexed true (Indexing Bg)
+  bgReindexStale : Step true Ready Settled Stale true (Indexing Bg)
+  finish : ∀ {k} → BatchOutcome → Step true Ready Settled (Indexing k) true Indexed
+  fail : ∀ {s g k} → Step true s g (Indexing k) true Stale
+  interrupt : ∀ {s g} → Step true s g (Indexing Fg) true Stale
+  yield : ∀ {s g} → Step true s g (Indexing Bg) true Stale
+  suspend : ∀ {s g k} → GitBlocked g → Step true s g (Indexing k) true Stale
+  attachWatcher : Step true Ready Settled Indexed true Watching
+  detectChange : ∀ {g} → Step true Ready g Watching true Stale
 
-data Step : IndexState → IndexState → Set where
+noAutoBeforeFamilyStart : ∀ s g before after →
+  ¬ Step false s g before after (Indexing Bg)
+noAutoBeforeFamilyStart s g before after ()
 
-  -- Foreground (user-initiated; always interactive). Lock acquired as Fg.
-  cliIndex        : Step Unindexed (Indexing Fg)   -- add (first) or reindex of a reset repo
-  cliReindex      : Step Indexed   (Indexing Fg)   -- configure / reindex on a clean repo
-  cliReindexStale : Step Stale     (Indexing Fg)   -- configure / reindex after watcher changes
+blockedCannotStart : ∀ {b s g before after k} → GitBlocked g →
+  ¬ Step b s g before after (Indexing k)
+blockedCannotStart () cliIndex
+blockedCannotStart () cliReindex
+blockedCannotStart () cliReindexStale
+blockedCannotStart () autoDiscovered
+blockedCannotStart () bgReindex
+blockedCannotStart () bgReindexStale
 
-  -- Background (daemon only). NO edge from Unindexed — the daemon never performs a
-  -- first-time index (DaemonNeverFirstIndexes below).
-  bgReindex       : Step Indexed (Indexing Bg)
-  bgReindexStale  : Step Stale   (Indexing Bg)
+indexingRequiresReadySchema : ∀ {b s g before after k} →
+  Step b s g before after (Indexing k) → s ≡ Ready
+indexingRequiresReadySchema cliIndex = refl
+indexingRequiresReadySchema cliReindex = refl
+indexingRequiresReadySchema cliReindexStale = refl
+indexingRequiresReadySchema autoDiscovered = refl
+indexingRequiresReadySchema bgReindex = refl
+indexingRequiresReadySchema bgReindexStale = refl
 
-  -- Completion (≥ partial success): lock released, indexedAt := now.
-  finish    : ∀ {k} → BatchOutcome → Step (Indexing k) Indexed
+-- Publication is separate from job state: failure, suspension, and retries
+-- keep the entire last snapshot (including graph), even when no snapshot exists.
+chooseSnapshot : ∀ {A : Set} → GitState → Maybe A → Maybe A → Maybe A
+chooseSnapshot Operating previous candidate = previous
+chooseSnapshot Conflicted previous candidate = previous
+chooseSnapshot Settled previous nothing = previous
+chooseSnapshot Settled previous (just candidate) = just candidate
 
-  -- Total failure: lock released; no index produced → indexedAt stays nothing.
-  fail      : ∀ {k} → Step (Indexing k) Unindexed
+blockedRetainsSnapshot : ∀ {A : Set} g (previous candidate : Maybe A) →
+  GitBlocked g → chooseSnapshot g previous candidate ≡ previous
+blockedRetainsSnapshot .Operating previous candidate operationBlocked = refl
+blockedRetainsSnapshot .Conflicted previous candidate conflictBlocked = refl
 
-  -- Interrupt (Ctrl-C): FOREGROUND ONLY. The index sets indexedAt := nothing at
-  -- the start, so any interruption (or crash, via the lock auto-release) leaves
-  -- the repo owed a reindex. everIndexed is unchanged.
-  interrupt : Step (Indexing Fg) Unindexed
+data SnapshotStatus : Set where
+  Current CatchingUp Pending SuspendedStale SuspendedPending : SnapshotStatus
 
-  -- The daemon yields to a waiting foreground job (it unlocked the advisory lock).
-  -- indexedAt was already nothing during a Bg reindex, so the result is Unindexed.
-  yield     : Step (Indexing Bg) Unindexed
+snapshotStatus : ∀ {A : Set} → GitState → Maybe A → (current : Bool) → SnapshotStatus
+snapshotStatus Operating nothing _ = SuspendedPending
+snapshotStatus Operating (just _) _ = SuspendedStale
+snapshotStatus Conflicted nothing _ = SuspendedPending
+snapshotStatus Conflicted (just _) _ = SuspendedStale
+snapshotStatus Settled nothing _ = Pending
+snapshotStatus Settled (just _) false = CatchingUp
+snapshotStatus Settled (just _) true = Current
 
-  -- Watcher lifecycle.
-  attachWatcher : Step Indexed  Watching
-  detectChange  : Step Watching Stale
+blockedSnapshotIsExplicitlyStale : ∀ {A : Set} g (snapshot : A) current →
+  GitBlocked g → snapshotStatus g (just snapshot) current ≡ SuspendedStale
+blockedSnapshotIsExplicitlyStale Operating snapshot current operationBlocked = refl
+blockedSnapshotIsExplicitlyStale Conflicted snapshot current conflictBlocked = refl
 
 -- ─── The daemon's per-poll decision while holding the lock as Bg ─────────────────
 -- Every PREEMPT_POLL seconds the background reindex task checks the preempt flag.
@@ -95,13 +118,6 @@ bgPollDecision : (preemptRequested : Bool) → BgDecision
 bgPollDecision true  = Yield
 bgPollDecision false = Continue
 
--- ─── Structural / proven invariants ──────────────────────────────────────────────
-
--- The daemon never performs a first-time index: there is no background edge out of
--- Unindexed. Proven by absurdity — no constructor inhabits this type.
-DaemonNeverFirstIndexes : ¬ Step Unindexed (Indexing Bg)
-DaemonNeverFirstIndexes ()
-
 -- Foreground priority (PROVEN): whenever a foreground job is waiting, the
 -- background holder's poll decision is necessarily Yield. With PREEMPT_POLL this
 -- bounds the foreground wait to one poll interval.
@@ -116,22 +132,27 @@ NeedsReindex : ∀ {A : Set} → Maybe A → Set
 NeedsReindex (just _) = ⊥   -- clean: nothing owed
 NeedsReindex nothing  = ⊤   -- (re)index owed
 
--- What `muninn configure` does on save. The ONLY case that skips a reindex is a
--- clean index with an unchanged config; everything else reindexes in the
--- foreground. Removes the "No changes" dead-end where a saved exclude list was
--- never applied to a stale index.
+-- Saving policy on a family that has never started does not start indexing.
+-- Once started, a changed policy or stale view requests the existing foreground
+-- reindex behavior. Automatic first indexing applies only to linked worktrees.
 data ConfigureAction : Set where
-  ReindexFg   : ConfigureAction   -- run a foreground reindex
+  WaitForStart : ConfigureAction
+  ReindexFg : ConfigureAction
   ReportClean : ConfigureAction   -- "index up to date; nothing to do"
 
-configureAction : ∀ {A : Set} → (contentChanged : Bool) → Maybe A → ConfigureAction
-configureAction true  _        = ReindexFg
-configureAction false (just _) = ReportClean
-configureAction false nothing  = ReindexFg
+configureAction : ∀ {A : Set} → (familyStarted contentChanged : Bool) → Maybe A → ConfigureAction
+configureAction false _ _ = WaitForStart
+configureAction true true _ = ReindexFg
+configureAction true false (just _) = ReportClean
+configureAction true false nothing = ReindexFg
 
--- configure never reports "clean" while a reindex is owed.
-configureNeverSkipsOwed : ∀ {A : Set} {c} → configureAction {A} c nothing ≡ ReindexFg
-configureNeverSkipsOwed {c = true}  = refl
+configureNeverStartsFamily : ∀ {A : Set} {c} {at : Maybe A} →
+  configureAction false c at ≡ WaitForStart
+configureNeverStartsFamily = refl
+
+configureNeverSkipsOwed : ∀ {A : Set} {c} →
+  configureAction {A} true c nothing ≡ ReindexFg
+configureNeverSkipsOwed {c = true} = refl
 configureNeverSkipsOwed {c = false} = refl
 
 -- ─── Chunk-level embedding backfill (daemon, Bg) ──────────────────────────────

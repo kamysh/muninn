@@ -121,7 +121,7 @@ async fn foreground_index_splits_tier1_eager_tier2_pending() {
         let exclude = vec!["**/*.min.js".to_string()];
         let vendor = vec!["**/node_modules/**".to_string()];
         index_repo(
-            &client,
+            &mut client,
             repo_id,
             root,
             embedder,
@@ -172,7 +172,7 @@ async fn foreground_index_splits_tier1_eager_tier2_pending() {
     .await;
 
     // Always clean up the test repo, even on assertion failure, then re-raise.
-    let _ = store::delete_repo(&client, repo_id).await;
+    let _ = store::delete_repo(&mut client, repo_id).await;
     drop(tmp); // remove the temp repo dir
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
@@ -268,7 +268,7 @@ async fn backfill_dedups_identical_content() {
     .catch_unwind()
     .await;
 
-    let _ = store::delete_repo(&client, repo_id).await;
+    let _ = store::delete_repo(&mut client, repo_id).await;
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

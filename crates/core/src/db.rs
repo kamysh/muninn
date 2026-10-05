@@ -14,19 +14,22 @@ use crate::config::{DatabaseConfig, SslMode};
 const SEARCH_PATH: &str = "public,ag_catalog";
 
 // Embed the two migration sets at compile time.
-// include_dir! embeds all files recursively; we iterate .files() sorted by name.
+// Each directory is one dependency graph applied to one target schema.
+// The current sets have top-level SQL files, read in deterministic path order.
 //
 // public/ — the static, single-schema migration chain (repos, knowledge,
-// mcp_usage, ...), applied once via kryzhen::migrate(..., None, ...).
+// mcp_usage, ...), applied via kryzhen::migrate(..., Some("public"), ...).
 // repo/   — the per-repo schema template, applied once per repo via
 // kryzhen::migrate(..., Some(schema), ...). See run_repo_migrations.
+// AGE graph lifecycle is handled separately through its API in store::register_repo.
 static PUBLIC_MIGRATIONS_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../migrations/public");
 static REPO_MIGRATIONS_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../migrations/repo");
 
 fn parse_migrations_dir(dir: &Dir<'static>) -> anyhow::Result<Vec<kryzhen::Migration>> {
-    // Collect .sql files sorted by name (001_, 002_, … ordering).
+    // Sort for deterministic loading. Kryzhen orders execution by dependencies,
+    // including each block's implicit dependency on its in-file predecessor.
     let mut files: Vec<_> = dir
         .files()
         .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("sql"))
@@ -53,7 +56,7 @@ fn embedded_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
     parse_migrations_dir(&PUBLIC_MIGRATIONS_DIR)
 }
 
-fn embedded_repo_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
+pub(crate) fn embedded_repo_migrations() -> anyhow::Result<Vec<kryzhen::Migration>> {
     parse_migrations_dir(&REPO_MIGRATIONS_DIR)
 }
 
@@ -114,22 +117,7 @@ async fn connect_with_config(
             Ok(client)
         }
         Some(mode) => {
-            let mut builder = TlsConnector::builder();
-            if matches!(mode, SslMode::Require) {
-                builder.danger_accept_invalid_certs(true);
-            }
-            if let Some(path) = ssl_root_cert {
-                let pem = std::fs::read(path)?;
-                let cert = native_tls::Certificate::from_pem(&pem)?;
-                builder.add_root_certificate(cert);
-            }
-            if let (Some(cert_path), Some(key_path)) = (ssl_client_cert, ssl_client_key) {
-                let cert_pem = std::fs::read(cert_path)?;
-                let key_pem = std::fs::read(key_path)?;
-                let identity = native_tls::Identity::from_pkcs8(&cert_pem, &key_pem)?;
-                builder.identity(identity);
-            }
-            let tls = MakeTlsConnector::new(builder.build()?);
+            let tls = tls_connector(mode, ssl_root_cert, ssl_client_cert, ssl_client_key)?;
             let (client, conn) = pg_cfg.connect(tls).await?;
             tokio::spawn(async move {
                 if let Err(e) = conn.await {
@@ -137,6 +125,66 @@ async fn connect_with_config(
                 }
             });
             Ok(client)
+        }
+    }
+}
+
+fn tls_connector(
+    mode: SslMode,
+    root: Option<&str>,
+    cert: Option<&str>,
+    key: Option<&str>,
+) -> Result<MakeTlsConnector> {
+    let mut builder = TlsConnector::builder();
+    if matches!(mode, SslMode::Require) {
+        builder.danger_accept_invalid_certs(true);
+    }
+    if let Some(path) = root {
+        builder.add_root_certificate(native_tls::Certificate::from_pem(&std::fs::read(path)?)?);
+    }
+    if let (Some(cert), Some(key)) = (cert, key) {
+        builder.identity(native_tls::Identity::from_pkcs8(
+            &std::fs::read(cert)?,
+            &std::fs::read(key)?,
+        )?);
+    }
+    Ok(MakeTlsConnector::new(builder.build()?))
+}
+
+/// Dedicated coordinator transport, including cancellation with identical TLS
+/// policy. No migration happens merely by opening this connection.
+pub async fn connect_for_preparation(
+    cfg: &DatabaseConfig,
+) -> Result<crate::family_store::PreparationConnection> {
+    use crate::family_store::PreparationConnection;
+    let mut pg = make_pg_config(cfg);
+    pg.application_name("muninn-family-preparation");
+    // Index migrations can exceed a minute on existing repositories. Inherit
+    // the server's statement limit while keeping lock waits bounded.
+    pg.options(format!("-c search_path={SEARCH_PATH} -c lock_timeout=15000"));
+    if cfg.connect_timeout.is_none() {
+        pg.connect_timeout(std::time::Duration::from_secs(10));
+    }
+    match cfg.ssl_mode {
+        None | Some(SslMode::Disable) | Some(SslMode::Allow) | Some(SslMode::Prefer) => {
+            let (client, connection) = pg.connect(NoTls).await?;
+            let token = client.cancel_token();
+            Ok(PreparationConnection::new(client, connection, async move {
+                token.cancel_query(NoTls).await
+            }))
+        }
+        Some(mode) => {
+            let tls = tls_connector(
+                mode,
+                cfg.ssl_root_cert.as_deref(),
+                cfg.ssl_client_cert.as_deref(),
+                cfg.ssl_client_key.as_deref(),
+            )?;
+            let (client, connection) = pg.connect(tls.clone()).await?;
+            let token = client.cancel_token();
+            Ok(PreparationConnection::new(client, connection, async move {
+                token.cancel_query(tls).await
+            }))
         }
     }
 }
@@ -167,11 +215,11 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
     .await
 }
 
-/// Apply all pending migrations (embedded at compile time via include_dir!).
-/// Safe to call repeatedly — kryzhen tracks applied migrations in its own table.
+/// Apply pending public migrations, regardless of the connection's search_path.
+/// Kryzhen tracks application per target schema and skips completed migrations.
 pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
     let migrations = embedded_migrations()?;
-    kryzhen::migrate(client, &migrations, None, false).await?;
+    kryzhen::migrate(client, &migrations, Some("public"), false).await?;
     Ok(())
 }
 
@@ -183,18 +231,96 @@ pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
 /// that touches a repo (not just first registration) can call this to bring
 /// that repo's schema current.
 ///
-/// kryzhen's `migrate` does not create `schema` itself (verified: the only
-/// `CREATE SCHEMA` in kryzhen is for its own `mallard` bookkeeping schema,
-/// not the caller-supplied template target) — that looks like a gap in
-/// kryzhen's own schema-templating feature, worth fixing upstream, but this
-/// works around it here for now rather than blocking on that fix.
+/// Kryzhen creates the target application schema as part of applying a pending
+/// migration. Each block and its application record commit in one transaction;
+/// a later failure leaves earlier blocks committed for retry. AGE graph schemas
+/// are managed separately through AGE's API.
 pub async fn run_repo_migrations(client: &mut Client, schema: &str) -> anyhow::Result<()> {
-    client
-        .execute(&format!(r#"CREATE SCHEMA IF NOT EXISTS "{schema}""#), &[])
-        .await?;
     let migrations = embedded_repo_migrations()?;
     kryzhen::migrate(client, &migrations, Some(schema), false).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::{embedded_migrations, embedded_repo_migrations};
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn historical_files_remain_immutable() {
+        for (contents, expected) in [
+            (
+                include_bytes!("../../../migrations/public/001_init.sql").as_slice(),
+                "d6b3afd665da9f5d1df7c745896249ebbe38298693e507c554f160915f71d81a",
+            ),
+            (
+                include_bytes!("../../../migrations/repo/001_chunks.sql").as_slice(),
+                "c75635b98918fa12f08a2e219e8732873f4bb1f05c1677b5e19d240096659db8",
+            ),
+        ] {
+            assert_eq!(format!("{:x}", Sha256::digest(contents)), expected);
+        }
+    }
+
+    #[test]
+    fn additive_blocks_follow_their_own_schema_history() {
+        for (migrations, expected) in [
+            (
+                embedded_migrations().unwrap(),
+                vec![
+                    "init",
+                    "public-family-identity",
+                    "public-family-lifecycle",
+                    "public-family-registration-intent",
+                ],
+            ),
+            (
+                embedded_repo_migrations().unwrap(),
+                vec![
+                    "repo-chunks",
+                    "repo-checkout-registry",
+                    "repo-checkout-observations",
+                    "repo-family-policy",
+                    "repo-worktree-file-deltas",
+                    "repo-worktree-base-indexes",
+                ],
+            ),
+        ] {
+            let ordered = kryzhen::graph::topo_sort(migrations).unwrap();
+            let names: Vec<_> = ordered.iter().map(|m| m.name.0.as_str()).collect();
+            assert_eq!(
+                names
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected.into_iter().collect()
+            );
+            for (index, migration) in ordered.iter().enumerate() {
+                for dependency in &migration.requires {
+                    assert!(ordered[..index]
+                        .iter()
+                        .any(|prior| prior.name == *dependency));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn embedded_sets_have_independent_dependency_graphs() {
+        let public = embedded_migrations().expect("parse public migrations");
+        let repo = embedded_repo_migrations().expect("parse repository template");
+
+        for migrations in [&public, &repo] {
+            assert!(!migrations.is_empty(), "embedded migration set is empty");
+            kryzhen::validation::check_duplicate_names(migrations).unwrap();
+            // Sorting each set independently rejects cross-set dependencies.
+            kryzhen::graph::topo_sort(migrations.to_vec()).unwrap();
+        }
+
+        // Bodies/checksums are stored by name across all target schemas.
+        let all: Vec<_> = public.into_iter().chain(repo).collect();
+        kryzhen::validation::check_duplicate_names(&all).unwrap();
+    }
 }
 
 /// Open a dedicated connection for LISTEN/NOTIFY.

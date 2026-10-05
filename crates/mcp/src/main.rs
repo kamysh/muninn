@@ -36,6 +36,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);
     let ctx = Arc::new(SearchContext {
+        config: cfg.clone(),
+        family_embedders: Default::default(),
         client: Arc::new(client),
         embedder,
         embedding_dim,

@@ -72,8 +72,14 @@ pub async fn register_repo(
     let schema = repo_schema(repo.id);
     crate::db::run_repo_migrations(client, &schema).await?;
 
+    ensure_graph(client, repo.id).await?;
+
+    Ok(repo)
+}
+
+pub(crate) async fn ensure_graph(client: &Client, repo_id: Uuid) -> Result<()> {
     // Create per-repo AGE graph (idempotent: check before create)
-    let gname = graph_name(repo.id);
+    let gname = graph_name(repo_id);
     let graph_exists: bool = client
         .query_one(
             "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
@@ -159,36 +165,38 @@ pub async fn register_repo(
         )
         .await?;
 
-    Ok(repo)
+    Ok(())
 }
 
-pub async fn delete_repo(client: &Client, repo_id: Uuid) -> Result<()> {
+pub async fn delete_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
+    let tx = client.transaction().await?;
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,771913))",
+        &[&repo_id.to_string()],
+    )
+    .await?;
     let schema = repo_schema(repo_id);
-    client
-        .execute(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#), &[])
-        .await?;
-
-    let gname = graph_name(repo_id);
-    let graph_exists: bool = client
+    if tx
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
-            &[&gname],
+            "SELECT to_regclass($1) IS NOT NULL",
+            &[&format!("{schema}.checkouts")],
         )
         .await?
-        .get(0);
-
-    if graph_exists {
-        client
-            .execute(
-                &format!("SELECT * FROM ag_catalog.drop_graph('{gname}', true)"),
-                &[],
-            )
-            .await?;
+        .get::<_, bool>(0)
+    {
+        for row in tx
+            .query(&format!("SELECT id FROM \"{schema}\".checkouts"), &[])
+            .await?
+        {
+            crate::graph::drop_graph(tx.client(), row.get(0)).await?;
+        }
     }
-
-    client
-        .execute(r#"DELETE FROM repos WHERE id = $1"#, &[&repo_id])
+    crate::graph::drop_graph(tx.client(), repo_id).await?;
+    tx.batch_execute(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
         .await?;
+    tx.execute("DELETE FROM public.repos WHERE id=$1", &[&repo_id])
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 use crate::store::graph_name;
 use crate::types::{LineRange, StructuralEdge, StructuralRelation, Symbol, SymbolKind};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -92,6 +92,113 @@ async fn exec_cypher_write_with_timeout(
             }
         }
     }
+}
+
+/// Drop a checkout-owned graph through AGE. Caller may own a publication transaction.
+pub async fn drop_graph(client: &Client, id: Uuid) -> Result<()> {
+    let name = graph_name(id);
+    if client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name=$1)",
+            &[&name],
+        )
+        .await?
+        .get::<_, bool>(0)
+    {
+        client
+            .batch_execute(&format!("SELECT ag_catalog.drop_graph('{name}', true)"))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Strict transactional replacement: unlike best-effort legacy graph writes,
+/// any error aborts the caller's entire checkout publication.
+pub(crate) async fn replace_graph(
+    client: &Client,
+    id: Uuid,
+    nodes: &[SymbolNodeInput],
+    edges: &[StructuralEdge],
+) -> Result<()> {
+    let g = graph_name(id);
+    const BATCH: usize = 256;
+    // Bound each AGE write while retaining the caller's single publication
+    // transaction. Remove edges first so node deletion need not repeatedly
+    // search all edge labels for incident edges.
+    for (pattern, entity) in [("()-[e]->()", "e"), ("(n)", "n")] {
+        loop {
+            let sql = format!("SELECT * FROM ag_catalog.cypher('{g}', $$ MATCH {pattern} WITH {entity} LIMIT {BATCH} DELETE {entity} RETURN {entity} $$) AS (v ag_catalog.agtype)");
+            let rows = client
+                .simple_query(&sql)
+                .await
+                .context("clear AGE graph batch")?;
+            let count = rows
+                .iter()
+                .filter(|row| matches!(row, tokio_postgres::SimpleQueryMessage::Row(_)))
+                .count();
+            if count < BATCH {
+                break;
+            }
+        }
+    }
+    let mut kinds = std::collections::HashMap::new();
+    for node in nodes {
+        kinds.insert(node.chunk_id, kind_label(&node.kind));
+    }
+    for kind in [
+        SymbolKind::Function,
+        SymbolKind::Class,
+        SymbolKind::Module,
+        SymbolKind::Import,
+    ] {
+        let label = kind_label(&kind);
+        let values: Vec<_> = nodes.iter().filter(|n|n.kind==kind).map(|n|serde_json::json!({"chunk_id":n.chunk_id.to_string(),"name":n.name,"kind":label,"file_path":n.file_path,"start_line":n.start_line,"end_line":n.end_line})).collect();
+        for batch in values.chunks(BATCH) {
+            let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
+            // Set properties at creation: a following SET re-locates every
+            // newly created vertex in AGE 1.6.
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r CREATE (n:{label} {{chunk_id:r.chunk_id,name:r.name,kind:r.kind,file_path:r.file_path,start_line:r.start_line,end_line:r.end_line}}) $$, $1) AS (v ag_catalog.agtype)");
+            age_execute(
+                client,
+                &stmt,
+                &sql,
+                &serde_json::json!({"rows":batch}).to_string(),
+            )
+            .await
+            .with_context(|| format!("create AGE {label} node batch"))?;
+        }
+    }
+    // Repeated calls resolve to one relationship. Deduplicate before CREATE
+    // because this transaction has just emptied the graph. Explicit endpoint
+    // labels and equality predicates avoid unlabelled containment joins.
+    let mut groups = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    for edge in edges {
+        if let (Some(from), Some(to)) = (kinds.get(&edge.from), kinds.get(&edge.to)) {
+            groups
+                .entry((relation_label(&edge.relation), *from, *to))
+                .or_default()
+                .insert((edge.from, edge.to));
+        }
+    }
+    for ((relation, from, to), pairs) in groups {
+        let values: Vec<_> = pairs
+            .into_iter()
+            .map(|(a, b)| serde_json::json!({"from":a.to_string(),"to":b.to_string()}))
+            .collect();
+        for batch in values.chunks(BATCH) {
+            let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH(a:{from}),(b:{to}) WHERE a.chunk_id=r.from AND b.chunk_id=r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
+            age_execute(
+                client,
+                &stmt,
+                &sql,
+                &serde_json::json!({"rows":batch}).to_string(),
+            )
+            .await
+            .with_context(|| format!("create AGE {relation} edge batch ({from} -> {to})"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Input for one symbol node in a batch upsert.

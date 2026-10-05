@@ -6,9 +6,11 @@
 module Muninn.Knowledge where
 
 open import Muninn.Float
+open import Muninn.Worktree using (FamilyId)
 open import Muninn.Types
 open import Data.String  using (String)
 open import Data.List    using (List; length)
+open import Data.Maybe   using (Maybe)
 open import Data.Nat     using (ℕ; _≤_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary                      using (¬_)
@@ -17,10 +19,12 @@ open import Data.List.Membership.Propositional    using (_∈_)
 record KnowledgeId : Set where
   field value : UUID
 
--- A single curated note or lesson attached to a repo.
+-- A curated note belongs to the registered family and is visible from every
+-- checkout. Related file paths are advisory references, not search visibility.
 record KnowledgeItem : Set where
   field id           : KnowledgeId
-        repoPath     : String          -- file-system path of the owning repo
+        family       : FamilyId
+        origin       : Maybe FilePath   -- optional checkout where it was written
         title        : String
         body         : String
         tags         : List String
@@ -50,11 +54,11 @@ record KnowledgeResult : Set where
 KnowledgeResultBound : (limit : ℕ) → List KnowledgeResult → Set
 KnowledgeResultBound limit results = length results ≤ limit
 
--- ─── Repo Scoping ────────────────────────────────────────────────────────────
+-- ─── Family Scoping ──────────────────────────────────────────────────────────
 
--- All knowledge items returned for a repo path must belong to that repo.
-ScopedToRepo : String → List KnowledgeItem → Set
-ScopedToRepo repoPath items =
+-- All knowledge items returned from any checkout belong to its family.
+ScopedToFamily : FamilyId → List KnowledgeItem → Set
+ScopedToFamily family items =
   ∀ (item : KnowledgeItem) →
     item ∈ items →
-    KnowledgeItem.repoPath item ≡ repoPath
+    KnowledgeItem.family item ≡ family

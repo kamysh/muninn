@@ -1,8 +1,9 @@
 use anyhow::Result;
 use muninn_core::types::Repo;
-use muninn_core::{embeddings::EmbeddingBackend, graph, knowledge, search, store};
+use muninn_core::{embeddings::EmbeddingBackend, graph, knowledge, search, store, worktrees};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -10,6 +11,8 @@ pub struct SearchContext {
     pub client: Arc<Client>,
     pub embedder: Arc<dyn EmbeddingBackend>,
     pub embedding_dim: usize,
+    pub config: muninn_core::config::GlobalConfig,
+    pub family_embedders: Mutex<HashMap<&'static str, Arc<dyn EmbeddingBackend>>>,
     pub record_usage: bool,
 }
 
@@ -51,12 +54,27 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+        let embedder = family_embedder(ctx, target.family).await?;
+        let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
+        let vector = embedding.into_iter().next().unwrap_or_default();
+        let family = muninn_core::family_store::get_family(&*ctx.client, target.family)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("family removed"))?;
+        anyhow::ensure!(
+            vector.len() == family.embedding_dim as usize,
+            "query embedding dimension mismatch"
+        );
+        let results =
+            worktrees::hybrid_search(&ctx.client, &target, &vector, &params.query, limit).await?;
+        return Ok(SearchResponse {
+            results: results.into_iter().map(Into::into).collect(),
+        });
+    }
     let repo = resolve_repo(&ctx.client, &params).await?;
 
-    let embedding = ctx
-        .embedder
-        .embed(std::slice::from_ref(&params.query))
-        .await?;
+    let embedder = family_embedder(ctx, repo.id).await?;
+    let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -72,6 +90,13 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+        let results =
+            worktrees::fulltext_search(&ctx.client, &target, &params.query, limit).await?;
+        return Ok(SearchResponse {
+            results: results.into_iter().map(Into::into).collect(),
+        });
+    }
     let repo = resolve_repo(&ctx.client, &params).await?;
     let results = search::fulltext_search(&ctx.client, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
@@ -81,12 +106,26 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+        let embedder = family_embedder(ctx, target.family).await?;
+        let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
+        let vector = embedding.into_iter().next().unwrap_or_default();
+        let family = muninn_core::family_store::get_family(&*ctx.client, target.family)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("family removed"))?;
+        anyhow::ensure!(
+            vector.len() == family.embedding_dim as usize,
+            "query embedding dimension mismatch"
+        );
+        let results = worktrees::semantic_search(&ctx.client, &target, &vector, limit).await?;
+        return Ok(SearchResponse {
+            results: results.into_iter().map(Into::into).collect(),
+        });
+    }
     let repo = resolve_repo(&ctx.client, &params).await?;
 
-    let embedding = ctx
-        .embedder
-        .embed(std::slice::from_ref(&params.query))
-        .await?;
+    let embedder = family_embedder(ctx, repo.id).await?;
+    let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
@@ -126,13 +165,67 @@ pub async fn search_structural(
         cwd: params.cwd,
         limit: None,
     };
+    if let Some(target) = resolve_worktree(&ctx.client, &search_params).await? {
+        let symbols = graph::query_related(
+            &ctx.client,
+            target.graph,
+            &params.symbol,
+            relation,
+            incoming,
+        )
+        .await?;
+        return Ok(serde_json::json!({"symbols":symbols}));
+    }
     let repo = resolve_repo(&ctx.client, &search_params).await?;
     let symbols =
         graph::query_related(&ctx.client, repo.id, &params.symbol, relation, incoming).await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 
+async fn resolve_worktree(
+    client: &Client,
+    params: &SearchParams,
+) -> Result<Option<worktrees::Target>> {
+    match params.repo.as_ref().or(params.cwd.as_ref()) {
+        Some(path) => worktrees::resolve(client, std::path::Path::new(path)).await,
+        None => Ok(None),
+    }
+}
+
+async fn family_embedder(ctx: &SearchContext, id: Uuid) -> Result<Arc<dyn EmbeddingBackend>> {
+    match muninn_core::family_policy::runtime::policy(ctx.client.as_ref(), id).await? {
+        Some(view) => {
+            let config = muninn_core::family_policy::runtime::effective(&ctx.config, &view);
+            if config.embeddings.backend == ctx.config.embeddings.backend
+                && config.embeddings.model == ctx.config.embeddings.model
+            {
+                return Ok(Arc::clone(&ctx.embedder));
+            }
+            let mut cached = ctx
+                .family_embedders
+                .lock()
+                .map_err(|_| anyhow::anyhow!("embedding cache lock failed"))?;
+            Ok(Arc::clone(
+                cached
+                    .entry(view.policy.embeddings.backend.model_identity())
+                    .or_insert_with(|| {
+                        Arc::from(muninn_core::embeddings::make_backend(&config.embeddings))
+                    }),
+            ))
+        }
+        None => Ok(Arc::clone(&ctx.embedder)),
+    }
+}
+
 async fn resolve_repo(client: &Client, params: &SearchParams) -> Result<Repo> {
+    if let Some(path) = params.repo.as_ref().or(params.cwd.as_ref()) {
+        let path = std::fs::canonicalize(path)?;
+        for root in path.ancestors() {
+            if let Some(repo) = store::get_repo_by_path(client, &root.to_string_lossy()).await? {
+                return Ok(repo);
+            }
+        }
+    }
     let path = if let Some(ref explicit) = params.repo {
         explicit.clone()
     } else if let Some(ref cwd) = params.cwd {

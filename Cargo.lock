@@ -1542,12 +1542,14 @@ dependencies = [
 
 [[package]]
 name = "muninn"
-version = "0.9.4"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "console",
  "muninn-core",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -1556,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-core"
-version = "0.9.4"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1591,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-index"
-version = "0.9.4"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1599,6 +1601,7 @@ dependencies = [
  "ignore",
  "muninn-core",
  "notify",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -1609,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-mcp"
-version = "0.9.4"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",

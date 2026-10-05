@@ -39,6 +39,30 @@ pub async fn watch_repo(
         muninn_core::db::run_repo_migrations(client_mut, &schema).await?;
     }
 
+    let configured = muninn_core::family_policy::runtime::policy(client.as_ref(), repo_id)
+        .await?
+        .is_some();
+    if configured
+        || muninn_core::repo_resolver::discover_git_checkout(&repo_path)
+            .await?
+            .is_some_and(|g| g.root == repo_path)
+    {
+        let client =
+            Arc::try_unwrap(client).map_err(|_| anyhow::anyhow!("watcher client is shared"))?;
+        return watch_family(
+            client,
+            repo_id,
+            repo_path,
+            embedder,
+            debounce_ms,
+            embed_batch_size,
+            expected_dim,
+            exclude,
+            vendor,
+        )
+        .await;
+    }
+
     let overrides = build_excludes(&repo_path, &exclude);
     let vendor_overrides = build_excludes(&repo_path, &vendor);
 
@@ -205,4 +229,147 @@ pub async fn watch_repo(
     }
 
     Ok(())
+}
+
+/// A family watcher watches available worktrees and Git administrative changes.
+/// Periodic discovery catches creation/removal and retries suspended checkouts.
+#[allow(clippy::too_many_arguments)]
+async fn watch_family(
+    mut client: Client,
+    repo_id: Uuid,
+    root: PathBuf,
+    embedder: Arc<dyn EmbeddingBackend>,
+    debounce_ms: u64,
+    batch: usize,
+    dimension: usize,
+    exclude: Vec<String>,
+    vendor: Vec<String>,
+) -> Result<()> {
+    let (tx, mut rx) = mpsc::channel::<PathBuf>(1024);
+    let overflow = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lost = Arc::clone(&overflow);
+    let mut watcher =
+        notify::recommended_watcher(move |event: notify::Result<Event>| match event {
+            Ok(event)
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) =>
+            {
+                for path in event.paths {
+                    if tx.try_send(path).is_err() {
+                        lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+            Err(_) => {
+                lost.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            _ => {}
+        })?;
+    let mut watched = std::collections::HashSet::new();
+    let mut changed: Option<Vec<PathBuf>> = None;
+    loop {
+        // Install watches before scanning so edits during reconciliation are
+        // queued for another pass. Failed/missing roots will be retried.
+        if let Some(git) = muninn_core::repo_resolver::discover_git_checkout(&root).await? {
+            let entries = muninn_core::repo_resolver::list_git_worktrees(&git.common_dir).await?;
+            let mut live = std::collections::HashSet::new();
+            for path in entries
+                .into_iter()
+                .map(|e| e.path)
+                .chain(std::iter::once(git.common_dir))
+            {
+                if path.is_dir() {
+                    live.insert(path.clone());
+                    if !watched.contains(&path) {
+                        match watcher.watch(&path, RecursiveMode::Recursive) {
+                            Ok(()) => {
+                                watched.insert(path);
+                            }
+                            Err(e) => {
+                                tracing::warn!("cannot watch {}: {}", path.display(), e);
+                                overflow.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+            watched.retain(|path| {
+                if live.contains(path) {
+                    true
+                } else {
+                    let _ = watcher.unwatch(path);
+                    false
+                }
+            });
+        }
+        if watched.is_empty() {
+            watcher.watch(&root, RecursiveMode::Recursive)?;
+            watched.insert(root.clone());
+        }
+        let git_family = muninn_core::repo_resolver::discover_git_checkout(&root)
+            .await?
+            .is_some_and(|g| g.root == root);
+        let result = if git_family {
+            muninn_core::worktrees::reconcile_changed_family(
+                &mut client,
+                repo_id,
+                &root,
+                Arc::clone(&embedder),
+                batch,
+                dimension,
+                &exclude,
+                &vendor,
+                |_, _, _| {},
+                changed.as_deref(),
+            )
+            .await
+        } else {
+            muninn_core::pipeline::index_repo(
+                &mut client,
+                repo_id,
+                &root,
+                Arc::clone(&embedder),
+                batch,
+                dimension,
+                &exclude,
+                &vendor,
+                |_, _, _| {},
+            )
+            .await
+        };
+        let mut retry = Vec::new();
+        let mut retry_all = false;
+        match result {
+            Ok((_, skips)) => {
+                for skip in skips {
+                    tracing::warn!(
+                        "retained index for {}: {}",
+                        skip.path.display(),
+                        skip.reason
+                    );
+                    retry.push(skip.path);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(root = %root.display(), "family reconciliation failed: {e:#}");
+                retry_all = true;
+                retry.push(root.clone());
+            }
+        }
+        tokio::select! {
+            event=rx.recv()=>{
+                if let Some(path)=event {retry.push(path);} else {return Ok(());}
+                tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
+                while let Ok(path)=rx.try_recv(){retry.push(path);}
+            }
+            _=tokio::time::sleep(Duration::from_secs(60))=>{}
+        }
+        changed = if retry_all || overflow.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            None
+        } else {
+            Some(retry)
+        };
+    }
 }
