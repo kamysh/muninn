@@ -69,9 +69,13 @@ name or port conflict.
    inheriting the global backend; explicitly choose the intended backend before
    registration. Existing embedding-profile changes are unsupported.
 7. **Agent client.** Register Muninn in Codex and/or Claude and install the shared
-   skill through [Agent setup](docs/claude-code-setup/INSTALL.md). Merge guidance
-   rather than replacing whole settings files. Hooks are optional reminders;
-   successful tool calls do not require a hook, score, sentinel or writeback.
+   skill through [Agent setup](docs/claude-code-setup/INSTALL.md). Include the
+   [purpose-focused reminder](docs/claude-code-setup/INSTALL.md#install-the-startup-reminder)
+   in the proposed setup: choose Muninn-only or combined Mimir/Muninn wording
+   according to the installed tools. Merge guidance rather than replacing whole
+   settings files. Verify startup, resume and post-compaction delivery, including
+   Codex hook review. The reminder supports informed tool choice; it does not
+   require a search before every action, a score or a writeback each turn.
 
 ## JSON configuration and first start
 
@@ -125,7 +129,9 @@ Report each observed outcome separately:
 - Family policy, indexing authorization and preflight warnings.
 - Daemon status and indexing completion/error evidence.
 - A fresh client MCP connection and a known-term search in the intended checkout.
-- Skill discovery in the chosen client; optional reminder behavior if installed.
+- Skill discovery and reminder delivery in the chosen client. Distinguish tested
+  command output from observed startup/resume/post-compaction delivery, and report
+  any lifecycle check not performed or a reminder explicitly omitted by agreement.
 
 `muninn status` is a registry overview. Its path form, and `pause`, `resume` and
 `remove`, require the registered locator displayed there; arbitrary worktree paths

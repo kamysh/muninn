@@ -13,7 +13,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s\\n' 'Muninn finds indexed code and repository knowledge when it saves exploration. See the muninn skill for worktree selection, search limits and JSON configuration. Its reminders do not require a call before every read or edit.'"
+            "command": "cat \"$HOME/.claude/muninn-reminder.md\"",
+            "timeout": 5
           }
         ]
       }

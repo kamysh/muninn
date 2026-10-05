@@ -232,7 +232,12 @@ automatically and share the policy. Non-Git directories are independent families
 ## 7. Connect and verify the agent
 
 Follow [Agent setup](claude-code-setup/INSTALL.md) for **Codex or Claude Code**,
-including MCP registration and the shared usage skill. Reminder hooks are optional.
+including MCP registration, the shared usage skill and the
+[purpose-focused startup reminder](claude-code-setup/INSTALL.md#install-the-startup-reminder).
+The reminder explains when search and stored knowledge can save investigation;
+it helps the agent recover that guidance after resume or context compaction.
+Choose the Muninn-only version unless Mimir is also installed. It guides tool
+choice without enforcing a call before every read or edit.
 
 Verify separately:
 
@@ -242,6 +247,9 @@ Verify separately:
 4. The watcher is active and its logs contain no unresolved indexing error.
 5. The client lists Muninn and can call `search_fulltext` for a known indexed term,
    with `repo` set to the intended checkout. Inspect the returned source range.
+6. The skill and reminder reach the agent. Follow the client-specific delivery
+   checks in [Agent setup](claude-code-setup/INSTALL.md#verify-what-actually-loaded),
+   including hook review where required. Report untested lifecycle events.
 
 For a linked worktree, use its path for search/config inspection. `status PATH`
 is still a registered-locator lookup, not a per-worktree freshness report.

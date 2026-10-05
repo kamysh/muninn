@@ -1,10 +1,16 @@
 ## muninn — code index
 
-Use Muninn when code discovery, cross-file search, relationships, or recorded
-repository knowledge can save exploration. Evaluate the hits and read relevant
-source ranges. Direct reads and `rg` are appropriate for known locations,
-literal text, or an index miss. Reminders do not require a call before every
-read/edit, a numeric rating, or a writeback on every turn.
+Muninn reduces repeated exploration by finding implementations by meaning,
+following recorded code relationships and retrieving repository notes. When you
+know the behavior you need but not where it lives, start with a focused search
+in the actual checkout. Use the hits to choose source ranges to inspect; this
+avoids guessing filenames and scanning unrelated code. Direct reads and `rg`
+are useful for known targets, literal text and checking current source.
+
+At startup, resume or after compaction, identify which gaps Muninn could fill
+before rebuilding your understanding from scratch. Preserve durable, non-obvious
+repository findings for future sessions. Reminders guide this judgment without
+requiring a call before every read/edit, a rating or a writeback on every turn.
 
 Read the `muninn` skill for tool selection and the JSON configuration workflow.
 For code search, select the current checkout/worktree explicitly with `repo`,
