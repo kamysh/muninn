@@ -1,94 +1,89 @@
-<!-- AI CODING AGENTS: STOP. This is the HUMAN upgrade guide. Your procedure is
-     ../AGENTS.md (repo root), section "Upgrading an existing install" — same
-     end state, but with explicit variables and verify-after-each-step. Do not
-     follow the steps below. -->
+# Upgrading Muninn
 
-> ⛔ **AI coding agents — this guide is not for you.** It is the *human* upgrade
-> path. Your procedure is **[AGENTS.md](../AGENTS.md)** (section "Upgrading an
-> existing install") — follow that instead.
+Application upgrades update the three Muninn binaries and apply schema changes
+automatically during normal startup/preparation. PostgreSQL or extension upgrades
+are a separate operation with their own compatibility requirements.
 
-# Upgrading muninn
+These docs describe 1.0 source. At the 2026-10-05 audit, GitHub's latest release
+was still 0.9.4. Use matching source/binaries; a `releases/latest` download can
+silently install the wrong interface.
 
-Two things to update: the binaries and the database schema (if the new release includes new migrations). Both take under a minute. Your indexed data is preserved — migrations are additive and never delete existing index data.
+## Application upgrades
 
-## Step 1: Stop the daemon
+1. Read the target release notes. Record current versions, executable/service
+   paths and the actual database target. Preserve the old binaries and take a
+   database backup appropriate to the migration effects. Backups/config copies
+   can contain private source or credentials; keep them outside the repository.
+2. Build or download **all three** matching binaries to a staging directory and
+   verify their versions before replacing the installed files. See
+   [Building](development.md#building-and-testing).
+3. For a coordinated runtime/schema upgrade, stop the indexer and disconnect old
+   Muninn MCP processes through their clients. Stopping the indexer alone does
+   not stop already-running MCP servers. Preserve the service definition.
+4. Replace the binaries at their existing paths. Do not replace the database,
+   global connection configuration or unrelated agent settings.
+5. Start the new runtime. Public migrations run on normal CLI/daemon/MCP startup;
+   family preparation applies pending family-template migrations. No recurring
+   external migration script is required. `muninn init` with an existing config
+   can explicitly apply public migrations; family preparation handles the
+   application schemas.
+6. Verify service logs, registered families, saved policies and known-term searches
+   in both the primary checkout and a linked worktree. Reconnect the MCP clients
+   and check tool availability. Update the [agent guidance](claude-code-setup/INSTALL.md)
+   when interfaces or behavior changed.
 
-Linux (systemd):
-```bash
+Read-only `config PATH --json`, check and preflight deliberately **do not migrate**;
+`schema_not_ready` from them is not permission to edit migration history. Use the
+normal preparation/startup route and investigate its error.
+
+Kryzhen skips recorded migration blocks and verifies their identity. Application
+migrations commit block by block; later failure can leave earlier blocks applied.
+Index creation can take substantial time on existing data. There is no guarantee
+that upgrades finish in a minute, that every migration is additive, or that an
+older binary is safe against a newer schema.
+
+## Service commands
+
+Linux:
+
+```sh
 systemctl --user stop muninn-index
-```
-
-macOS (launchd):
-```bash
-launchctl bootout gui/$(id -u)/org.muninn.index
-```
-
-## Step 2: Replace the binaries
-
-Download the new release for your platform and overwrite the existing files:
-
-```bash
-# Example for Linux x86_64 — adjust the filename for your platform
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-linux-amd64.tar.gz \
-  | tar -xz -C ~/.local/bin
-```
-
-No `chmod` needed — the extracted files are already executable.
-
-## Step 3: Apply schema migrations
-
-Migrations apply **automatically** on the first run of any new binary — the
-daemon you restart in the next step does it, as does any `muninn` command. To
-apply them now without waiting:
-
-```bash
-muninn init
-```
-
-With no arguments and an existing config, `muninn init` leaves your config
-untouched and just re-runs migrations. They are forward-only and idempotent:
-already-applied ones are skipped and their checksums verified, and they never
-modify existing index data — safe to re-run at any time.
-
-If migration reports an error, the most common cause is a missing PostgreSQL
-extension. See `docs/own-database.md` for extension setup instructions.
-
-## Step 4: Restart the daemon
-
-Linux (systemd):
-```bash
+# Replace the binaries after preparation above.
 systemctl --user start muninn-index
+systemctl --user is-active muninn-index
+journalctl --user -u muninn-index -n 50 --no-pager
 ```
 
-macOS (launchd):
-```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.muninn.index.plist
+macOS:
+
+```sh
+launchctl bootout "gui/$(id -u)/org.muninn.index"
+# Replace binaries, then use the actual installed plist location.
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/org.muninn.index.plist"
+launchctl print "gui/$(id -u)/org.muninn.index"
 ```
 
-Verify: `muninn status` — all repos should appear with their index status.
+For an externally located home, the plist may instead be in `/Library/LaunchAgents`.
+Do not remove an existing service definition just to restart it. A CLI-only fix
+with no runtime/schema changes need not restart the indexer, but replacing files
+does not update already-running processes.
 
-## Step 5 (Docker users only): Update the database image
+## Failure and recovery
 
-This is only needed occasionally when the `kamysh/postgres-ai` image is updated — check the release notes to see if this applies. It is separate from schema migrations.
+On a migration/indexing failure, retain the logs and old/new version identities.
+Do not edit an applied SQL block, drop the database, create a replacement graph
+or relabel migration history to make startup succeed. Retry only after resolving
+the actual problem; completed migration blocks remain recorded.
 
-```bash
-# Pull the latest image
-docker pull kamysh/postgres-ai:latest
+Restoring old binaries alone is a recovery option only when schema compatibility
+has been established. Otherwise recovery needs the matching database backup and
+configuration, with writers stopped and restoration explicitly planned.
 
-# Stop and remove the old container (the volume with your data is NOT removed)
-docker rm -f muninn-postgres
+## PostgreSQL or container upgrades
 
-# Start a new container with the same volume
-docker run -d \
-  --name muninn-postgres \
-  --restart always \
-  -e POSTGRES_PASSWORD=changeme \
-  -p 127.0.0.1:5432:5432 \
-  -v muninn_data:/var/lib/postgresql/data \
-  kamysh/postgres-ai:latest
-
-# Apply any schema migrations (or just restart the daemon — it self-migrates)
-muninn init
-```
-
-The `muninn_data` volume is preserved — your indexed data is not lost.
+A newer image can change the PostgreSQL major version or AGE/pgvector binaries.
+It is **not** a generic `docker pull` / container replacement procedure. Check
+server/extension compatibility, the actual container and volume identities,
+backup/restore or PostgreSQL upgrade requirements, and other applications sharing
+the server. Plan this separately. Preserving a volume alone does not establish
+that a new PostgreSQL version can read it safely.

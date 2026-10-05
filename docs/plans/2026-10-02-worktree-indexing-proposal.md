@@ -1,3 +1,9 @@
+> **Historical design/stage record.** This document preserves proposals and
+> progress reports from its date, including superseded decisions. It is not
+> a current installation procedure or completion report. For implemented 1.0 behavior,
+> see [Development](../../docs/development.md); for installation, see
+> [Getting started](../../docs/get-started.md) and [AGENTS.md](../../AGENTS.md).
+
 # Git worktrees as views of one indexed repository
 
 > Core storage/search revision: the approved moving-base and file-delta design

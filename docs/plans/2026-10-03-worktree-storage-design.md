@@ -1,3 +1,9 @@
+> **Historical design/stage record.** This document preserves proposals and
+> progress reports from its date, including superseded decisions. It is not
+> a current installation procedure or completion report. For implemented 1.0 behavior,
+> see [Development](../../docs/development.md); for installation, see
+> [Getting started](../../docs/get-started.md) and [AGENTS.md](../../AGENTS.md).
+
 # Muninn 1.0.0: storage and interface design for review
 
 > Core storage/search revision: the approved moving-base and file-delta design

@@ -1,290 +1,150 @@
-<!-- AI CODING AGENTS: STOP. This is the HUMAN install guide. Your procedure is
-     ../AGENTS.md (repo root) — same end state, but with explicit variables,
-     verify-after-each-step, and idempotent state detection. Do not follow the
-     steps below. -->
+# Get started with Muninn 1.0
 
-> ⛔ **AI coding agents — this guide is not for you.** It is the *human* install
-> path. Your procedure is **[AGENTS.md](../AGENTS.md)** — follow that instead.
+This is the human procedure for a **new installation**. For an existing install,
+start with [Upgrading](upgrading.md); do not create a replacement database.
+Agents use [AGENTS.md](../AGENTS.md) for the automation sequence and this guide
+for the shared platform commands.
 
-# Get started with muninn
+A working installation needs a database with the required extensions, all three
+binaries, global connection configuration, an enabled family with a completed
+index, a running watcher, and an MCP connection in your chosen client. A binary
+on PATH or an MCP registration alone does not verify the whole installation.
 
-This guide walks you through getting muninn running using Docker for the database and pre-built binaries. No Rust, no Nix, no PostgreSQL knowledge required.
+## 1. Choose the database and client
 
-By the end you will have muninn's search tools available inside Claude Code, watching your first repository for changes.
+You need Git, a shell, a PostgreSQL client (`psql`), and Codex, Claude Code or
+another client that can launch a local stdio MCP process. The recommended database
+is [postgres-ai](https://github.com/kamysh/postgres-ai), used through Docker in
+this guide. It supplies compatible PostgreSQL, pgvector, AGE and pgcrypto together.
+You can reuse an existing postgres-ai instance. Assembling those prerequisites
+yourself is an [advanced, non-recommended alternative](own-database.md).
 
-## What a complete install consists of
+The examples use container `postgres-ai`, volume `muninn_data`, host `localhost`,
+port `5432`, and database/role `muninn`. Check `docker ps -a` and local listening
+ports before creating anything. Reuse a suitable existing container if desired,
+but keep the Muninn database/role distinct from other applications such as Mimir.
+Choose different names/ports when needed and carry them through every command.
 
-Skipping any of these four pieces will leave muninn in a state that looks installed but fails silently:
+## 2. Prepare a new database
 
-1. A **PostgreSQL container** (or your own DB) holding the index.
-2. **Three binaries** on `PATH` — `muninn`, `muninn-index`, `muninn-mcp`.
-3. The `muninn-index` **daemon running in the background** under launchd (macOS) or systemd (Linux). Without it, the CLI still works, but the index never updates on file changes — searches return stale results with no error to alert you.
-4. The **`muninn-mcp` server registered with Claude Code**. Without it, Claude Code has no tools to call.
+Only for a new container:
 
-A short "Verify the install" step near the end (Step 7) checks all four. Do not consider the install complete until it passes.
-
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) (or Docker-compatible runtime like OrbStack)
-- [Claude Code](https://claude.ai/code)
-- For semantic search: a [Voyage AI](https://dash.voyageai.com) or [OpenAI](https://platform.openai.com) API key — or nothing at all (local mode works offline, downloads ~200 MB on first use)
-
-### Preflight check
-
-Run these before you start. Each line should print `OK`:
-
-```bash
-docker info >/dev/null 2>&1 && echo OK                                            # Docker daemon running
-! lsof -nP -iTCP:5432 -sTCP:LISTEN 2>/dev/null | grep -q . && echo OK              # port 5432 free
-! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx postgres-ai && echo OK # container name free
-echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin" && echo OK                # PATH includes ~/.local/bin
-command -v claude >/dev/null && echo OK                                            # Claude Code CLI installed
-```
-
-If any line fails:
-
-- **Docker not running** → start Docker Desktop (or your runtime), then re-check.
-- **Port 5432 in use** → either stop the conflicting service or pick a different port. If you change the port, update *everything* in this guide that mentions `5432`: the `docker run -p` flag, the `~/.pgpass` line, and `~/.config/muninn/config.toml`.
-- **Container name `postgres-ai` in use** → either reuse the existing container (if it's a postgres-ai instance from another tool) or pick a new name for the one you're about to create. Do not delete the existing container without checking what data it holds.
-- **`~/.local/bin` not on PATH** → add `export PATH="$HOME/.local/bin:$PATH"` to your shell's rc file (`~/.zshrc`, `~/.bashrc`) and reload it.
-- **`claude` CLI missing** → install [Claude Code](https://claude.ai/code) before continuing; Step 6 needs it.
-
-### Conventions used in this guide
-
-This guide uses the following defaults. If you change any of them, change them everywhere they appear:
-
-| Setting | Default | Used in |
-|---|---|---|
-| PostgreSQL port | `5432` | `docker run`, `~/.pgpass`, `config.toml` |
-| Container name | `postgres-ai` | `docker run`, all `docker exec` calls |
-| Docker volume | `muninn_data` | `docker run` |
-| Database name | `muninn` | setup SQL, `~/.pgpass`, `config.toml` |
-| Database user | `muninn` | setup SQL, `~/.pgpass`, `config.toml` |
-
-On macOS, avoid ports `5000` (AirPlay Receiver) and `6000` (X11) if you change the port.
-
-## Step 1: Start the database
-
-```bash
+```sh
 docker run -d \
-  --name postgres-ai \
-  --restart always \
+  --name postgres-ai --restart always \
   -p 127.0.0.1:5432:5432 \
   -v muninn_data:/var/lib/postgresql/data \
   kamysh/postgres-ai:latest
 ```
 
-This image has pgvector, Apache AGE, uuid-ossp, and pgcrypto pre-installed in every database. No extension setup required.
+Wait for readiness, then verify:
 
-If you prefer Docker Compose, create a `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: kamysh/postgres-ai:latest
-    container_name: postgres-ai
-    restart: always
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - muninn_data:/var/lib/postgresql/data
-
-volumes:
-  muninn_data:
+```sh
+docker exec postgres-ai psql -U postgres -d postgres -c 'SELECT 1'
 ```
 
-Then run `docker compose up -d`.
+This image initializes extensions in `template1` for new databases. Reusing an
+old volume does not rerun initialization: check extensions in the actual Muninn
+database after creation. The image's server configuration preloads AGE.
 
-**Verify:**
+For a **new** Muninn role, choose a password and add its entry to `~/.pgpass`:
 
-```bash
-docker exec postgres-ai psql -U postgres -c 'SELECT 1' >/dev/null && echo OK
+```text
+localhost:5432:muninn:muninn:YOUR_PASSWORD
 ```
 
-## Step 2: Create a database and user
+Use a generated hexadecimal password (`openssl rand -hex 32` can generate one)
+with the bundled setup helper: its SQL interpolation does not escape arbitrary
+quotes. Edit the file without overwriting entries for other databases, and run:
 
-Add a line to `~/.pgpass` with your chosen password:
-
-```
-# ~/.pgpass — format: hostname:port:database:username:password
-localhost:5432:muninn:muninn:yourpassword
-```
-
-Lock down its permissions (PostgreSQL ignores the file if it is world-readable):
-
-```bash
-chmod 600 ~/.pgpass
+```sh
+chmod 600 "$HOME/.pgpass"
 ```
 
-Create the user and database. You can run the [setup script](https://github.com/kamysh/muninn/blob/main/muninn-setup/create-db-user.sh) or paste the following directly (the `postgres` superuser is only accessible from inside the container):
+From the same source checkout as the binaries, run the helper after reviewing
+its arguments. It creates a missing role/database, sets the role password and
+grants AGE access; it does not install missing extensions:
 
-```bash
-docker exec -i postgres-ai psql -U postgres -d postgres <<'SQL'
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'muninn') THEN
-        CREATE ROLE muninn WITH LOGIN;
-    END IF;
-END
-$$;
-ALTER ROLE muninn PASSWORD 'yourpassword';
-SELECT 'CREATE DATABASE muninn OWNER muninn'
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'muninn')\gexec
-GRANT ALL PRIVILEGES ON DATABASE muninn TO muninn;
-\c muninn
-GRANT USAGE, CREATE ON SCHEMA public TO muninn;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO muninn;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO muninn;
-GRANT USAGE ON SCHEMA ag_catalog TO muninn;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO muninn;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO muninn;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA ag_catalog TO muninn;
-SQL
+```sh
+bash muninn-setup/create-db-user.sh \
+  --container postgres-ai --host localhost --port 5432 \
+  --user muninn --db muninn
 ```
 
-Replace `yourpassword` with the password you put in `~/.pgpass`. Replace `muninn` with a different username or database name if you prefer.
+For an existing role, verify its credentials/ownership before using a helper
+that can reset its password. Verify the actual target as the application user:
 
-**Verify the connection works:**
-
-```bash
-psql -h localhost -U muninn -d muninn -c '\conninfo'
+```sh
+psql -X -h localhost -p 5432 -U muninn -d muninn -c '\conninfo'
+psql -X -h localhost -p 5432 -U muninn -d muninn \
+  -c 'SELECT extname, extversion FROM pg_extension ORDER BY extname;'
 ```
 
-## Step 3: Install the muninn binaries
+`age`, `vector` and `pgcrypto` must be present. See [own database](own-database.md)
+for missing extensions, preload and privilege setup.
 
-This step installs the three muninn binaries to `~/.local/bin`. It is one of four pieces — see Step 5 for the daemon and Step 6 for the MCP server.
+## 3. Install matching binaries
 
-Download the archive for your platform from the [latest release](https://github.com/kamysh/muninn/releases/latest):
+These docs describe the 1.0.0 source. At the 2026-10-05 audit, GitHub's latest
+release was 0.9.4. Until a matching release is published, use a checkout containing
+the 1.0 implementation and [Nix](https://nixos.org/download/), with flakes enabled:
 
-| Platform | File |
-|---|---|
-| Linux x86_64 | `muninn-linux-amd64.tar.gz` |
-| Linux ARM64 | `muninn-linux-arm64.tar.gz` |
-| macOS Apple Silicon | `muninn-darwin-arm64.tar.gz` |
-| macOS Intel | `muninn-darwin-amd64.tar.gz` |
-
-```bash
-# Linux x86_64
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-linux-amd64.tar.gz \
-  | tar -xz -C ~/.local/bin
-
-# Linux ARM64
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-linux-arm64.tar.gz \
-  | tar -xz -C ~/.local/bin
-
-# macOS Apple Silicon
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-darwin-arm64.tar.gz \
-  | tar -xz -C ~/.local/bin
-
-# macOS Intel
-curl -L https://github.com/kamysh/muninn/releases/latest/download/muninn-darwin-amd64.tar.gz \
-  | tar -xz -C ~/.local/bin
+```sh
+# Run from the Muninn 1.0 source checkout.
+nix build .#muninn-static
+mkdir -p "$HOME/.local/bin"
+install -m 755 result/bin/muninn result/bin/muninn-index result/bin/muninn-mcp \
+  "$HOME/.local/bin/"
 ```
 
-Make the binaries executable:
+For an upgrade, stage the files and follow [Upgrading](upgrading.md) before
+replacing running binaries. The `muninn-static` derivation produces portable
+static Linux binaries; macOS still uses system frameworks. See
+[build details](development.md#building-and-testing).
 
-```bash
-chmod +x ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
+When using a published archive, select an explicit matching release and inspect
+its assets. CI builds `linux-amd64`, `linux-arm64` and `darwin-arm64`; use an Intel
+macOS archive only if that release actually provides one. Do not substitute a
+`releases/latest` URL without checking the version. Each archive must contain
+`muninn`, `muninn-index`, and `muninn-mcp`.
+
+Put `~/.local/bin` on PATH in your shell startup file if necessary:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+muninn --version
+muninn-index --version
+muninn-mcp --version
 ```
 
-**macOS only — quarantine flag.** macOS adds a quarantine attribute to files downloaded via a *browser*, which blocks them from running. If you downloaded the archive with a browser, remove it:
+All three should report the intended version (1.0.0 for this tree).
 
-```bash
-xattr -d com.apple.quarantine ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
+## 4. Bootstrap the global configuration
+
+This local-backend example needs no embedding API key:
+
+```sh
+muninn init database.host=localhost database.port=5432 \
+  database.dbname=muninn database.user=muninn embeddings.backend=local
+muninn status
 ```
 
-`curl` downloads do **not** set this attribute, so the command above is unnecessary if you used the `curl` snippet. (It will print "Permission denied" or "no such xattr" — that's expected, not a problem.)
+`init` writes `~/.config/muninn/config.toml` with owner-only permissions and runs
+public migrations. With no assignments, it opens an editor only when the file
+does not exist; an existing file's contents are preserved. Credentials and runtime
+settings belong here, while family policies are stored in the database.
 
-**Verify:**
+For hosted embeddings, see [Configuration](configuration.md). Hosted embedding
+requests include source chunks. The local model is downloaded on first use;
+subsequent embedding work can run offline when cached.
 
-```bash
-muninn --help >/dev/null && echo OK
-```
+## 5. Run the watcher
 
-If you get "command not found", `~/.local/bin` is not on your `PATH`. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell's rc file and reload it.
+### Linux with systemd
 
-## Step 4: Configure muninn
+Create `~/.config/systemd/user/muninn-index.service`:
 
-`muninn init` creates your global config and applies the database schema. Run it
-with no arguments to fill the config in interactively (it opens the template in
-`$EDITOR`), or pass `key=value` settings to do it non-interactively. Either way
-you need two things: your database username and your choice of embedding backend.
-
-```bash
-muninn init                                              # interactive (opens $EDITOR)
-# …or non-interactive:
-muninn init database.user=alice embeddings.backend=local
-```
-
-Run interactively, you will see:
-
-```toml
-# ~/.config/muninn/config.toml — muninn global configuration
-#
-# Lines marked REQUIRED must be filled in before muninn will work correctly.
-# Everything else can be left at its default value to start.
-
-[database]
-host   = "localhost"
-port   = 5432
-dbname = "muninn"
-user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username (e.g. "alice")
-
-# Password: muninn never stores a password here.
-# Add a line to ~/.pgpass instead:  localhost:5432:muninn:alice:yourpassword
-# (file must be chmod 600)
-
-[embeddings]
-backend    = "voyage"           # voyage | openai | local
-model      = "voyage-code-3"
-api_key    = "YOUR_API_KEY"     # REQUIRED for voyage/openai — paste your key here
-batch_size = 64
-
-[watcher]
-debounce_ms = 300
-
-[mcp]
-record_usage = true
-
-[mcp.logging]
-enabled = true
-dir = "~/.local/state/muninn/mcp"
-retention_days = 7
-prune_interval_hours = 24
-```
-
-Make these changes:
-
-- Replace `YOUR_DB_USER` with the username you created in Step 2 (e.g. `alice`).
-- Choose an embedding backend and update the `[embeddings]` section accordingly.
-
-**Which embedding backend?**
-
-- **`voyage`** — best search quality for code. Requires a [Voyage AI](https://dash.voyageai.com) account. Set `backend = "voyage"`, `model = "voyage-code-3"`, and paste your key. Short text chunks are sent to Voyage AI to generate embeddings; your source files are never transmitted.
-- **`openai`** — good quality. Requires an [OpenAI](https://platform.openai.com) account. Set `backend = "openai"`, `model = "text-embedding-3-small"`, and paste your key. Same privacy guarantee as above.
-- **`local`** — no account required, works offline. Set `backend = "local"`, `model = "potion-base-32M"`, and remove the `api_key` line entirely. Downloads ~120 MB on first use. Uses model2vec static embeddings — fast enough to index large repos (deps included) on CPU. Nothing leaves your machine.
-
-If you are not sure, start with `local`. You can switch to Voyage AI later — just know that switching backends requires removing and re-adding the repo (`muninn remove` then `muninn add`), because the embedding format is locked in at registration time.
-
-Save and close the editor. Muninn validates the config and sets up the database schema automatically. If there is an error, it will tell you and re-open the editor.
-
-**Verify:**
-
-```bash
-muninn status >/dev/null && echo OK
-```
-
-## Step 5: Start the indexer daemon
-
-The indexer (`muninn-index`) is a background daemon that watches your registered repositories for file changes and keeps the search index up to date. **This step is required, not optional.** Without it, the index never refreshes after the initial run, and searches will silently return stale results — no error message, no warning, just out-of-date answers.
-
-Pick the method that matches your OS:
-
-### Linux — systemd user service
-
-```bash
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/muninn-index.service << 'EOF'
+```ini
 [Unit]
 Description=Muninn indexer daemon
 After=network.target
@@ -298,153 +158,92 @@ Environment=RUST_LOG=info
 
 [Install]
 WantedBy=default.target
-EOF
+```
 
+Then:
+
+```sh
 systemctl --user daemon-reload
 systemctl --user enable --now muninn-index
+systemctl --user is-active muninn-index
+journalctl --user -u muninn-index -n 30 --no-pager
 ```
 
-`%h` is a systemd placeholder for your home directory and is filled in automatically — you do not need to substitute anything.
+This is a user service; whether it runs while logged out depends on the host's
+user-service policy. No indexing starts for an unstarted family merely because
+the daemon is active.
 
-### macOS — launchd agent
+### macOS with launchd
 
-The heredoc below uses `${HOME}` (no quotes around `EOF`), which the shell expands to your real home path before writing the file. You do not need to substitute anything manually.
+Create `~/Library/LaunchAgents/org.muninn.index.plist` with the following content,
+substituting your **absolute** binary path (launchd does not expand `~`):
 
-```bash
-mkdir -p ~/Library/LaunchAgents
-cat > ~/Library/LaunchAgents/org.muninn.index.plist <<EOF
+```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>org.muninn.index</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${HOME}/.local/bin/muninn-index</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>RUST_LOG</key>
-    <string>info</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/muninn-index.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/muninn-index.log</string>
-</dict>
-</plist>
-EOF
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.muninn.index.plist
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>org.muninn.index</string>
+  <key>ProgramArguments</key><array><string>/ABSOLUTE/HOME/.local/bin/muninn-index</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
 ```
 
-The agent will auto-start every time you log in.
+Create the parent directory first if needed, then:
 
-**Verify (both platforms):**
-
-```bash
-sleep 2 && pgrep -fl muninn-index >/dev/null && echo OK
+```sh
+chmod 600 "$HOME/Library/LaunchAgents/org.muninn.index.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/org.muninn.index.plist"
+launchctl print "gui/$(id -u)/org.muninn.index"
 ```
 
-The first `muninn-index` startup will print a couple of log lines as it discovers your repos. On macOS, tail them with `tail -f /tmp/muninn-index.log`; on Linux, `journalctl --user -u muninn-index -f`.
+For a home on an external volume, this installation has required the plist in
+`/Library/LaunchAgents/` on the internal system volume, with administrator-assisted
+installation and appropriate ownership. Use the actual installed plist path for
+bootstrap and future upgrades; do not assume the user-directory path applies.
 
-> **Quick start without a service manager** — for ad-hoc use or debugging, you can just run `muninn-index &` in a shell. It will keep running until you log out or the process is killed, and it will not restart on failure. Prefer the launchd/systemd setup above for any real use.
+Without a service manager, `muninn-index` can run in a foreground terminal for
+manual use. Closing it stops automatic updates; foreground indexing can still run.
 
-## Step 6: Connect Claude Code
+## 6. Configure and start the first family
 
-```bash
-claude mcp add --scope user muninn ~/.local/bin/muninn-mcp
+```sh
+muninn add /absolute/path/to/repo
 ```
 
-Use `--scope user` (not `--scope project`) — muninn is a system-wide tool, not project-local.
+The TUI shows policy, frozen defaults, inventory and advice. On the policy page,
+select the embedding backend before saving: **new-family defaults use Voyage,
+even if Step 4 selected local globally**. Select Local for the local setup above.
+The embedding profile cannot currently be changed after family registration.
 
-Restart Claude Code. Open its tools panel — you should see `search_hybrid`, `search_fulltext`, `search_semantic`, `search_structural`, `record_knowledge`, `search_knowledge`, `delete_knowledge`, and `list_knowledge` listed.
+Review excluded/vendor files. Git ignores are not used. Dependencies may be
+large; the inventory suggests whether to start or refine rules, with or without
+an agent. Save registers the family without indexing it. The TUI then offers a
+separate Start confirmation. You can leave it unstarted and return with:
 
-**Verify:**
-
-```bash
-claude mcp list 2>&1 | grep -E '^muninn:.*Connected' && echo OK
+```sh
+muninn config /absolute/path/to/repo
 ```
 
-## Step 7: Verify the install
+Agents use the [JSON workflow](claude-code-setup/skill/SKILL.md#configure-with-json)
+instead of driving the TUI. After first start, linked Git worktrees are discovered
+automatically and share the policy. Non-Git directories are independent families.
 
-Before adding any real repos, confirm all four pieces are in place. Each line below should print `OK`:
+## 7. Connect and verify the agent
 
-```bash
-muninn status >/dev/null                                                            && echo OK  # 1. CLI talks to DB
-docker ps --filter "name=^postgres-ai$" --format '{{.Names}}' | grep -qx postgres-ai && echo OK  # 2. DB container running
-command -v muninn-index >/dev/null                                                   && echo OK  # 3. daemon binary on PATH
-pgrep -fl muninn-index >/dev/null                                                    && echo OK  # 4. daemon process running
-claude mcp list 2>&1 | grep -qE '^muninn:.*Connected'                                && echo OK  # 5. MCP wired up to Claude Code
-```
+Follow [Agent setup](claude-code-setup/INSTALL.md) for **Codex or Claude Code**,
+including MCP registration and the shared usage skill. Reminder hooks are optional.
 
-Five `OK`s = good to go. Any failure means that piece is broken; fix it before moving on. The most common failure is line 4 (daemon not running) — re-check Step 5.
+Verify separately:
 
-## Step 8: Add your first repository
+1. All three binary versions match.
+2. `muninn status` reaches the configured database and lists the registration.
+3. `muninn config /path/to/checkout --json` reports the intended policy and start state.
+4. The watcher is active and its logs contain no unresolved indexing error.
+5. The client lists Muninn and can call `search_fulltext` for a known indexed term,
+   with `repo` set to the intended checkout. Inspect the returned source range.
 
-```bash
-muninn add /path/to/your/repo
-```
-
-This opens the TUI to inspect/register the family, review its file inventory and
-configure exclusions. It asks whether to start indexing, with advice based on
-preflight. Configuration is stored in PostgreSQL. For agent-driven setup use
-`muninn config PATH --json`, `muninn preflight PATH --json`,
-`muninn add PATH --json`, and explicit `muninn start PATH --json`; see the
-[shared skill](claude-code-setup/skill/SKILL.md) for guarded JSON requests.
-
-An enabled Git family automatically discovers linked worktrees. Code searches
-select the requested checkout's completed index. Merge/rebase/conflict states
-retain the last completed index until reconciliation can succeed.
-
-## Step 9: Install the agent skill and reminders
-
-Follow [the agent setup guide](claude-code-setup/INSTALL.md) for Codex or Claude
-Code. The shared skill explains tool choice, worktrees, JSON configuration and
-knowledge scope. Reminder hooks encourage useful searches and evaluation of
-results; they neither run searches themselves nor require a call on every task.
-Merge the client-specific instructions into existing configuration rather than
-replacing unrelated hooks or settings.
-
-## What happens next
-
-The daemon watches for file changes and re-indexes automatically. You do not have to do anything after this.
-
-- `muninn status` shows all registered repos and their index status.
-- `muninn add <path>` to add more repos.
-- When a new muninn release comes out, see [docs/upgrading.md](upgrading.md).
-- To remove a repo or uninstall muninn entirely, see [docs/uninstall.md](uninstall.md).
-
-## Sharing the database with mimir
-
-If you also use [mimir](https://github.com/kamysh/mimir), the two tools can share one `postgres-ai` container — just create a separate role and database for mimir (see mimir's own install guide). The `kamysh/postgres-ai` image is designed for this: pgvector, AGE, and the support extensions are pre-installed cluster-wide.
-
-## If something goes wrong
-
-A few failure modes are common enough to call out explicitly:
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `muninn status` works but searches return stale results | Indexer daemon stopped or never started — **most common silent failure** | Re-check Step 5. `pgrep -fl muninn-index` should print a PID. If not, restart the daemon. |
-| MCP tools missing from Claude Code | `muninn-mcp` not registered, or registered at the wrong scope | Re-check Step 6. `claude mcp list` must show `muninn: ... Connected`. Use `--scope user`, not `--scope project`. |
-| `Cannot connect to the Docker daemon` | Docker Desktop / runtime not running | Start it. Do not try to start Docker programmatically. |
-| `docker run` fails with "container name in use" | Another container is already named `postgres-ai` | Either reuse it (if it's a compatible postgres-ai instance) or pick a different name for this one. Do not delete the existing container without checking what's in it. |
-| `bind: address already in use` on port 5432 | Another postgres or app is using 5432 | Pick a different port. Update `docker run -p`, `~/.pgpass`, and `~/.config/muninn/config.toml` together. |
-| `~/.pgpass` ignored, prompts for password | Wrong file permissions | `chmod 600 ~/.pgpass`. PostgreSQL silently ignores `~/.pgpass` if it is world- or group-readable. |
-| `xattr: Permission denied` on macOS | The file does not actually have a quarantine flag (curl-downloaded) | Skip the `xattr` step. The binaries run fine without it. |
-| MCP shows `Failed to connect` instead of `Connected` | `muninn-mcp` is crashing on startup, usually due to a DB / config error | Run `muninn-mcp` directly in a shell; the error message goes to stderr. Common causes: wrong port in `config.toml`, password mismatch with `~/.pgpass`. |
-
-If something is broken in a way not listed here, file an [issue](https://github.com/kamysh/muninn/issues) with the output of:
-
-```bash
-muninn --version
-muninn status 2>&1
-pgrep -fl muninn-index
-claude mcp list 2>&1 | grep muninn
-docker ps --filter name=postgres-ai
-```
+For a linked worktree, use its path for search/config inspection. `status PATH`
+is still a registered-locator lookup, not a per-worktree freshness report.
+Search responses do not currently include a freshness field: if Git is in a
+merge/rebase/conflict, results can be from the last completed index.

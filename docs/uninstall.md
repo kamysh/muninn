@@ -1,112 +1,118 @@
-# Uninstalling muninn
+# Removing Muninn or an indexed family
 
-Steps to remove muninn entirely, or just parts of it. Follow only the sections that apply to your setup.
+Choose the scope: one worktree, one family's index, client integration, or the
+whole installation. They have different effects. Keep backups if index data or
+curated knowledge must be recoverable.
 
-## Remove individual repos
+## One linked worktree
 
-Before tearing everything down, you can clean up repos one at a time:
+Remove the worktree through your normal Git workflow. The enabled family's daemon
+discovers its absence from Git's worktree registry, retires its checkout index and
+drops its AGE graph. Shared versions still used by other checkouts remain.
+A temporarily unavailable directory still listed by Git retains its data.
 
-```bash
-muninn remove /path/to/repo
-```
+Do **not** use `muninn remove` to remove only one linked worktree: that command
+operates on a registered family's index, not a checkout-specific removal intent.
 
-This deletes `.muninn.toml` from the repo root and removes all index data for that repo from the database. If the daemon is actively indexing the repo, `muninn remove` will print an error — stop the daemon first (see below) if needed.
+## One registered family
 
-To see all registered repos:
+First identify the registered locator:
 
-```bash
+```sh
 muninn status
 ```
 
-## Stop and disable the daemon
+Use the exact registered path displayed there:
 
-Linux (systemd):
-```bash
+```sh
+muninn remove /registered/path
+```
+
+Review the confirmation. The command removes the application schema and its code
+index, including graphs for registered checkouts, and removes the registry row.
+A legacy `.muninn.toml` at that path is also deleted if present. It coordinates
+with active indexing and may wait for the index lock; the old blanket description
+that removal always refuses while indexing is obsolete.
+
+Source files and Git worktrees remain. Curated notes in `public.knowledge` are
+separate and are not deleted by family removal; remove them explicitly through
+the knowledge tools if intended. Family policies/history live in the removed
+application schema and are lost with it. `--yes` skips confirmation; use it only
+when this exact destructive scope is already approved.
+
+## Disconnect agent clients
+
+For the clients you configured:
+
+```sh
+codex mcp remove muninn
+claude mcp remove --scope user muninn
+```
+
+Reconnect/reload the affected client so old MCP processes are no longer running.
+Remove only the Muninn skill, instruction section and optional reminder hooks.
+Preserve other tools, shared-hook behavior and permissions. See
+[Agent setup](claude-code-setup/INSTALL.md) for the possible skill locations.
+
+## Stop and remove the service
+
+Linux:
+
+```sh
 systemctl --user disable --now muninn-index
-```
-
-macOS (launchd):
-```bash
-launchctl bootout gui/$(id -u)/org.muninn.index
-rm ~/Library/LaunchAgents/org.muninn.index.plist
-```
-
-macOS (background process):
-```bash
-pkill muninn-index
-```
-
-## Disconnect from Claude Code
-
-```bash
-claude mcp remove muninn --scope user
-```
-
-Restart Claude Code to apply the change.
-
-## Remove the binaries
-
-```bash
-rm -f ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
-```
-
-If you created a systemd unit file, remove it too:
-```bash
-rm -f ~/.config/systemd/user/muninn-index.service
+rm "$HOME/.config/systemd/user/muninn-index.service"
 systemctl --user daemon-reload
 ```
 
-## Remove configuration and logs
+macOS:
 
-```bash
-rm -rf ~/.config/muninn
-rm -rf ~/.local/state/muninn
+```sh
+launchctl bootout "gui/$(id -u)/org.muninn.index"
+# Remove only the actual installed org.muninn.index.plist afterward.
 ```
 
-Remove the muninn line from `~/.pgpass` (edit the file — the line looks like `localhost:5432:muninn:alice:changeme`). Edit carefully: this file controls access for all your PostgreSQL connections, not just muninn.
+The plist may be under `~/Library/LaunchAgents` or `/Library/LaunchAgents`; use
+the installed location and its required permissions. For a foreground daemon,
+stop that specific process. Check that neither daemon nor old MCP clients remain
+before deleting binaries or attempting database removal.
 
-## Remove all index data from the database
+## Remove local files
 
-> **Sharing with mimir?** If your `postgres-ai` container also hosts
-> [mimir](https://github.com/kamysh/mimir), do **not** remove the container or
-> volume — that would destroy mimir's data too. Drop only muninn's database and
-> role (the `DROP DATABASE` / `DROP ROLE` commands below), and stop here.
+For the default standalone installation:
 
-**Docker users** (replace `<container>` and `<volume>` with the names you chose
-at install time):
-```bash
-# Drop muninn's database and role
-docker exec -it <container> psql -U postgres
+```sh
+rm "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
+
+A Nix profile installation should be removed through that profile instead.
+Remove `~/.config/muninn` and `~/.local/state/muninn` only if you also want to discard
+configuration/logs. Local model caches may be shared; identify their actual path
+and other users before removing them. Edit only the matching `~/.pgpass` entry,
+not the whole credential file. Backups are separate files and are not automatically
+removed.
+
+## Optional database removal
+
+Stop writers and verify the **actual** database and role names first. As the
+administrator, connected to a different database, the corresponding commands for
+the default names are:
+
 ```sql
-DROP DATABASE IF EXISTS muninn;
-DROP ROLE IF EXISTS muninn;   -- the role you created for muninn
-\q
+DROP DATABASE muninn;
+DROP ROLE muninn;
 ```
 
-Then, **only if the container is muninn-only** (not shared with mimir) and you
-want it gone entirely:
-```bash
-docker rm -f <container>
-docker volume rm <volume>
-```
+This destroys code indexes, saved policies and curated knowledge. A shared role
+may own other resources and should not be dropped merely because Muninn is gone.
 
-**Own-database users:**
-```bash
-psql -h localhost -U postgres  # or however you connect as superuser
-```
-```sql
-DROP DATABASE IF EXISTS muninn;
-DROP ROLE IF EXISTS muninn;    -- the muninn role, if you created one
-```
+If postgres-ai also hosts Mimir or another application, keep its container and
+volume. Only a dedicated instance that you intend to destroy should be removed,
+using its verified container/volume names. Keeping a shared server is compatible
+with completely removing Muninn's own database.
 
-## Verify nothing is left
+## Verification
 
-```bash
-# No muninn processes running
-pgrep muninn  # should return nothing
-
-# No muninn files
-ls ~/.config/muninn 2>/dev/null && echo "still there" || echo "gone"
-ls ~/.local/bin/muninn 2>/dev/null && echo "still there" || echo "gone"
-```
+Check the selected scope: no Muninn client registration/process, service stopped,
+binaries absent from PATH, and the intended registration/database absent if you
+chose to remove it. Do not claim all data was removed merely because the CLI is
+no longer installed.

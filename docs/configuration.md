@@ -1,189 +1,175 @@
-# Configuration reference
+# Configuration reference — 1.0
 
-## Overview
+## Two scopes
 
-Muninn 1.0 separates global bootstrap settings from database family policy:
-
-| Location | Scope | Interface |
+| Location | Purpose | Interface |
 | --- | --- | --- |
-| `~/.config/muninn/config.toml` | Database connection, credentials and bootstrap/service defaults | `muninn init` / `muninn config … --global` |
-| PostgreSQL family policy | File selection, embedding selection, debounce and name shared by a repo's worktrees (or one directory) | `muninn config PATH` TUI or `--json` |
+| `~/.config/muninn/config.toml` | Database connection, embedding credentials/cache, global knowledge embeddings, logging and legacy defaults | `muninn init`, `muninn config get/set/edit/unset --global` |
+| Family schema in PostgreSQL | Name, ordered file-selection rules, embedding profile/batch size and watcher debounce, shared across linked worktrees | `muninn config PATH` TUI or `--json` |
 
-Use `config PATH --json` to inspect the stored policy, effective rules, frozen
-defaults and capabilities. Changing global defaults does not rewrite registered
-family policies. Old `.muninn.toml` files belong to legacy registrations/import;
-they are not the configuration interface for database-managed families.
+New-family policy comes from **shipped defaults**, not a copy of global settings.
+In particular it starts with Voyage, model `voyage-code-3`. A local global backend
+does not select local for a new family. Choose the family backend before saving
+its initial policy. Inspect the returned `policy`, `defaults`, `effective_policy`
+and `capabilities` rather than guessing precedence.
 
-The global config file may contain API keys. `muninn init` (and `muninn config set --global`) set its permissions to `0600` (owner read/write only) automatically.
+Global changes do not rewrite existing family policies. Policy/default history
+is stored in the database. `.muninn.toml` handling remains in the legacy code
+path; it is not a database-family configuration file.
 
----
+## Global bootstrap
 
-## Minimal working examples
+```sh
+muninn init database.host=localhost database.port=5432 \
+  database.dbname=muninn database.user=muninn embeddings.backend=local
+```
 
-**Local backend (no API key required):**
+Or use `muninn init` to edit the template on a fresh installation. With an
+existing config and no assignments, it preserves content and runs public
+migrations. Global setters also validate and run public migrations; global getters
+do not. The config file is written with mode `0600` because it can contain API keys.
+
+A complete minimal local config is:
 
 ```toml
 [database]
-host   = "localhost"
-port   = 5432
+host = "localhost"
+port = 5432
 dbname = "muninn"
-user   = "alice"
+user = "muninn"
 
 [embeddings]
-backend    = "local"
-model      = "potion-base-32M"
+backend = "local"
 batch_size = 64
 
 [watcher]
 debounce_ms = 300
 ```
 
-**Voyage AI backend:**
+`[database]`, `[embeddings]` and `[watcher]` are required when writing the file
+manually. `[index]` and `[mcp]` are optional. Unknown keys are rejected.
 
-```toml
-[database]
-host   = "localhost"
-port   = 5432
-dbname = "muninn"
-user   = "alice"
+### Database connection
 
-[embeddings]
-backend    = "voyage"
-model      = "voyage-code-3"
-api_key    = "pa-..."
-batch_size = 64
+Required fields are `host`, `port`, `dbname`, `user`; `host` may be a PostgreSQL
+Unix-socket directory. Muninn reads the first matching entry in `~/.pgpass`.
+Keep that file owner-only and use literal values matching the configured fields.
+The current reader supports `*` fields, but is not libpq's complete escaped-field
+parser and does not read `PGPASSFILE`. Simple generated hexadecimal passwords
+avoid delimiter/escaping differences with the setup helper and `psql`.
 
-[watcher]
-debounce_ms = 300
+| Optional field | Current behavior |
+| --- | --- |
+| `connect_timeout` | Connection timeout in seconds; family preparation supplies 10 seconds when omitted |
+| `application_name` | Regular connections use it unless a caller supplies its own name; listener/preparation use dedicated names |
+| `ssl_mode` | Omitted, `disable`, `allow`, `prefer`: current code uses `NoTls`. `require`: selects a TLS connector with certificate validation disabled. `verify-ca`, `verify-full`: select the native TLS verifier; there is no separate CA-only implementation. See the transport limitation below |
+| `ssl_root_cert` | Optional PEM CA certificate added to native TLS trust |
+| `ssl_client_cert`, `ssl_client_key` | PEM client certificate/key pair for TLS client authentication |
+| `dsn_override`, `max_connections` | Accepted by the config type but **not used** by the current connection builder; do not rely on them for routing or pooling |
+
+**Transport limitation:** Muninn selects a connector but does not set the driver's
+SSL mode. The pinned tokio-postgres driver defaults to `Prefer`, which can fall
+back to plaintext when the server declines SSL. Thus even the `require` and
+verification names do not currently enforce TLS-only transport. Do not present
+these settings as a verified secure remote-database recipe. The recommended local
+postgres-ai setup binds its port to loopback. A remote deployment needs a separately
+validated transport arrangement; use explicit connection fields, not the unused
+DSN override. See [database setup](own-database.md).
+
+### Embeddings and credentials
+
+| Backend | Family model field | Dimensions | Credentials |
+| --- | --- | --- | --- |
+| `local` | `null` in JSON; runtime uses `minishlab/potion-base-32M` | 512 | None |
+| `voyage` | `"voyage-code-3"` | 1024 | Global `embeddings.api_key` for Voyage |
+| `openai` | `"text-embedding-3-small"` | 1536 | Global `embeddings.api_key` for OpenAI |
+
+Global `embeddings` accepts `backend`, optional `model`, optional `api_key`,
+optional local `cache_dir`, and required `batch_size`. The local model is fixed;
+a global model string does not choose a different local model. First use downloads
+weights if absent; cached local embeddings require no provider API.
+
+For a hosted profile, set matching global backend/model and its API key in the
+owner-only config, then select that family profile. The runtime reuses the global
+API key only when its backend matches the family backend; there is no per-family
+credential store or simultaneous multi-provider key map. Global embeddings also
+serve curated knowledge. Hosted requests send source chunks and query text to
+the provider.
+
+A registered family's backend/model/dimension cannot currently be changed through
+policy apply. `capabilities` and candidate checking expose this limit. Do not
+suggest remove/re-add as a routine setting change: removal destroys the family
+index and registration. A model migration needs its own reviewed procedure.
+
+## File selection
+
+Git ignore files are not consulted. Rules classify paths as:
+
+- **Excluded:** no chunks or embeddings.
+- **Tier 1:** searchable text and eager embeddings.
+- **Tier 2/vendor:** searchable text, initially deferred embeddings.
+
+The shipped exclusions include `.git/`, minified JS/CSS, source maps, snapshots
+and selected lockfiles. Vendor defaults include `node_modules`, vendor/virtualenv
+paths and common build/cache directories. Build output is therefore not generally
+excluded. The exact frozen lists are returned in `.data.defaults.index`.
+`.git` metadata is excluded by the walker independently of configurable rules;
+non-text and oversized files can also be skipped during indexing.
+
+Family `index.exclude` and `index.vendor` arrays extend frozen defaults in order;
+last matching rule wins within an axis, `!pattern` negates, and exclusion takes
+precedence over vendor classification. Parent-directory pruning matters: to
+reinclude a child, its parent must also be traversable. Check the effective rules
+and preflight after editing.
+
+Choose rules according to what you need searchable. Excluding dependencies can
+be appropriate; keeping their source as vendor can also be useful. Do not assume
+that all dependency/build files are valuable or that vendor classification makes
+indexing free. The Git worktree search path currently neither lazily warms vendor
+embeddings nor applies the legacy tier ranking penalty. Vendor text remains
+available through full-text/hybrid text results; semantic coverage requires a
+stored vector. These are current runtime limits, not promises of future behavior.
+
+Global `[index].exclude` and `.vendor` remain legacy merge inputs. They do not
+silently replace the shipped defaults or saved policy of a new/registered family.
+Use the family TUI or JSON interface to change selection.
+
+## Inspect, check, save, start
+
+```sh
+muninn config /path/to/checkout --json
+muninn preflight /path/to/checkout --json
+muninn config /path/to/checkout
 ```
 
-The `[watcher]`, `[mcp]`, and `[mcp.logging]` sections are optional and shown above at their defaults — they can be omitted entirely.
+For an unregistered path use preflight to obtain creation defaults; inspect
+reports `not_registered`. Preflight is a bounded metadata scan (currently two
+seconds or 100,000 entries). Counts may be lower bounds; it does not read file
+contents, parse, embed, or guarantee runtime cost. Advice and candidate exclusions
+are suggestions, not applied changes.
 
----
+The [shared skill](claude-code-setup/skill/SKILL.md#configure-with-json) contains
+complete JSON initial/check/apply/start requests. Requests are not configuration
+files. Check validates without saving. Apply replaces a complete policy with
+family/revision guards. Policy saves can reconcile an already-enabled family.
+Registration or saving an unstarted family does not start it; `start` or the
+TUI's separate Start confirmation does. A first start can download a model and
+perform substantial indexing.
 
-## `~/.config/muninn/config.toml` reference
+`watcher.debounce_ms` is part of family policy. File selection and policy are
+shared across linked worktrees; preflight inventories only the selected checkout.
 
-### `[database]`
+## MCP settings
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `host` | string | `"localhost"` | PostgreSQL hostname, IP address, or Unix socket directory |
-| `port` | integer | `5432` | PostgreSQL port |
-| `dbname` | string | `"muninn"` | Database name |
-| `user` | string | current OS user | PostgreSQL role name |
-| `dsn_override` | string | — | Full connection URI (e.g. `postgresql://alice@localhost:5432/muninn`). When set, `host`/`port`/`dbname`/`user` are ignored for routing, but SSL and pool settings still apply. |
-| `ssl_mode` | string | — | `disable` \| `allow` \| `prefer` \| `require` \| `verify-ca` \| `verify-full` |
-| `ssl_root_cert` | string | — | Path to PEM CA bundle for server certificate verification (required for `verify-ca` / `verify-full`) |
-| `ssl_client_cert` | string | — | Path to PEM client certificate (mutual TLS) |
-| `ssl_client_key` | string | — | Path to PEM client private key (mutual TLS) |
-| `max_connections` | integer | `10` | Connection pool size |
-| `connect_timeout` | integer | — | Seconds to wait for a connection before giving up; omit for no timeout |
-| `application_name` | string | — | Name shown in the database's active connections view |
+`[mcp].record_usage` defaults to `true`; `muninn usage --days N` reads aggregate
+call counts. `[mcp.logging]` accepts:
 
-**Password:** muninn never stores a password in config. Add a line to `~/.pgpass` — see `docs/own-database.md` for details.
+| Key | Default |
+| --- | --- |
+| `enabled` | `true` |
+| `dir` | `"~/.local/state/muninn/mcp"` |
+| `retention_days` | `7` |
+| `prune_interval_hours` | `24` |
 
-**Unix socket connections:** set `host` to the socket directory (e.g. `host = "/var/run/postgresql"`).
-
-### `[embeddings]`
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `backend` | string | `"voyage"` | `voyage` \| `openai` \| `local` |
-| `model` | string | `"voyage-code-3"` | Model name passed to the API or loaded locally |
-| `api_key` | string | — | API key; required for `voyage` and `openai` backends |
-| `cache_dir` | string | — | Directory for local model weights (`local` backend only); defaults to a platform cache directory |
-| `batch_size` | integer | `64` | Number of text chunks sent per request; reduce if you hit rate limits |
-
-**Backend reference:**
-
-| Backend | Model | Dims | API key |
-|---------|-------|------|---------|
-| `local` | `potion-base-32M` | 512 | None needed |
-| `voyage` | `voyage-code-3` | 1024 | [dash.voyageai.com](https://dash.voyageai.com) |
-| `openai` | `text-embedding-3-small` | 1536 | [platform.openai.com](https://platform.openai.com) |
-
-**Embedding dimension lock:** The embedding dimension is fixed when you run `muninn add`. Changing the backend or model after indexing requires removing and re-adding the repo:
-
-```bash
-muninn remove /path/to/repo
-muninn add    /path/to/repo
-```
-
-### `[watcher]`
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `debounce_ms` | integer | `300` | Milliseconds to wait after the last file-change event before re-indexing. Increase (e.g. `2000`) if you see excessive re-indexing during large rebases or when editors write many small saves. |
-
-### `[index]`
-
-muninn indexes **everything** under a repo root by default — including files that `.gitignore` normally hides (`node_modules`, build output, dotfiles), because gitignored files are often worth searching. The only automatic exclusions are `.git/`, binary files (detected by a null byte), and files larger than 10 MiB.
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `exclude` | array of strings | `[]` | Glob patterns (relative to the repo root) to exclude from indexing. Gitignore-style syntax. Example: `exclude = ["**/dist/", "**/*.map", "**/*.min.js"]`. |
-
-**Recommended starting point.** muninn deliberately keeps your dependency
-*source* searchable — that is why `node_modules` and other gitignored trees are
-indexed by default. So a good exclude set targets only **generated,
-non-searchable files** and **build/cache output**, never the dependencies
-themselves:
-
-```toml
-[index]
-exclude = [
-  # generated / non-searchable — noise even inside node_modules
-  "**/*.map",                # source maps
-  "**/*.min.js",             # minified bundles
-  "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/go.sum",
-
-  # build output / caches — regenerated, not source (search src/ instead)
-  "**/dist/", "**/build/", "**/target/", "**/.vite/", "**/.next/",
-  "**/coverage/", "**/.nyc_output/",
-  "**/__pycache__/", "**/.pytest_cache/", "**/.mypy_cache/",
-  "**/.terraform/",
-]
-```
-
-Note the deliberate omission of `**/node_modules/`: excluding it would make your
-dependencies' source unsearchable, which defeats much of muninn's value. If your
-index is dominated by compiled output you don't care about, prefer excluding the
-specific build directories (`**/dist/`, `**/build/`) over the whole dependency
-tree. Changing `exclude` and running `muninn reindex <path>` is authoritative —
-the reindex prunes chunks for the newly-excluded files.
-
-### `[mcp]`
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `record_usage` | bool | `true` | Record MCP tool call counts — visible via `muninn usage` |
-
-### `[mcp.logging]`
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `enabled` | bool | `true` | Write a structured log file for each MCP session |
-| `dir` | string | `"~/.local/state/muninn/mcp"` | Directory for log files (`~` is expanded) |
-| `retention_days` | integer | `7` | Log files older than this are deleted at the next prune |
-| `prune_interval_hours` | integer | `24` | How often `muninn-mcp` checks for and deletes old log files |
-
----
-
-## Database family policy
-
-Use the [shared agent skill](claude-code-setup/skill/SKILL.md#configure-with-json)
-for complete JSON request examples. Inspect and preflight are read-only;
-check validates a candidate without saving; apply saves a complete policy with
-family/revision guards. `muninn add PATH --json` registers without first indexing.
-`muninn start PATH --json` is the explicit start operation. Humans can use the TUI
-through `muninn add PATH` or `muninn config PATH`.
-
-File selection rules are shared by a Git family, while preflight inventories
-the selected checkout. Git ignores are not automatically applied. Family rules
-extend frozen defaults; check effective rules and preflight before changing
-exclusions. An enabled family reconciles changed policies automatically.
-
-Embedding profile changes for an existing family are currently unsupported;
-inspect `capabilities` rather than editing SQL or removing/re-adding a repository
-as an automatic workaround. Connection credentials remain global and never
-belong in the family policy request.
+The MCP process reads global settings at startup. Reconnect it to load changed
+settings; restarting only the indexer does not reload existing MCP clients.

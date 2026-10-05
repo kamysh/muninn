@@ -53,8 +53,10 @@ content until those worktrees are reconciled with their own files.
 During merge/rebase or an unmerged index, Muninn retains the last completed
 index. It does not index conflict contents. A failed reconciliation also retains
 the previous index. A new checkout without a completed index may be temporarily
-unavailable. Check `muninn status PATH`, the daemon, and Git state when freshness
-matters; use direct source inspection while the index is catching up.
+unavailable. Check `muninn status`, `muninn config PATH --json`, daemon logs and
+Git state when freshness matters; `status PATH` only accepts the registered
+locator, and search results currently have no freshness field. Use direct source
+inspection while the index is catching up.
 
 ## Configure with JSON
 
@@ -65,7 +67,8 @@ the repository's whole worktree family; preflight inventories only the selected
 checkout. `muninn add PATH` and `muninn config PATH` open the human TUI.
 Agents should use the JSON forms below.
 
-Use these read-only operations for a registered family:
+Set `ROOT` to the intended absolute checkout path. Use these read-only operations
+for a registered family:
 
 ```sh
 muninn config "$ROOT" --json
@@ -83,8 +86,10 @@ and cannot guarantee indexing cost. Git ignore files are not applied. Choose
 exclusions based on what the task needs and the actual inventory, including
 build outputs, dependencies and generated bundles. Review incomplete inventory
 and warnings before deciding to start. `index.exclude` drops files;
-`index.vendor` retains text search and defers embeddings. Family rules extend
-frozen defaults; last match wins, exclusion precedes vendor classification,
+`index.vendor` retains text search and defers embeddings. The Git worktree
+search path currently does not lazily warm those deferred vectors or apply the
+legacy vendor ranking penalty; do not assume equivalent semantic coverage.
+Family rules extend frozen defaults; last match wins, exclusion precedes vendor classification,
 and a pruned parent must be re-included before its children can be included.
 
 For an existing family, construct a complete candidate from a fresh inspect
@@ -101,7 +106,10 @@ muninn config "$ROOT" --json --apply - < candidate.json
 
 A new-family request has `{ "api_version": 1, "policy": ... }`, using the
 complete policy returned by preflight for that unregistered directory and any intended
-changes. Check it with `config PATH --json --check -`, then register with
+changes. New-family defaults use Voyage, independently of the global backend.
+For local embeddings set `policy.embeddings.backend` to `"local"` and
+`policy.embeddings.model` to `null` before registration. Check it with
+`config PATH --json --check -`, then register with
 `muninn add "$ROOT" --json --input - < initial.json`.
 `add PATH --json` without input uses creation defaults and is idempotent for an
 existing family. Registration and saving do not start a new family's indexing.
@@ -121,8 +129,9 @@ interrupted authorized run. A policy change for an already enabled family can
 trigger reconciliation. JSON responses have `api_version`, `ok`, and `data` or
 `error`; check exit status and error codes. On a revision/identity conflict,
 re-read and review the change before retrying. Respect reported capabilities:
-changing an existing embedding profile is currently unsupported. Normal schema
-migrations run automatically; the old configuration import was a one-time upgrade.
+changing an existing embedding profile is currently unsupported. Normal
+startup/preparation applies schema migrations automatically; read-only
+inspect/check/preflight do not. Users do not need a separate migration script.
 
 ## Durable knowledge
 

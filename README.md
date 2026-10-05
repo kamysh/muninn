@@ -1,92 +1,100 @@
-<!-- ══════════════════════════════════════════════════════════════════════
-     AI CODING AGENTS (Claude Code, Cursor, Copilot, Aider, …): STOP HERE.
+# Muninn
 
-     This README is written for HUMANS. The guides it links to below are the
-     human path; they are NOT your procedure. Do not follow get-started.md or
-     the other human guides.
+Persistent code search and repository knowledge for AI coding agents, including
+Codex and Claude Code, through MCP.
 
-     YOUR procedure is AGENTS.md, in this same directory — same end state, but
-     with explicit variables, verify-after-each-step, and idempotent state
-     detection. Read that file and follow it exactly.
-     ══════════════════════════════════════════════════════════════════════ -->
+## Why Muninn exists
 
-> ⛔ **AI coding agents — this file is not for you.**
-> The guides linked below are the *human* install path. Your procedure is
-> **[AGENTS.md](AGENTS.md)** — open that file, follow it exactly, and ignore the
-> rest of this README.
+An agent repeatedly exploring a large codebase spends context and time finding
+the same implementations. Plain text search is useful when the name is known;
+questions about behavior, relationships and prior repository decisions need
+other entry points. Muninn maintains a searchable index and durable notes so an
+agent can find relevant source, then read and verify it.
 
-# muninn
+Git worktrees add a second problem: each checkout has its own files, but copying
+a full chunk/vector index for every branch wastes space and embedding work.
+Muninn 1.0 groups linked worktrees into a **repository family**. It shares
+unchanged file versions and embeddings, stores file differences per checkout,
+and searches the checkout the caller selected. Updating the primary checkout
+adjusts those differences without changing another checkout's published view.
 
-> *Muninn* (Old Norse: "memory") — one of Odin's two ravens, sent out each day to observe the world and return with knowledge.
+Registration is explicit. A cheap inventory helps a human or agent choose which
+files matter before the first index starts. An enabled family discovers linked
+worktrees automatically and shares its configuration across them. Independent
+non-Git directories can also be registered.
 
-Code search for [Claude Code](https://claude.ai/code). Index your repositories once; ask questions about them from anywhere.
+## What runs
 
-## What it does
+| Component | Role |
+| --- | --- |
+| `muninn` | CLI: bootstrap, configuration TUI/JSON, inventory and indexing control |
+| `muninn-index` | Background watcher and reconciliation of enabled families |
+| `muninn-mcp` | Stdio MCP server launched by the agent client |
+| postgres-ai | Recommended database distribution: a compatible PostgreSQL, pgvector and Apache AGE stack |
 
-Muninn indexes your git repositories into a local database and exposes search tools to Claude Code. When you ask about your codebase, Claude Code queries muninn instead of reading files line by line. You get semantic search (meaning-based), full-text search (keyword-based), and graph traversal (who calls what, what imports where) — all running on your own machine.
+Use [postgres-ai](https://github.com/kamysh/postgres-ai) for installation. The
+underlying prerequisites are PostgreSQL with pgvector, Apache AGE and pgcrypto;
+postgres-ai supplies them together. Assembling a compatible stack yourself is an
+advanced, non-recommended alternative, documented separately in the
+[custom database guide](docs/own-database.md).
 
-Three pieces work together: `muninn` (the CLI), `muninn-index` (a background daemon that watches repos for file changes and keeps the index current), and `muninn-mcp` (the MCP server Claude Code talks to).
+MCP provides `search_hybrid`, `search_fulltext`, `search_semantic`,
+`search_structural`, and `record_knowledge`, `search_knowledge`,
+`list_knowledge`, `delete_knowledge`.
 
-## Privacy
+Search results are evidence to inspect, not compiler-verified answers. Full-text
+search is tokenized; structural edges are name-based candidates. During a
+merge, rebase or unresolved conflict, Muninn retains the last completed index
+instead of indexing transient conflict contents. See [behavior and limits](docs/development.md#worktree-indexing-and-search).
 
-Everything runs locally. No source code, no file tree structure, no graph data ever leaves your machine. If you choose Voyage AI or OpenAI as the embedding backend, short text chunks are sent to those services to generate vector embeddings — but your source files are never transmitted. If you use the local backend, nothing goes outside at all.
+## Data and privacy
 
-## Which guide?
+The database and processes can run on your machine. Local embeddings run there
+after the model is downloaded. Hosted Voyage/OpenAI embeddings send selected
+source chunks and query text to the provider; those chunks **are source code**.
+A remote PostgreSQL deployment also stores the index off-machine. MCP returns
+source excerpts to the chosen agent client, whose model/data settings apply.
+Local indexing alone does not make a cloud agent session offline.
 
-> ⛔ **AI coding agents: do not pick a row from the human table below.** Your
-> procedure is **[AGENTS.md](AGENTS.md)** — the same end state, but framed for
-> automation: explicit variables, verify-after-each-step, and idempotent state
-> detection. Read that and nothing else here.
+## Start here
 
-| I want to... | Go here |
-|---|---|
-| Get up and running with Docker (easiest path) | [docs/get-started.md](docs/get-started.md) |
-| Use my own existing PostgreSQL instance | [docs/own-database.md](docs/own-database.md) |
-| Build from source or contribute | [docs/development.md](docs/development.md) |
-| Install muninn as an AI coding agent (Claude Code, Cursor, etc.) | [AGENTS.md](AGENTS.md) |
+These docs describe the **1.0.0 source tree**. At the 2026-10-05 documentation
+audit, the latest published release was [0.9.4](https://github.com/kamysh/muninn/releases/tag/v0.9.4).
+Do not install that release and expect the 1.0 TUI/JSON/worktree interfaces.
+Use the source-build procedure until a matching release is available.
 
-## CLI reference
+| Task | Guide |
+| --- | --- |
+| Install and use Muninn as a human | [Getting started](docs/get-started.md) |
+| Have an agent perform an installation | [Agent installation procedure](AGENTS.md) |
+| Connect Codex or Claude and install useful guidance | [Agent setup](docs/claude-code-setup/INSTALL.md) |
+| Assemble a custom database stack (advanced, not recommended) | [Custom database guide](docs/own-database.md) |
+| Configure file selection and embeddings | [Configuration](docs/configuration.md) |
+| Upgrade an existing installation | [Upgrading](docs/upgrading.md) |
+| Build, understand the design or contribute | [Development](docs/development.md) |
+| Remove a family or installation | [Uninstalling](docs/uninstall.md) |
 
-Family configuration is stored in the database. Agents use JSON requests;
-`add PATH` and `config PATH` without `--json` open the human TUI. See the
-[shared agent skill](docs/claude-code-setup/skill/SKILL.md) for the full workflow.
+## Everyday commands
 
-| Command | What it does |
-|---|---|
-| `muninn init [key=value …]` | Bootstrap global connection/default settings and run migrations |
-| `muninn config get\|set\|edit\|unset --global [key=value …]` | Manage global bootstrap settings |
-| `muninn config PATH --json [--check - \| --apply -]` | Inspect, validate or apply a guarded family policy request |
-| `muninn add PATH --json [--input -]` | Register a family without starting indexing |
-| `muninn preflight PATH --json` | Inspect file inventory, cost warnings and advice |
-| `muninn start PATH --json [--input -]` | Explicitly authorize and run indexing |
-| `muninn reindex [<path>] [--all] [--detach]` | Re-index a repo in the foreground; `--all`/`--detach` hand it to the daemon |
-| `muninn pause <path>` / `muninn resume <path>` | Pause/resume daemon indexing for a repo (index data is kept) |
-| `muninn remove <path> [--yes]` | Unregister a repo and delete all its index data |
-| `muninn status [<path>]` | Fleet overview, or per-repo detail with a path |
-| `muninn usage [--days N]` | Show MCP tool usage statistics |
+```sh
+muninn add /path/to/repo                 # Human configuration TUI; separate Start confirmation
+muninn config /path/to/checkout          # Review/edit shared family policy
+muninn preflight /path/to/checkout --json
+muninn config /path/to/checkout --json    # Agent inspection
+muninn start /path/to/checkout --json     # Explicitly enable and run indexing
+muninn status                           # Registered-family overview
+muninn usage --days 30
+```
 
-## MCP tools
-
-Once muninn is connected to Claude Code, these tools are available:
-
-| Tool | What it does |
-|---|---|
-| `search_hybrid` | Semantic + full-text search with RRF ranking |
-| `search_fulltext` | Keyword search |
-| `search_semantic` | Vector similarity search |
-| `search_structural` | Graph traversal: callers, callees, imports, inheritors |
-| `record_knowledge` | Store a note anchored to your codebase |
-| `search_knowledge` | Search over stored notes |
-| `delete_knowledge` | Remove a stored note |
-| `list_knowledge` | List stored notes |
-
-## Further reading
-
-- [docs/upgrading.md](docs/upgrading.md) — upgrade binaries and apply migrations
-- [docs/configuration.md](docs/configuration.md) — full config file reference
-- [docs/uninstall.md](docs/uninstall.md) — full removal
+Agents should check a complete JSON policy before saving it and guard saves and
+start requests with the returned family ID/revision. See the
+[shared skill](docs/claude-code-setup/skill/SKILL.md). Initial policy defaults are
+shipped defaults, not a copy of global embedding settings: select the backend
+before registering. `status PATH`, `pause`, `resume` and `remove` still use the
+registered locator shown by `status`; they are not arbitrary-worktree commands.
+In particular, `remove` deletes an entire registered family's code index.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
-Contributions are subject to the [Contributor License Agreement](CLA.md).
+Apache License 2.0 — see [LICENSE](LICENSE). Contributions are subject to the
+[Contributor License Agreement](CLA.md).

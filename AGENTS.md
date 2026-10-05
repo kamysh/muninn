@@ -1,483 +1,147 @@
-# AGENTS.md — install instructions for AI coding agents
+# AGENTS.md — Muninn installation and repository guidance
 
-This file is the authoritative install procedure for AI coding agents
-(Claude Code, Cursor, Aider, etc.). The human-facing
-[docs/get-started.md](docs/get-started.md) contains the same information
-but with hedges ("recommended", "alternative") that an agent should not
-rely on. Follow this file instead.
+Muninn provides persistent code search and repository knowledge through MCP.
+Read [README.md](README.md) for purpose and limits. Use this procedure when asked
+to install it; for development use [docs/development.md](docs/development.md).
+Reading this file during another task is not an instruction to install or upgrade.
 
-## Read this first
+## Determine the installation path
 
-- All steps are idempotent. Safe to rerun. If interrupted, restart from
-  **State detection** below, not from Step 1.
-- After every step, run the verify command. Do not stack failures —
-  fix the current step before moving on.
-- Destructive operations (dropping a database, removing a container,
-  overwriting a file you did not author) require user confirmation.
-  Stop and ask, even when a step appears to call for it.
-- For family configuration, use the JSON CLI: `muninn add PATH --json`,
-  `muninn config PATH --json --check -` / `--apply -`, and explicit
-  `muninn start PATH --json`. The forms without `--json` open the human TUI.
-  See [the shared agent skill](docs/claude-code-setup/skill/SKILL.md) for complete
-  requests, revision guards and preflight. Global bootstrap still uses
-  `muninn init key=value …`; family policies live in the database.
+Inspect what already exists before proposing changes: binary versions, service,
+MCP registration, global configuration presence and intended database. Preserve
+existing connection settings and credentials. Do not print secrets into reports.
 
-## Variables
+- **Existing install:** follow [Upgrading](docs/upgrading.md). Normal
+  startup/preparation applies pending schema migrations automatically; no
+  separate user-run migration script is required.
+- **Fresh install:** follow the sequence below and the postgres-ai/platform
+  commands in [Getting started](docs/get-started.md). The
+  [custom database guide](docs/own-database.md) is an advanced alternative only
+  when the user deliberately chooses to assemble the prerequisites.
+- **Agent integration only:** use [Agent setup](docs/claude-code-setup/INSTALL.md).
 
-**Before doing anything else, ask the user for these values:**
+These are 1.0.0 instructions. At the 2026-10-05 audit, the latest published
+release was 0.9.4. Use a source checkout containing the 1.0 implementation until
+a matching release exists; never silently install an older archive for this flow.
 
-1. **Docker container name** — the local name for the postgres-ai container
-   (e.g. `local-postgres-ai`). Check `docker ps -a` and suggest a name that
-   doesn't collide. The Docker image is always `kamysh/postgres-ai`.
-2. **Docker volume name** — the named volume for postgres data
-   (e.g. `local-postgres-ai-data`). If sharing a container with mimir, confirm
-   the existing volume name rather than inventing one.
-3. **Port** — the host port to expose PostgreSQL on (default `5432`; check
-   `lsof -nP -iTCP -sTCP:LISTEN` for conflicts).
-4. **DB user** — the PostgreSQL role to create for muninn (default `muninn`).
-5. **DB name** — the database to create (default `muninn`; usually matches the user).
+## Agree on consequential setup choices
 
-If muninn is being installed alongside mimir (see "Companion tool" at the end),
-also confirm whether they share one container or use separate ones.
+Resolve missing choices from the user or existing installation: database/container
+and volume identity, host/port, application role/database, local versus hosted
+embeddings, binary destination, service manager and target agent client(s).
+Use an existing suitable database/container when agreed; installation does not
+imply permission to replace one. Do not re-ask choices already established.
 
-Bind the answers as shell variables once, then re-use in every command below:
+Present the actual affected resources before creation, credential changes,
+service changes or registration. After approval, complete and verify the agreed
+stage. Leave unrelated hooks, permissions, client settings and other applications
+unchanged. Never drop a database or overwrite another installation to resolve a
+name or port conflict.
 
-| Variable | Notes |
-|---|---|
-| `PORT` | Host port. Avoid 5000 (AirPlay on macOS), 6000 (X11), and anything in use. |
-| `CONTAINER` | Local container name. Must not collide with an existing container. Image: `kamysh/postgres-ai`. |
-| `VOLUME` | Docker volume for the postgres data dir (e.g. `muninn_data`). If sharing a container with mimir, use the same volume. |
-| `DB_USER` | PostgreSQL role for muninn. |
-| `DB_NAME` | Database for muninn. |
-| `EMBEDDING_BACKEND` | `local` (no API key, offline) \| `voyage` \| `openai` |
+## Execute the fresh-install sequence
 
-Check assumptions before starting:
+1. **Database.** Recommend [postgres-ai](https://github.com/kamysh/postgres-ai),
+   creating or reusing an instance as agreed. It bundles the compatible PostgreSQL,
+   pgvector, AGE and pgcrypto prerequisites. Verify readiness and the actual
+   database's extensions/privileges: a fresh container seeds template1; an existing
+   volume may differ. Do not present independent extension assembly as the default
+   setup. Use the [advanced guide](docs/own-database.md) only for an explicitly
+   chosen custom stack. Keep server upgrades separate from app installation.
+2. **Credentials.** Reuse the matching `~/.pgpass` entry or establish a new one
+   with owner-only permissions. The bundled `create-db-user.sh` changes the
+   role password; use it only for that agreed setup. It expects simple identifiers
+   and a password safe for SQL interpolation, such as generated hexadecimal.
+   Verify the application role can connect to the intended database.
+3. **Binaries.** Build `nix build .#muninn-static` from the selected source tree,
+   or inspect and install all three binaries from a matching published release.
+   Preserve old binaries on upgrade. Verify all versions and actual executable
+   paths; use absolute paths in service/MCP registration.
+4. **Global bootstrap.** Use `muninn init key=value …` for noninteractive setup.
+   It writes `~/.config/muninn/config.toml` and applies public migrations. Do not
+   run bare `init` against a missing file: it opens `$EDITOR`. Existing global
+   settings can be inspected/updated through `config … --global`; family policy
+   uses a different interface. Do not expose API keys in generated instructions.
+5. **Daemon.** Install/enable the agreed systemd or launchd service using the
+   [platform procedures](docs/get-started.md#5-run-the-watcher). Verify its actual
+   state and logs. Existing enabled registrations may index when it starts.
+6. **First family.** Use the JSON sequence below. Registration/configuration alone
+   does not authorize first indexing. New-family defaults use Voyage rather than
+   inheriting the global backend; explicitly choose the intended backend before
+   registration. Existing embedding-profile changes are unsupported.
+7. **Agent client.** Register Muninn in Codex and/or Claude and install the shared
+   skill through [Agent setup](docs/claude-code-setup/INSTALL.md). Merge guidance
+   rather than replacing whole settings files. Hooks are optional reminders;
+   successful tool calls do not require a hook, score, sentinel or writeback.
 
-```sh
-docker info >/dev/null                                                 # daemon running
-! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN | grep -q .                      # port free
-! docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"           # container name free
-echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"               # PATH includes target
-```
+## JSON configuration and first start
 
-If any check fails, stop and report the specific failure to the user.
-Do not try to recover automatically (e.g. do not kill an existing
-container — it may hold data the user cares about).
+Use an absolute path for the selected checkout. The shared
+[Muninn skill](docs/claude-code-setup/skill/SKILL.md) defines complete request
+examples, revision guards and error handling. Inspect and check operations do
+not run migrations or write configuration. The examples below require `jq`.
 
-## State detection — skip steps already complete
-
-These probes are for a **fresh** install. On a machine that already has muninn
-they all pass — so if the goal is to move an *existing* install to a new
-release, do **not** follow the steps below (they would no-op); jump to
-[Upgrading an existing install](#upgrading-an-existing-install).
-
-Run these probes before doing any work. For each that returns 0, skip
-the corresponding step.
-
-```sh
-# Step 1 — postgres container running
-docker ps --filter "name=^${CONTAINER}$" --filter "status=running" \
-  --format '{{.Names}}' | grep -qx "$CONTAINER"
-
-# Step 2 — DB and role exist
-docker exec "$CONTAINER" psql -U postgres -lqt \
-  | cut -d\| -f1 | grep -qw "$DB_NAME"
-
-# Step 3 — binaries installed
-command -v muninn && command -v muninn-index && command -v muninn-mcp >/dev/null
-
-# Step 4 — config exists and is valid
-[ -f "$HOME/.config/muninn/config.toml" ] && muninn status >/dev/null 2>&1
-
-# Step 5 — indexer daemon running
-pgrep -fl muninn-index >/dev/null
-
-# Step 6 — MCP registered with Claude Code
-claude mcp list 2>&1 | grep -E '^muninn:.*Connected' >/dev/null
-
-# Step 7 — skill + hooks installed for Claude Code
-[ -f "$HOME/.claude/skills/muninn/SKILL.md" ] \
-  && jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
-       "$HOME/.claude/settings.json" >/dev/null \
-  && jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
-       "$HOME/.claude/settings.json" >/dev/null
-```
-
-## Step 1 — Start postgres
+For a new family, obtain creation policy and inventory first:
 
 ```sh
-docker run -d \
-  --name "$CONTAINER" \
-  --restart always \
-  -p "127.0.0.1:${PORT}:5432" \
-  -v "${VOLUME}:/var/lib/postgresql/data" \
-  kamysh/postgres-ai:latest
-sleep 3
+ROOT=/absolute/path/to/repo
+muninn preflight "$ROOT" --json > inventory.json
+jq -e '.ok' inventory.json
+jq '{api_version:1, policy:.data.policy}' inventory.json > initial.json
 ```
 
-**Verify:**
-```sh
-docker exec "$CONTAINER" psql -U postgres -c 'SELECT 1' >/dev/null && echo OK
-```
-
-## Step 2 — Create role and database
-
-Add a password line to `~/.pgpass` first (generate a fresh random
-password — do not hardcode):
+Edit the complete request to reflect the intended file selection and backend.
+For local embeddings specifically, set `policy.embeddings.backend` to `"local"`
+and `policy.embeddings.model` to `null`. Keep credentials in the global setup.
+Then check the candidate and inspect its inventory/advice before registration:
 
 ```sh
-PASSWORD=$(openssl rand -hex 32)
-touch "$HOME/.pgpass"
-chmod 600 "$HOME/.pgpass"
-printf 'localhost:%s:%s:%s:%s\n' "$PORT" "$DB_NAME" "$DB_USER" "$PASSWORD" >> "$HOME/.pgpass"
+muninn config "$ROOT" --json --check - < initial.json
+muninn add "$ROOT" --json --input - < initial.json
+muninn preflight "$ROOT" --json > ready.json
+jq -e '.ok' ready.json
 ```
 
-Run the setup script (creates role, DB, extensions, grants):
+When first indexing is approved, guard the decision against configuration changes:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kamysh/muninn/main/muninn-setup/create-db-user.sh \
-  | bash -s -- --container "$CONTAINER" --port "$PORT" \
-                --user "$DB_USER" --db "$DB_NAME"
+jq '.data | {api_version:1, expected_family_id:.family_id,
+  expected_revision:.revision}' ready.json > start.json
+muninn start "$ROOT" --json --input - < start.json
 ```
 
-**Verify:**
-```sh
-psql -h localhost -p "$PORT" -U "$DB_USER" -d "$DB_NAME" -c '\conninfo' >/dev/null && echo OK
-```
+Check every command's exit status and JSON `ok`; stop the sequence on an error.
+These JSON files are temporary request/response artifacts, not stored config.
+An enabled family discovers worktrees automatically. Policy saves for an enabled
+family can trigger reconciliation. Do not repeatedly add each linked worktree.
+For an existing family, inspect `config PATH --json` and use the skill's complete
+revision-guarded check/apply request; do not reuse an initial registration request.
 
-## Step 3 — Install binaries
+## Verify the result
 
-```sh
-mkdir -p "$HOME/.local/bin"
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64)  TARBALL=muninn-darwin-arm64.tar.gz ;;
-  Darwin-x86_64) TARBALL=muninn-darwin-amd64.tar.gz ;;
-  Linux-x86_64)  TARBALL=muninn-linux-amd64.tar.gz ;;
-  Linux-aarch64) TARBALL=muninn-linux-arm64.tar.gz ;;
-  *) echo "Unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-esac
-curl -fsSL "https://github.com/kamysh/muninn/releases/latest/download/${TARBALL}" \
-  | tar -xz -C "$HOME/.local/bin"
-chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
-```
+Report each observed outcome separately:
 
-Do **not** run `xattr -d com.apple.quarantine` on these files. The
-quarantine flag is only set on browser downloads — `curl` does not set
-it, so the command will error with "Permission denied" / "no such xattr"
-even though nothing is wrong. Skip the step entirely.
+- Three binary versions and installation paths.
+- Database connection and required extensions under the application role.
+- Family policy, indexing authorization and preflight warnings.
+- Daemon status and indexing completion/error evidence.
+- A fresh client MCP connection and a known-term search in the intended checkout.
+- Skill discovery in the chosen client; optional reminder behavior if installed.
 
-**Verify:**
-```sh
-muninn --help >/dev/null && echo OK
-```
+`muninn status` is a registry overview. Its path form, and `pause`, `resume` and
+`remove`, require the registered locator displayed there; arbitrary worktree paths
+are supported by code search and policy commands, not those legacy controls.
+`remove` deletes the family's code index, including its worktree graphs. Removing
+one worktree should use Git's normal workflow and daemon reconciliation instead.
+Curated knowledge remains keyed by exact repository-path strings.
 
-## Step 4 — Write config and migrate (`muninn init`)
+## Development boundaries
 
-`muninn init` writes `~/.config/muninn/config.toml` (chmod 600 — it may
-hold an API key) **and** runs the schema migrations, in one
-non-interactive step. Pass settings as `key=value` positional arguments:
-dotted keys, TOML values with a bare-string fallback so `backend=local`
-works without extra quoting.
+The build uses tokio-postgres and the Kryzhen Rust library. Never run SQLx migrate,
+revert or offline-cache commands for this source tree. Existing migration blocks
+are immutable; append semantically related blocks or add semantic filenames.
+`migrations/repo/` is one template applied to each family application schema.
+AGE creates and removes its own graph schemas through its API.
 
-Check for an existing config first — if `~/.config/muninn/config.toml` is
-already present (the **State detection** probe covers this), read it and
-confirm the values match your variables instead of re-running `init`. Do
-**not** overwrite a config you did not author without user confirmation.
-
-```sh
-muninn init \
-  database.host=localhost \
-  database.port=${PORT} \
-  database.dbname="${DB_NAME}" \
-  database.user="${DB_USER}" \
-  embeddings.backend="${EMBEDDING_BACKEND}"
-```
-
-For `voyage`/`openai`, also pass the model and key (ask the user for the
-key — do not invent or fish for one from the environment):
-
-```sh
-muninn init \
-  database.host=localhost database.port=${PORT} \
-  database.dbname="${DB_NAME}" database.user="${DB_USER}" \
-  embeddings.backend=voyage \
-  embeddings.model=voyage-code-3 \
-  embeddings.api_key="$VOYAGE_KEY"
-```
-
-`init` is idempotent — rerun it to re-apply migrations or change global
-settings (or use `muninn config set --global key=value`).
-
-**Verify:**
-```sh
-muninn status >/dev/null && echo OK
-```
-
-## Step 5 — Start the indexer daemon (REQUIRED)
-
-The indexer is not optional. Without it, the index never updates on
-file changes and searches silently return stale results — there is no
-error to grep for, so this is the most common silent failure.
-
-### macOS (launchd)
-
-**Plist location depends on where `$HOME` lives.** When the user's home directory
-is on an external volume (`$HOME` starts with `/Volumes/`), launchd silently
-refuses to load plists from `~/Library/LaunchAgents` — both at login scan and
-via `launchctl bootstrap`. In that case the plist must go in `/Library/LaunchAgents`
-(the system-wide agents directory on the internal volume). The service still runs
-as the user, not as root.
-
-Detect and set variables first:
-
-```sh
-case "$HOME" in
-  /Volumes/*) PLIST_DIR="/Library/LaunchAgents"; NEEDS_SUDO=1 ;;
-  *)           PLIST_DIR="$HOME/Library/LaunchAgents"; NEEDS_SUDO=0 ;;
-esac
-```
-
-Write the plist (keep it minimal — extra keys like `EnvironmentVariables` or
-`StandardOutPath` are not needed and can cause silent failures on some setups):
-
-```sh
-[ "$NEEDS_SUDO" = 1 ] && WRITE_CMD="sudo tee" || WRITE_CMD="tee"
-$WRITE_CMD "$PLIST_DIR/org.muninn.index.plist" >/dev/null <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>org.muninn.index</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${HOME}/.local/bin/muninn-index</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-EOF
-[ "$NEEDS_SUDO" = 1 ] && sudo chown "$(id -un)" "$PLIST_DIR/org.muninn.index.plist"
-[ "$NEEDS_SUDO" = 1 ] && sudo chmod 600 "$PLIST_DIR/org.muninn.index.plist" \
-                      || chmod 600 "$PLIST_DIR/org.muninn.index.plist"
-[ "$NEEDS_SUDO" = 1 ] \
-  && sudo launchctl bootstrap gui/$(id -u) "$PLIST_DIR/org.muninn.index.plist" \
-  || launchctl bootstrap gui/$(id -u) "$PLIST_DIR/org.muninn.index.plist"
-```
-
-### Linux (systemd user service)
-
-```sh
-mkdir -p "$HOME/.config/systemd/user"
-cat > "$HOME/.config/systemd/user/muninn-index.service" <<'EOF'
-[Unit]
-Description=Muninn indexer daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/muninn-index
-Restart=on-failure
-RestartSec=5
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user daemon-reload
-systemctl --user enable --now muninn-index
-```
-
-**Verify (both platforms):**
-```sh
-sleep 2
-pgrep -fl muninn-index >/dev/null && echo OK
-```
-
-Logs:
-- macOS (if plist has `StandardOutPath`): `tail -f /tmp/muninn-index.log`; otherwise check `log show --predicate 'process == "muninn-index"' --last 5m`
-- Linux: `journalctl --user -u muninn-index -f`
-
-## Step 6 — Register MCP server with Claude Code
-
-```sh
-claude mcp add --scope user muninn "$HOME/.local/bin/muninn-mcp"
-```
-
-Use `--scope user`, never `--scope project`. Muninn is a system-wide
-tool, not project-local.
-
-**Verify:**
-```sh
-claude mcp list 2>&1 | grep -E '^muninn:.*Connected' && echo OK
-```
-
-If status is anything other than `Connected`, the MCP server is
-crashing on startup. Run `muninn-mcp` directly to see stderr.
-
-## Step 7 — Install the muninn skill and Claude Code hooks
-
-The skill, hooks, and a `~/.claude/CLAUDE.md` section work together as a
-unit — the skill alone is not enough. The complete guided procedure is in
-[`docs/claude-code-setup/INSTALL.md`](docs/claude-code-setup/INSTALL.md).
-
-Hand that directory to Claude Code with:
-
-> **"Walk me through installing this. Show me each change before applying
-> it and wait for my approval."**
-
-Claude Code will read the reference files (`skill/SKILL.md`, `CLAUDE.md`,
-`settings.json`), compare them against what is already on the machine,
-propose the minimal diff for each step, and apply it only after you confirm.
-
-## Step 8 — Register and configure the first family
-
-Read [the shared agent skill](docs/claude-code-setup/skill/SKILL.md). Inspect the
-creation policy and inventory before registering a new repo/directory:
-
-```sh
-REPO=/path/to/repo
-muninn preflight "$REPO" --json
-muninn add "$REPO" --json
-muninn config "$REPO" --json
-```
-
-`add --json` registers without indexing. Use `--input -` with a complete initial
-JSON policy when configuration needs refinement. Review preflight and the saved
-policy, then explicitly start with `muninn start "$REPO" --json` (the skill
-shows the guarded request). Inspect/change existing families with
-`config PATH --json` and complete checked/applied JSON requests. No repo TOML
-file is created for a database-managed family.
-
-An enabled Git family discovers/indexes linked worktrees automatically. Select
-the actual checkout for code search; all worktrees share the family policy.
-Incomplete Git operations retain the last completed index. Ordinary migrations
-run automatically; importing pre-1.0 configuration is a separate one-time upgrade.
-
-## Final verification gate
-
-All nine lines must print `OK`. If any fails, fix that step before
-declaring the install complete.
-
-```sh
-muninn status >/dev/null                                                && echo OK  # 1
-docker ps --filter "name=^${CONTAINER}$" --format '{{.Names}}' \
-  | grep -qx "$CONTAINER"                                               && echo OK  # 2
-command -v muninn-index >/dev/null                                      && echo OK  # 3
-pgrep -fl muninn-index >/dev/null                                       && echo OK  # 4
-{ launchctl list 2>/dev/null | grep -q org.muninn.index; } \
-  || { systemctl --user is-active muninn-index >/dev/null 2>&1; }       && echo OK  # 5
-claude mcp list 2>&1 | grep -qE '^muninn:.*Connected'                   && echo OK  # 6
-[ -f "$HOME/.claude/skills/muninn/SKILL.md" ]                           && echo OK  # 7
-jq -e 'any(.hooks.UserPromptSubmit[]?.hooks[]?; .command | test("mcp__muninn__search_hybrid"))' \
-  "$HOME/.claude/settings.json" >/dev/null                              && echo OK  # 8
-jq -e 'any(.hooks.SessionStart[]?.hooks[]?;      .command | test("muninn skill"))' \
-  "$HOME/.claude/settings.json" >/dev/null                              && echo OK  # 9
-```
-
-## Upgrading an existing install
-
-The **State detection** probes above are written for a *fresh* install — on a
-machine that already has muninn they all pass, so re-running the steps is a
-no-op. To move an existing install to a new release, do it explicitly. The DB
-container, role, and `config.toml` are already in place; only the binaries and
-the running processes change:
-
-1. **Replace the binaries** — re-run **Step 3**; the tarball overwrites
-   `~/.local/bin/muninn`, `muninn-index`, and `muninn-mcp` in place.
-2. **Restart the daemon** so it execs the new binary:
-   - macOS:  `launchctl kickstart -k gui/$(id -u)/org.muninn.index`
-   - Linux:  `systemctl --user restart muninn-index`
-3. **Pick up the new MCP server** — Claude Code launches `muninn-mcp` on demand
-   from the same path, so a new Claude Code session uses the new binary; no
-   `claude mcp add` is needed.
-
-Schema migrations apply automatically: the first run of any new binary
-(`muninn`, the daemon, or the MCP server) brings the database up to date.
-Migrations are forward-only and idempotent — there is no manual migration step,
-and the existing `config.toml` keeps working unchanged.
-
-**Verify:**
-```sh
-muninn status >/dev/null && echo OK             # CLI talks to the migrated DB
-pgrep -fl muninn-index   >/dev/null && echo OK  # daemon up on the new binary
-```
-
-## Uninstalling muninn
-
-Reverse of the install. **The database / container steps are destructive and
-irreversible — confirm with the user first. If the `postgres-ai` container is
-shared with mimir, do NOT remove the container or volume; drop only muninn's
-database and role.**
-
-1. **Stop and remove the daemon:**
-   - macOS:  `launchctl bootout gui/$(id -u)/org.muninn.index 2>/dev/null; rm -f "$HOME/Library/LaunchAgents/org.muninn.index.plist"; sudo rm -f "/Library/LaunchAgents/org.muninn.index.plist"` (the `sudo` path only applies when home is on an external volume — see Step 5)
-   - Linux:  `systemctl --user disable --now muninn-index; rm -f "$HOME/.config/systemd/user/muninn-index.service"; systemctl --user daemon-reload`
-2. **Unregister the MCP server:** `claude mcp remove muninn` (restart Claude Code to apply).
-3. **Remove the binaries:** `rm -f "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"`
-4. **Remove config and state:** `rm -rf "$HOME/.config/muninn" "$HOME/.local/state/muninn"`, and delete muninn's line from `~/.pgpass` (the `localhost:${PORT}:${DB_NAME}:${DB_USER}:…` entry — edit carefully, the file serves all your PostgreSQL connections).
-5. **Family registrations:** `muninn remove <path>` removes registered index data; review its destructive scope before using it. Database-managed families have no required `.muninn.toml` marker. Deleting an old marker does not unregister them.
-6. **Drop the database and role** (confirm first):
-   ```sh
-   docker exec "$CONTAINER" psql -U postgres -c "DROP DATABASE IF EXISTS \"${DB_NAME}\";"
-   docker exec "$CONTAINER" psql -U postgres -c "DROP ROLE IF EXISTS \"${DB_USER}\";"
-   ```
-   Only if the container is muninn-only (**not** shared with mimir) and the user
-   wants it gone entirely:
-   ```sh
-   docker rm -f "$CONTAINER" && docker volume rm "$VOLUME"
-   ```
-
-**Verify removed:**
-```sh
-pgrep muninn       # prints nothing
-command -v muninn  # prints nothing
-```
-
-## Known errors → fixes
-
-| Error | Cause | Fix |
-|---|---|---|
-| `Cannot connect to the Docker daemon` | Daemon not running. | Tell the user to start Docker Desktop. Do not try to start it yourself. |
-| `docker: Error response from daemon: Conflict. The container name "/postgres-ai" is already in use` | Name collision with an unrelated container. | Pick a different `CONTAINER`. Do **not** delete the existing one without user confirmation — it may hold data. |
-| `bind: address already in use` on port 5432 | Another postgres or app on that port. | Pick a different `PORT`. Update `~/.pgpass`, `config.toml`, and the `docker run -p` flag together. |
-| `xattr: [Errno 13] Permission denied` on `~/.local/bin/muninn*` | No quarantine flag exists (curl-downloaded). | Skip the `xattr -d` step entirely. The binaries are runnable as-is. |
-| `~/.pgpass` ignored | Wrong permissions. | `chmod 600 ~/.pgpass`. |
-| `muninn status` succeeds but search results are stale | Indexer daemon is not running. | Re-do Step 5. Check the verify line passes. |
-| MCP server shows `Failed to connect` | `muninn-mcp` crashing on startup. | Run `muninn-mcp` directly in a shell; the panic/error message goes to stderr. Usually a DB connectivity or config issue. |
-| `launchctl bootstrap` returns `Bootstrap failed: 5: Input/output error` | Home directory is on an external volume (`$HOME` starts with `/Volumes/`). launchd refuses to load plists from external volumes. | Use `/Library/LaunchAgents` instead of `~/Library/LaunchAgents` — see the `NEEDS_SUDO` path in Step 5. |
-| launchd plist present but daemon silently not loaded at login | Plist permissions are not `600`, or plist is in `~/Library/LaunchAgents` on an external volume. | `chmod 600` the plist; if home is on an external volume, move plist to `/Library/LaunchAgents` per Step 5. |
-
-## Anti-patterns — things NOT to do
-
-- **Do not use `muninn config edit` (it opens `$EDITOR` and blocks).**
-  Use the non-interactive forms: `muninn init key=value …` (Step 4),
-  `muninn add <path> [key=value …]` (Step 8), and `muninn config set
-  (--global | --repo <path>) key=value …` to change config later.
-- **Do not skip Step 5.** The CLI works without the daemon, which makes
-  this failure mode invisible until the user notices stale results.
-- **Do not delete or rename existing Docker containers/volumes to free a
-  name.** Confirm with the user first. Data loss is irreversible.
-- **Do not pick port 6000 on macOS** — it is X11. Likewise 5000 (AirPlay
-  Receiver) and any port already shown by `lsof -nP -iTCP -sTCP:LISTEN`.
-- **Do not register the MCP server at `--scope project`.** Muninn is
-  installed once per user, not per repo.
-- **Do not chase `xattr` permission errors on curl-downloaded files.**
-  Skip the step.
-- **Do not invent API keys** for `voyage`/`openai` embedding backends.
-  Ask the user, or default `EMBEDDING_BACKEND=local`.
-- **Do not overwrite existing config files** (`~/.config/muninn/config.toml`)
-  without reading them first. An existing config may have valid settings — check
-  before clobbering. See Step 4.
-- **Do not declare install complete** before running the **Final
-  verification gate** above and seeing six `OK` lines.
-
-## Companion tool
-
-If you are also installing [mimir](https://github.com/kamysh/mimir) (the
-belief-graph MCP server), the two tools can share one postgres-ai
-container — just create separate roles and databases. See mimir's own
-`AGENTS.md` for its install procedure.
+Keep credentials and machine-specific backups outside Git. Treat files under `docs/plans/` and `docs/superpowers/` as historical design
+records, not current installation instructions. See [the formal-model boundary](spec/README.md)
+before claiming that an Agda theorem proves runtime behavior.

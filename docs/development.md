@@ -1,224 +1,221 @@
 # Building and development
 
-## Prerequisites
+## Building and testing
 
-- [Nix](https://nixos.org/download) with flakes enabled
-- PostgreSQL 16+ with [pgvector](https://github.com/pgvector/pgvector) and [Apache AGE](https://age.apache.org/) (or use the [kamysh/postgres-ai](https://hub.docker.com/r/kamysh/postgres-ai) Docker image)
+Use the pinned Nix flake from a source checkout containing the intended version:
 
-## Enter the dev shell
-
-All tools (Rust, sqlx-cli, Agda, etc.) are provided by the Nix dev shell:
-
-```bash
+```sh
 nix develop
+cargo build --locked
+cargo test -p muninn-core --lib parser::tests
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The shell sets:
-- `DATABASE_URL=postgresql://localhost/muninn_dev`
-- `TEST_DATABASE_URL=postgresql://localhost/muninn_test`
+These are development commands, not a claim that every check has passed on every
+platform. The database distribution for integration work is
+[postgres-ai](https://github.com/kamysh/postgres-ai). It supplies compatible
+PostgreSQL/pgvector/AGE components; independently assembling them is an
+[advanced, non-recommended alternative](own-database.md).
 
-The local embedding backend uses model2vec (static token embeddings) — pure Rust, no ONNX runtime or native ML library. The model (~120 MB) is downloaded from Hugging Face on first use and cached; nothing is linked at build time.
+The dev shell exports example `DATABASE_URL`/`TEST_DATABASE_URL` values, but the
+application reads `~/.config/muninn/config.toml` and `~/.pgpass`. Do not treat the
+shell's example variables as proof of a disposable database target. The guarded
+integration harness supplies its own credentials and identity checks:
 
-## Database setup
-
-```bash
-createdb muninn_dev
-createdb muninn_test
-sqlx migrate run
+```sh
+# Inside the dev shell, with Docker and the harness's pinned image available.
+bash muninn-setup/test-persistence.sh
 ```
 
-## Common commands
+Read the script's image, port, container and resource requirements first. It uses
+a disposable container, a temporary data filesystem, generated credentials and
+an ownership marker, and verifies cleanup. It refuses a conflicting container
+or port. Some legacy integration tests use different setup conventions; do not
+run an unreviewed broad database test suite against your normal configuration.
 
-| Task | Command |
-|------|---------|
-| Build (debug) | `cargo build` |
-| Build (release) | `cargo build --release` |
-| Test (all) | `cargo nextest run` |
-| Test (single crate) | `cargo nextest run -p muninn-core` |
-| Test (single test by name) | `cargo nextest run -p muninn-core -- types::tests::line_range_valid_when_start_equals_end` |
-| Lint | `cargo clippy -- -D warnings` |
-| Format | `cargo fmt` |
-| Watch mode | `cargo watch -x build` |
-| Regenerate offline query cache | `cargo sqlx prepare --workspace` |
-| Apply pending migrations | `sqlx migrate run` |
-| Roll back one migration | `sqlx migrate revert` |
-| Type-check Agda spec | `cd spec && agda Muninn.agda` |
-| Build (Nix-managed install) | `nix build` |
-| Build a portable release binary | `cargo build --release --target=<triple>` |
+For distributable binaries:
 
-After changing any `sqlx::query!` macro, run `cargo sqlx prepare --workspace` to update the offline query cache (`.sqlx/` directory). This cache lets CI compile without a live database. The CI build will fail if the cache is stale — commit the updated `.sqlx/` files along with your SQL changes.
-
----
-
-## Architecture
-
-This section explains the non-obvious design decisions. Reading code is faster once you understand why things are shaped the way they are.
-
-### Why the indexer is database-driven
-
-The indexer daemon does not scan the filesystem for repos. It queries the `repos` table. This means adding or removing a repo via the CLI takes effect in the daemon within seconds — the CLI sends `NOTIFY muninn_repos_changed` after any mutation, and the daemon wakes up and re-queries. There is also a 60-second fallback poll because NOTIFY is not durable: it is delivered only to clients connected at the moment the notification fires, so a daemon that was down during a CLI operation would miss it entirely.
-
-When the daemon receives a repo change (or the 60-second timer fires), it calls `scan_and_dispatch`, which queries all registered repos and makes one of two decisions per repo:
-
-- If the repo has `indexed_at IS NOT NULL` and no watcher running, spawn a file-watcher task (`notify` crate).
-- If `indexed_at IS NULL` and `ever_indexed` is true, abort the existing watcher (if any) and spawn a full reindex task. The watcher is aborted first to prevent concurrent chunk mutations in the same table.
-
-The `ever_indexed` column distinguishes "freshly registered, never indexed" (skip — the user must run `muninn add` which does the first index in the foreground) from "was indexed, then reset via `muninn reindex`" (daemon must act).
-
-### Why per-repo chunk tables
-
-Each registered repo gets its own PostgreSQL table, named `chunks_<uuid>` where `uuid` is the repo's primary key in the `repos` table. Each table has a `VECTOR(N)` column where N is the embedding dimension chosen at registration time.
-
-This design is forced by how vector columns work: a `VECTOR(512)` column cannot store a `VECTOR(1024)` embedding — the type is parameterised by dimension. Because different repos can use different embedding backends, and different backends produce different dimensions (local=512, voyage=1024, openai=1536), a single shared `chunks` table is not viable unless all repos use the same dimension. The per-repo table design sidesteps this entirely.
-
-The consequence is the DimFrozen invariant: once a repo's embedding dimension is recorded in `repos.embedding_dim`, it cannot change without dropping and recreating the table. `muninn remove` + `muninn add` is the supported migration path. The dimension is recorded at `muninn add` time by calling `expected_dimension(&eff.embeddings)`, which maps (backend, model) → fixed integer. This function must return a stable value — see the contributor note in the Embedding backends section.
-
-Per-repo AGE graphs follow the same pattern: each repo gets a graph named `code_graph_<uuid>`, created alongside the chunks table in `store::register_repo`.
-
-### The distributed indexer lock
-
-`repos.indexing_heartbeat` is a lightweight distributed mutex. Before starting to index a repo, the daemon calls `store::try_lock_repo`, which does a conditional update:
-
-```sql
-UPDATE repos
-   SET indexing_heartbeat = NOW()
- WHERE id = $1
-   AND (indexing_heartbeat IS NULL
-        OR indexing_heartbeat < NOW() - INTERVAL '2 minutes')
+```sh
+nix build .#muninn-static
+result/bin/muninn --version
+result/bin/muninn-index --version
+result/bin/muninn-mcp --version
 ```
 
-If `rows_affected == 1`, the lock was acquired. If `0`, another process holds a live lock and the repo is skipped for this cycle.
+On Linux this target links statically with musl. The build includes native
+OpenSSL and a C++ dependency via the tokenizer; it is not a pure-Rust dependency
+stack. macOS uses system frameworks. A plain `cargo build --release` does not
+promise a portable static executable. `nix build .#muninn` is the Nix-managed
+variant, which may reference its Nix store dependencies.
 
-During indexing, a background task pulses the heartbeat every 60 seconds. The stale threshold is 120 seconds — exactly 2× the pulse interval. This allows one missed pulse (e.g. due to a transient network delay to the database) before the lock is declared stale and can be taken over by another indexer. The lock is released unconditionally in a finally-equivalent after `index_repo` completes (success or error).
+The [release workflow](../.github/workflows/release.yml) builds Linux x86_64,
+Linux ARM64 and macOS ARM64. Other assets, such as macOS Intel, must be verified
+on the particular release. See [installation/version selection](get-started.md#3-install-matching-binaries).
 
-`muninn remove` checks `repo.is_lock_live()` before deleting any index data. If the lock is live, removal is refused. This prevents a race where an in-progress indexer writes chunks into a table that the CLI just deleted.
+## Architecture and rationale
 
-### How repo resolution works in muninn-mcp
+The four crates are `core` (shared implementation), `cli` (`muninn`), `indexer`
+(`muninn-index`) and `mcp` (`muninn-mcp`). All use PostgreSQL through
+`tokio-postgres`; SQLx migration/cache instructions from older plans do not apply.
 
-Code-search MCP tools accept `repo` (the target checkout/directory path) or `cwd` (a directory inside it), with `repo` taking precedence. Git discovery and database registration resolve worktrees and directories without `.muninn.toml`; marker lookup remains only a legacy fallback. Searches use the selected checkout's last completed index. Knowledge tools use exact repository-path keys separately. See the shared agent skill for the current usage and configuration workflow.
+The index saves repeated exploration and embedding work. Linked worktrees need
+independent searchable views of largely identical files. Independent full copies
+multiply both storage and index-building cost. Sharing a mutable main index alone
+would instead make a worktree's results change when main updates. The current
+moving-base/file-delta design addresses both problems.
 
-The MCP server does not cache a list of registered repos in memory. It resolves the repo root from the filesystem marker on every query, then looks up the repo record in the database by path. The decoupling means the MCP server starts instantly with no warmup query and never gets out of sync with the `repos` table.
+### Storage ownership
 
-### Config merge semantics
+| Area | Ownership and contents |
+| --- | --- |
+| `public.repos` | Family routing, identity, preparation state and indexing authorization; retains legacy locator fields |
+| `repo_<uuid>` | One application schema per Git family or independent directory: chunks, file versions, base/deltas, checkout registry and saved policy/history |
+| AGE graph schemas | Code symbols/relationships; Git checkouts have separate graphs. AGE creates/removes these through its API |
+| `public.knowledge` | Curated notes, keyed by exact repository-path strings; currently separate from family identity |
 
-The merge logic in `EffectiveConfig::merge(global, repo_cfg, dir_name)` is section-level, not key-level. If `repo_cfg.embeddings` is present, it entirely replaces `global.embeddings`. If it is absent, `global.embeddings` is used as-is. Individual key merging is not supported — partial overrides create confusing precedence interactions and are hard to reason about statically.
+Kryzhen's Rust library creates application schemas while applying migrations.
+Each migration directory is one dependency graph applied to **one target schema**:
+`public/` targets public; `repo/` is replayed as a template for each application
+schema. AGE graph schemas are not Kryzhen targets and do not belong in `repo/`.
 
-All config structs carry `#[serde(deny_unknown_fields)]`. Unknown keys in TOML are rejected at parse time with a clear error. Typos do not silently inherit the global value.
+Embedding dimension is fixed for the family's vector column. Current policy
+operations reject changes to the registered embedding profile; there is no general
+model-migration command. Removing a family is destructive, not an ordinary way
+to edit its settings.
 
-### The Agda formal specification
+### Worktree indexing and search
 
-`spec/Muninn.agda` and its submodules (`spec/Muninn/Types.agda`, `spec/Muninn/Index.agda`, `spec/Muninn/Concurrency.agda`) are a machine-checked formal model of the system's core invariants. The spec does not generate code and is not wired into the build. It is type-checked with Agda separately and exists to:
+`repo_resolver` obtains checkout roots and Git common-directory identity from Git.
+`family_store` coordinates identity/preparation; `family_policy` implements policy,
+preflight and start; `worktrees` reconciles file versions and checkout graphs.
 
-1. Make invariants precise and checkable — "no empty chunks" is a theorem, not a comment in a README.
-2. Catch implementation drift — when you change Rust code that touches an invariant, updating and re-checking the spec verifies that the invariant still holds as stated.
+The primary checkout is the current base. `base_files` maps its paths to shared
+`file_versions`; `file_deltas` contains only checkout-specific path overrides or
+deletions. Chunks and embeddings are stored with file versions. When the base
+moves, formerly inherited versions needed by another checkout become references
+in its delta. Redundant overrides are removed. This changes representation while
+preserving other published views; it does not force every worktree to adopt main.
 
-Run the spec check (without `--safe`, since `Concurrency.agda` has intentional postulates):
+Family locking serializes publication. Base changes, deltas and the reconciled
+checkout's graph commit transactionally. Embeddings can be reused for matching
+content. Graph replacement deletes edges before vertices in bounded batches,
+then reconstructs the selected checkout's relationships. Graphs themselves are
+not shared in the same way as chunk/vector content.
 
-```bash
-cd spec && agda Muninn.agda
+Text/vector queries combine visible base chunks with the selected delta. The
+base has partial GIN/HNSW indexes; semantic delta search is exact. Excluded paths
+mask base candidates before ranking. Hybrid search ranks each modality across
+base and delta before RRF in one SQL statement/snapshot. Approximate base vector
+retrieval still has recall tradeoffs; a small RRF score is not a confidence estimate.
+
+File watching and fallback Git discovery find edits, newly linked checkouts and
+worktree removal. Removal from a successfully read Git registry retires the
+checkout and drops its AGE graph. A root that is unavailable but remains registered
+retains its data. Discovery does not invoke `git worktree prune`.
+
+**Merge/rebase/conflicts suspend publication for the affected checkout.** It keeps
+its last completed index; an uninitialized checkout has no completed view. The
+watcher retries after completion/abort. Ordinary edits are indexable. Git hooks
+are not required for correctness; the current discovery/watch/poll path provides
+reconciliation. The SQL transaction cannot make the external filesystem atomic
+against uncooperative concurrent writers.
+
+Structural edges are name-based candidates rather than language-server bindings.
+For Git call resolution, matches in the caller's file take priority, all local
+ties are kept, and otherwise all checkout-wide name matches are retained. Inspect
+source to establish the actual binding.
+
+### Configuration and daemon coordination
+
+Initial `add`/save does not start indexing. Explicit `start` or the TUI Start
+confirmation enables the family and runs foreground indexing; the daemon can
+continue an interrupted authorized run. New linked worktrees inherit family policy.
+
+The global config holds connection/credentials and service/legacy settings.
+New family policy uses shipped creation defaults. Stored defaults and revisioned
+policy do not silently change when global settings or a new binary change defaults.
+Read-only policy queries never prepare schemas or write configuration. The current
+policy is locked against stale-policy publication during reconciliation.
+
+The daemon reads registrations from the database, receives `muninn_repos_changed`
+notifications and has a 60-second fleet fallback. Family watchers additionally
+reconcile their Git inventory. Notifications improve responsiveness; they are not
+durable job records. Existing directory and legacy registrations use the pipeline
+appropriate to their registration state.
+
+Indexing exclusion uses advisory locks and cooperative preemption, not the old
+`indexing_heartbeat` mechanism. Removal waits for indexing coordination rather
+than merely refusing every active index. Family publication also holds its
+transaction advisory lock.
+
+### MCP and knowledge
+
+The MCP server is a stdio JSON-RPC process exposing eight tools. Code search
+requires `repo` or `cwd`; explicit `repo` wins. Resolve to the actual checkout,
+not the MCP process's working directory. Git/DB resolution does not require
+`.muninn.toml`; a legacy fallback remains.
+
+Curated knowledge currently has a different identity rule: exact `repo` strings.
+Use an established main-checkout key for shared notes. Do not create accidental
+note silos for temporary worktrees. See the [agent skill](claude-code-setup/skill/SKILL.md).
+
+### Current limitations
+
+- No 100-worktree load measurement or established large-delta latency/recall budget.
+  Delta search cost grows with changed chunks; graph reconstruction can parse
+  many files even when chunks/vectors are reused.
+- Search responses currently contain results, not freshness/suspension metadata.
+  Inspect Git state and daemon logs when currentness matters.
+- `status PATH`, `pause`, `resume`, `remove` look up the registered locator, not
+  arbitrary worktree paths. `config PATH --json` and code searches resolve families.
+- Worktree queries do not implement the legacy vendor ranking penalty or lazy
+  embedding warm-up. Tier-2 chunks without vectors still participate in text search.
+- New-family default backend is Voyage; global local-backend selection is not
+  inherited. Existing embedding-profile changes are unsupported.
+- `dsn_override` and `max_connections` are parsed but unused; SSL modes and password
+  lookup have limits detailed in [Configuration](configuration.md).
+- Formal models contain abstractions and known runtime mismatches. See
+  [the proof boundary](../spec/README.md); type-checking alone does not close them.
+
+## Changing migrations
+
+Existing migration blocks are immutable: their recorded identity/checksum matters.
+Append semantically related blocks to the appropriate file, or introduce a semantic
+filename for a distinct set. Do not rename existing files or introduce numerical
+names merely to force ordering. Kryzhen orders by dependencies, including implicit
+in-file predecessors.
+
+`db.rs` embeds the public and repo directories and calls the Kryzhen library with
+an explicit target schema. Each block commits with its record; the whole set is
+not an outer all-or-nothing transaction. Preparation can resume after partial
+completion. AGE lifecycle is coordinated separately through its API.
+
+Normal startup/preparation applies pending migrations. Read-only inspect/check/
+preflight do not. Users do not need a separate migration script for upgrades.
+See [Upgrading](upgrading.md).
+
+## Contributing to parsers, embeddings and specifications
+
+Parser grammars, chunking and relationship extraction are in
+[`parser.rs`](../crates/core/src/parser.rs). Test representative source and edge
+cases, including generated/minified files; multiple symbols on one line must not
+multiply identical source spans into thousands of chunks.
+
+Embedding implementations live in [`embeddings.rs`](../crates/core/src/embeddings.rs).
+Adding a model requires agreement on a stable dimension and corresponding policy
+validation. Backend credentials belong in global configuration, not saved family
+policy JSON.
+
+Agda models live under `spec/`; [`spec/README.md`](../spec/README.md) distinguishes
+abstract laws from implementation guarantees and lists current gaps. For a final
+aggregate type check, from the source root:
+
+```sh
+nix develop --command sh -c 'cd spec && agda Muninn.agda'
 ```
 
-Invariants formalised (these must match the implementation):
-
-| Invariant | What it says | Where enforced |
-|-----------|-------------|----------------|
-| `ValidChunk` | No empty-content chunks | `store::upsert_chunk`, `pipeline.rs` |
-| `ValidStoredEmbedding` | Embedding length must equal `repos.embedding_dim` | `pipeline.rs` |
-| `BatchOutcome` | A totally-failed batch must not advance repo to Indexed state | `pipeline.rs` |
-| `DimFrozen` | Embedding dimension is immutable after registration | `store::register_repo`, indexer DimFrozen check |
-| `IsolatedGraph` | Chunks written to DB before symbols can reference them | `pipeline.rs` ordering |
-| `UniqueRepoPaths` | One registration per filesystem path | `UNIQUE` constraint on `repos.path` |
-| `Concurrency` | One indexer per repo; stale lock threshold 120 s | `store::try_lock_repo`, heartbeat pulse |
-
-When you make a change touching any of these, update the spec and re-run `agda Muninn.agda`. Use the `spec-reconcile` Claude Code skill for systematic audits.
-
----
-
-## Embedding backends
-
-The `EmbeddingBackend` trait lives in `crates/core/src/embeddings/`. `make_backend(&eff.embeddings)` dispatches to the correct implementation. `expected_dimension(&eff.embeddings)` returns the fixed output dimension for a (backend, model) pair.
-
-| Backend | Model | Dims |
-|---------|-------|------|
-| `local` | potion-base-32M (model2vec) | 512 |
-| `voyage` | voyage-code-3 | 1024 |
-| `openai` | text-embedding-3-small | 1536 |
-
-**Critical constraint for contributors:** `expected_dimension` must return a stable value for a given (backend, model) pair. Changing this value for an existing combination would invalidate all repos registered with that combination — their stored `embedding_dim` would no longer match what the backend produces, and every query would fail the DimFrozen check. If you add a new model or backend, the dimension is determined by what the embedding API actually returns and must match exactly.
-
----
-
-## Adding a language parser
-
-Parsers live in `crates/core/src/parser.rs`. Each language needs four additions:
-
-1. A tree-sitter grammar crate dependency in `crates/core/Cargo.toml`
-2. A match arm in `detect_language` mapping file extensions to a `Language` enum value
-3. A match arm in `chunk_file` mapping `Language` to a tree-sitter query for chunking
-4. A match arm in `extract_edges` mapping `Language` to a tree-sitter query for symbol edges
-
-Run `cargo nextest run -p muninn-core` after adding a parser. Tests in `parser.rs` cover round-trip parse → chunk → edge extraction.
-
----
-
-## Adding an embedding backend
-
-1. Add a variant to `EmbeddingBackend` enum in `crates/core/src/config.rs`
-2. Implement the `EmbeddingBackend` trait for the new backend in `crates/core/src/embeddings/`
-3. Add the dispatch case to `make_backend`
-4. Add the dimension to `expected_dimension` — this value is permanent once the backend ships
-5. Add the backend name to `docs/configuration.md`
-
----
-
-## Database migrations
-
-Migrations are SQL files in `migrations/`, numbered sequentially (`001_initial.sql` through the latest). They are embedded into the binary at compile time:
-
-```rust
-sqlx::migrate!("../../migrations").run(pool).await?
-```
-
-Migrations run automatically the first time any muninn binary connects (the CLI, the daemon, or the MCP server). Applied migrations are tracked in `_sqlx_migrations`. Migrations are idempotent — re-running is always safe.
-
-After adding or changing a `sqlx::query!` macro anywhere in the workspace:
-
-```bash
-cargo sqlx prepare --workspace
-```
-
-This regenerates `.sqlx/` — the offline query cache that allows CI to compile without a live database. Commit the updated `.sqlx/` files alongside your SQL changes.
-
----
-
-## Building distributable binaries
-
-There are two paths depending on whether you want a Nix-managed install on this
-machine, or a portable binary that can be copied elsewhere.
-
-### Nix-managed install (this machine only)
-
-```bash
-nix profile install .
-claude mcp add --scope user muninn ~/.nix-profile/bin/muninn-mcp
-```
-
-The `muninn` derivation is a plain Rust build (model2vec needs no native ML
-library). The resulting binary may embed a few Nix-store paths (e.g. libiconv
-on darwin), so the profile install keeps them as a GC root.
-
-### Portable release binary (copy anywhere)
-
-```bash
-# inside `nix develop` is fine, but cargo will work from any environment with
-# a Rust toolchain
-cargo build --release --target=aarch64-apple-darwin
-```
-
-All dependencies are pure Rust, so the build needs no native ML runtime and the
-result has no `libonnxruntime` or other native dependency. For a fully static,
-store-path-free binary use `nix build .#muninn-static`.
-
-Binaries land in `target/<triple>/release/`: `muninn`, `muninn-index`,
-`muninn-mcp`. The GitHub release workflow (`.github/workflows/release.yml`)
-does this for `linux-amd64`, `linux-arm64`, and `darwin-arm64`.
+Type-checking proves statements of that model, not a refinement proof of the Rust,
+SQL, Git detector or AGE implementation. Do not weaken a model just to describe an
+implementation defect. Historical plans are retained as records and marked as such;
+use this guide and current source for implemented behavior.

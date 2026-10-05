@@ -1,73 +1,121 @@
-# Agent setup — Muninn 1.0
+# Agent setup — Codex and Claude Code
 
-This directory contains the shared Muninn skill, a short global-instructions
-section, and Claude Code reminder-hook examples. The guidance applies to Codex
-and Claude Code; the hook settings file is specific to Claude Code.
+This directory retains its historical name but contains shared Muninn usage
+instructions for both clients. The skill explains **why and when** search and
+repository notes help, and **how** to select a checkout or configure its family.
+The `settings.json` hook example is specific to Claude Code.
 
-## Prerequisites
+## Before changing client settings
 
-Verify the installed binaries (`muninn --version`), global connection config
-(`muninn status`), and the existing Muninn MCP registration in the target client.
-Use the current installation's database and credentials. The skill describes
-repository registration, JSON configuration, preflight and explicit first start.
+Complete the [Muninn installation](../get-started.md): matching binaries, postgres-ai
+(or a deliberately chosen custom compatible stack), global connection settings,
+and a started/indexed family. Check binary versions and `muninn status`. Existing
+installations should reuse their database, credentials and client registration.
 
-Agree on the setup changes before applying them. Approval covers the agreed
-stage through verification; preserve unrelated instructions, hooks, permissions,
-MCP registrations and settings.
+Agree on the affected client settings and preserve unrelated instructions, hooks,
+permissions and MCP servers. Registration makes a tool available; useful guidance
+explains how to use it. Neither step guarantees that a particular client session
+has loaded the new configuration.
 
-## Skill and global instructions
+## Register the stdio MCP server
 
-| Client | Skill target | Global-instructions target |
-| --- | --- | --- |
-| Codex | `~/.codex/skills/muninn/SKILL.md` | Muninn guidance in `~/.codex/AGENTS.md` |
-| Claude Code | `~/.claude/skills/muninn/SKILL.md` | Muninn section in `~/.claude/CLAUDE.md` |
+Use the absolute installed `muninn-mcp` path. For the default binary destination:
 
-Compare `skill/SKILL.md` with the installed skill, then copy the approved version.
-Use `CLAUDE.md` here as the short Muninn guidance for either client; replace the
-existing Muninn section or update equivalent prose rather than duplicating it.
-The skill is client-neutral and contains the actual usage/configuration workflow.
+### Codex
 
-## Reminder hooks
-
-`settings.json` is a Claude Code reference, not a replacement for an existing
-settings file. Merge only the agreed Muninn entries. Its hooks explain when
-search helps, how to choose the checkout, and how to judge returned source.
-They do not search automatically, block file access, require a relevance score,
-create query sentinels, or require a writeback every turn.
-
-When upgrading older integration, replace the old Muninn hooks and remove their
-sentinel/rating requirements, including Muninn conditions in shared hooks.
-Preserve unrelated behavior in shared hooks; do not install a second reminder
-alongside an obsolete gate. Keep existing tool permissions unchanged unless
-permission changes are part of the agreement. The reference lists the four
-read-only code-search tools for installations that want explicit allow entries.
-
-Codex installations can retain their existing advisory Mimir/Muninn reminder;
-it should point to the updated skill. Do not copy Claude's settings file into
-Codex or replace a collaboration/permission hook with a tool-use reminder.
-
-## MCP registration
-
-The existing client registration should point to the installed `muninn-mcp`.
-For Claude Code, inspect it with `claude mcp list`. If setup requires a new
-registration, the user-scoped command is:
+Inspect existing registrations with `codex mcp list` and `codex mcp get muninn`.
+For a new registration:
 
 ```sh
-claude mcp add --scope user muninn ~/.local/bin/muninn-mcp
+codex mcp add muninn -- "$HOME/.local/bin/muninn-mcp"
+codex mcp list
 ```
 
-Changing a registration is part of the agreed setup stage, not a reason to
-reconfigure the database. Use the installed client's MCP controls for Codex.
+This configures a local process, not a remote HTTP service. See the
+[official Codex MCP instructions](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
-## Verification
+### Claude Code
 
-- Parse the edited JSON; inspect a focused diff for unrelated changes.
-- Exercise changed reminder commands with representative event input: they
-  should exit successfully without mutating repositories or invoking searches.
-- Verify the skill's read-only `config`/`preflight` examples against the installed
-  CLI, and code search with the intended checkout path.
-- Inspect a fresh MCP process's `tools/list` descriptions. Existing MCP processes
-  keep the executable they started with until reconnected.
-- Distinguish verified files/fresh-process behavior from what an already-open
-  client has loaded. Reload/reconnect through that client's controls or use a
-  new session when needed; do not kill unrelated sessions to force a reload.
+Inspect with `claude mcp list` and `claude mcp get muninn`. For a new registration:
+
+```sh
+claude mcp add --transport stdio --scope user muninn -- "$HOME/.local/bin/muninn-mcp"
+claude mcp list
+```
+
+User scope makes the local installation available across repositories. See the
+[official Claude MCP instructions](https://code.claude.com/docs/en/mcp).
+
+If a registration already exists, compare its executable path and intended scope;
+do not add a duplicate or overwrite unrelated settings. In either client the
+process must see the correct global Muninn configuration and database credentials.
+
+## Install the skill and global guidance
+
+| Client | User skill location for a new setup | Global instructions |
+| --- | --- | --- |
+| Codex | `~/.agents/skills/muninn/SKILL.md` | `~/.codex/AGENTS.md` (or the installation's configured Codex home) |
+| Claude Code | `~/.claude/skills/muninn/SKILL.md` | `~/.claude/CLAUDE.md` |
+
+Current Codex documentation uses `~/.agents/skills`. Some existing installations,
+including the maintainer's setup, discover `~/.codex/skills`; update the working
+location when that is the installation's actual skill source. Avoid installing
+duplicate skills under both roots. Confirm discovery in the target client.
+Sources: [Codex skills](https://learn.chatgpt.com/docs/build-skills),
+[Codex global instructions](https://learn.chatgpt.com/docs/agent-configuration/agents-md),
+[Claude skills](https://code.claude.com/docs/en/skills).
+
+Compare [skill/SKILL.md](skill/SKILL.md) with the existing installed skill, then
+copy the approved version into the chosen location. For a new standard Codex
+installation, from the Muninn source root:
+
+```sh
+mkdir -p "$HOME/.agents/skills/muninn"
+cp docs/claude-code-setup/skill/SKILL.md "$HOME/.agents/skills/muninn/SKILL.md"
+```
+
+For Claude Code:
+
+```sh
+mkdir -p "$HOME/.claude/skills/muninn"
+cp docs/claude-code-setup/skill/SKILL.md "$HOME/.claude/skills/muninn/SKILL.md"
+```
+
+Use [CLAUDE.md](CLAUDE.md) here as a short Muninn section for either client's
+global instructions. Merge or replace the existing Muninn section; do not replace
+the entire global file or duplicate equivalent prose.
+
+## Optional reminder hooks
+
+The skill and guidance work without hooks. [settings.json](settings.json) provides
+Claude reminders about selecting the checkout and inspecting results. Merge only
+the agreed entries into an existing settings file. Do not copy that file into
+Codex or replace a collaboration/permission hook with a search reminder.
+
+The reminders do not search automatically, block file reads, require a relevance
+score or demand a writeback each turn. When updating an older installation, remove
+obsolete **Muninn** sentinel/rating requirements, including Muninn conditions in
+shared hooks, while preserving unrelated behavior. Existing Mimir requirements
+are a separate setting. The reference also includes optional tool-allow entries;
+changing permissions requires its own agreement. The PostToolUse example needs
+`jq` on the hook process's PATH.
+
+Codex setups may retain an existing advisory reminder pointing to the shared
+skill. No additional Codex hook installation is required by Muninn.
+
+## Verify what actually loaded
+
+1. Verify the installed skill content and merged instructions/settings. If hooks
+   were changed, parse their JSON and run the reminder commands with representative
+   input; they should exit successfully without mutation or automatic searches.
+2. Reconnect Muninn through the client's controls, or start a new client session
+   to load the executable, skills and guidance. Do not kill unrelated sessions.
+3. Confirm Muninn's eight tools appear. `mcp list` verifies configuration; a real
+   tool call verifies the connected server.
+4. Ask for a known indexed term with `search_fulltext`, setting `repo` to the
+   actual checkout. Read the returned source and verify its checkout path.
+5. Check `config PATH --json` / `preflight PATH --json` with the installed CLI.
+   Successful policy inspection does not itself mean first indexing completed.
+
+Report fresh-process checks separately from behavior in an already-open client.
+Existing MCP processes retain the executable they started with until reconnected.

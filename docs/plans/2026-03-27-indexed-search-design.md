@@ -1,3 +1,9 @@
+> **Historical design/stage record.** This document preserves proposals and
+> progress reports from its date, including superseded decisions. It is not
+> a current installation procedure or completion report. For implemented 1.0 behavior,
+> see [Development](../../docs/development.md); for installation, see
+> [Getting started](../../docs/get-started.md) and [AGENTS.md](../../AGENTS.md).
+
 # muninn: Indexed Search MCP Server — Design
 
 **Date:** 2026-03-27

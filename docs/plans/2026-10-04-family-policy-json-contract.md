@@ -1,3 +1,9 @@
+> **Historical design/stage record.** This document preserves proposals and
+> progress reports from its date, including superseded decisions. It is not
+> a current installation procedure or completion report. For implemented 1.0 behavior,
+> see [Development](../../docs/development.md); for installation, see
+> [Getting started](../../docs/get-started.md) and [AGENTS.md](../../AGENTS.md).
+
 # Muninn 1.0.0: family policy and JSON configuration contract
 
 Status: **policy persistence, JSON read/write and native configuration TUI completed, 2026-10-04; start/runtime integration pending**.
