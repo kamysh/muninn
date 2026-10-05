@@ -917,7 +917,7 @@ async fn main() -> anyhow::Result<()> {
             let total: i64 = client
                 .query_one(
                     "SELECT COUNT(*) FROM mcp_usage \
-                     WHERE ts >= now() - ($1::int * interval '1 day')",
+                     WHERE ts >= now() - ($1::bigint * interval '1 day')",
                     &[&days],
                 )
                 .await?
@@ -929,7 +929,7 @@ async fn main() -> anyhow::Result<()> {
                 .query(
                     "SELECT tool, COUNT(*) AS count \
                      FROM mcp_usage \
-                     WHERE ts >= now() - ($1::int * interval '1 day') \
+                     WHERE ts >= now() - ($1::bigint * interval '1 day') \
                      GROUP BY tool \
                      ORDER BY count DESC",
                     &[&days],
