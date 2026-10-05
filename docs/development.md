@@ -95,7 +95,7 @@ During indexing, a background task pulses the heartbeat every 60 seconds. The st
 
 ### How repo resolution works in muninn-mcp
 
-MCP tools accept two ways to identify a repo: `repo` (an explicit absolute path) or `cwd` (the caller's working directory). When `cwd` is provided, `repo_resolver::find_repo_root` walks up the directory tree until it finds `.muninn.toml`. This is why the marker file must sit at the repo root — it is the anchor for resolution.
+Code-search MCP tools accept `repo` (the target checkout/directory path) or `cwd` (a directory inside it), with `repo` taking precedence. Git discovery and database registration resolve worktrees and directories without `.muninn.toml`; marker lookup remains only a legacy fallback. Searches use the selected checkout's last completed index. Knowledge tools use exact repository-path keys separately. See the shared agent skill for the current usage and configuration workflow.
 
 The MCP server does not cache a list of registered repos in memory. It resolves the repo root from the filesystem marker on every query, then looks up the repo record in the database by path. The decoupling means the MCP server starts instantly with no warmup query and never gets out of sync with the `repos` table.
 

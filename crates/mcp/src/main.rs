@@ -94,15 +94,8 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
             }
         }),
         "tools/list" => {
-            let fname = muninn_core::config::RepoConfig::FILE_NAME;
-            let walk_suffix = format!(
-                "Supply 'repo' (absolute path) or 'cwd' (current working directory) \
-                 — the nearest ancestor containing {fname} is used when 'repo' is absent."
-            );
-            let cwd_desc = format!(
-                "Current working directory. Used to resolve the repo by walking up \
-                 to the nearest {fname} when 'repo' is absent."
-            );
+            let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. No .muninn.toml is needed. Searches use the selected checkout's last completed index; incomplete Git operations retain that index.";
+            let cwd_desc = "Directory inside the target checkout or registered directory. Used when 'repo' is absent; no configuration marker is needed.";
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -115,8 +108,8 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string"},
-                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": cwd_desc},
                                     "limit": {"type": "integer"}
                                 },
                                 "required": ["query"]
@@ -124,13 +117,13 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                         },
                         {
                             "name": "search_fulltext",
-                            "description": format!("Full-text keyword search. {walk_suffix}"),
+                            "description": format!("Tokenized full-text keyword search, not literal substring or regex matching. {walk_suffix}"),
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string"},
-                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": cwd_desc},
                                     "limit": {"type": "integer"}
                                 },
                                 "required": ["query"]
@@ -143,8 +136,8 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string"},
-                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                    "cwd": {"type": "string", "description": (cwd_desc.clone())},
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": cwd_desc},
                                     "limit": {"type": "integer"}
                                 },
                                 "required": ["query"]
@@ -152,7 +145,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                         },
                         {
                             "name": "search_structural",
-                            "description": format!("Graph traversal — find related symbols. {walk_suffix}"),
+                            "description": format!("Find name-based related-symbol candidates, not compiler-verified bindings. For Git checkouts, call resolution prefers matches in the caller file, keeping ties; otherwise it keeps checkout-wide matches. Verify paths and source. {walk_suffix}"),
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -161,19 +154,19 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                         "type": "string",
                                         "enum": ["callers","callees","imports","defines","inheritors","inherits"]
                                     },
-                                    "repo": {"type": "string", "description": "Absolute path of the indexed repo. Optional if 'cwd' is provided."},
-                                    "cwd": {"type": "string", "description": (cwd_desc)}
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
+                                    "cwd": {"type": "string", "description": cwd_desc}
                                 },
                                 "required": ["symbol", "relation"]
                             }
                         },
                         {
                             "name": "record_knowledge",
-                            "description": "Store a curated knowledge item (note, lesson, or subsystem insight) for a repo. Items are embedded and searchable via search_knowledge. Provide 'id' to update an existing item.",
+                            "description": "Store a curated knowledge item under an exact repository-path key (no worktree/family resolution). Items are embedded and searchable via search_knowledge. Provide 'id' to update an existing item.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo":          {"type": "string", "description": "Absolute path of the repo this knowledge belongs to."},
+                                    "repo":          {"type": "string", "description": "Exact repository-path key for curated knowledge. Worktree paths are not resolved to a shared family; use the established main-checkout key for shared notes."},
                                     "title":         {"type": "string", "description": "Short title."},
                                     "body":          {"type": "string", "description": "Full content of the note or lesson."},
                                     "tags":          {"type": "array", "items": {"type": "string"}, "description": "Optional tags for categorisation."},
@@ -185,12 +178,12 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                         },
                         {
                             "name": "search_knowledge",
-                            "description": "Hybrid semantic + fulltext search over knowledge items stored for a repo.",
+                            "description": "Hybrid semantic + fulltext search over curated notes under an exact repository-path key; no worktree/family resolution. Use the established main-checkout key for shared notes.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string"},
-                                    "repo":  {"type": "string", "description": "Absolute path of the repo."},
+                                    "repo":  {"type": "string", "description": "Exact repository-path key, usually the main checkout path for shared notes; no worktree/family resolution."},
                                     "limit": {"type": "integer"}
                                 },
                                 "required": ["query", "repo"]
@@ -209,11 +202,11 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                         },
                         {
                             "name": "list_knowledge",
-                            "description": "List all knowledge items stored for a repo, ordered by most recently updated.",
+                            "description": "List knowledge for an exact repository-path key, ordered by most recently updated. Worktrees do not automatically share this key.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo": {"type": "string", "description": "Absolute path of the repo."}
+                                    "repo": {"type": "string", "description": "Exact repository-path key, usually the main checkout path for shared notes; no worktree/family resolution."}
                                 },
                                 "required": ["repo"]
                             }

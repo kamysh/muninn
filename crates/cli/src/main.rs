@@ -53,7 +53,7 @@ enum Commands {
     Add {
         /// Repository path
         path: std::path::PathBuf,
-        /// Initial key=value settings for the repo's .muninn.toml
+        /// Legacy TOML settings; use --json --input - for a database family policy
         #[arg(value_name = "KEY=VALUE")]
         set: Vec<String>,
         /// Register without running the initial index
@@ -113,7 +113,7 @@ struct ScopeArgs {
     /// Target the global config (~/.config/muninn/config.toml)
     #[arg(long, global = true)]
     global: bool,
-    /// Target a repository's .muninn.toml at this path
+    /// Legacy TOML scope; use config PATH --json for database family policy
     #[arg(long, global = true, value_name = "PATH")]
     repo: Option<String>,
 }

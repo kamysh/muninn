@@ -391,48 +391,25 @@ Five `OK`s = good to go. Any failure means that piece is broken; fix it before m
 muninn add /path/to/your/repo
 ```
 
-This registers the repo — writing a default `.muninn.toml` that inherits everything from the global config — and indexes it (you will see a progress bar). No editor opens. To set per-repo overrides, pass them inline (`muninn add /path/to/your/repo index.exclude='["dist/"]'`), use `--no-index` to register without indexing yet, or change them later with `muninn config set --repo /path/to/your/repo …`.
+This opens the TUI to inspect/register the family, review its file inventory and
+configure exclusions. It asks whether to start indexing, with advice based on
+preflight. Configuration is stored in PostgreSQL. For agent-driven setup use
+`muninn config PATH --json`, `muninn preflight PATH --json`,
+`muninn add PATH --json`, and explicit `muninn start PATH --json`; see the
+[shared skill](claude-code-setup/skill/SKILL.md) for guarded JSON requests.
 
-When indexing completes, open Claude Code and ask something like "What does function X do?" or "Find all callers of Y" — muninn will search the repo and give Claude Code the context to answer.
+An enabled Git family automatically discovers linked worktrees. Code searches
+select the requested checkout's completed index. Merge/rebase/conflict states
+retain the last completed index until reconciliation can succeed.
 
-## Step 9: Install the skill and hooks (recommended)
+## Step 9: Install the agent skill and reminders
 
-The skill teaches Claude Code *how* to use muninn — which search tool to pick, when to write knowledge back, and how it relates to other memory tools. The hooks ensure it queries muninn automatically before every task.
-
-**Skill:**
-
-```bash
-mkdir -p ~/.claude/skills/muninn
-cp skill/SKILL.md ~/.claude/skills/muninn/SKILL.md
-```
-
-**Hooks** — merge the following into `~/.claude/settings.json` under the top-level `"hooks"` key (create the key if it doesn't exist; append to existing arrays if you already have hooks for these events):
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'Before acting: query muninn for relevant code knowledge (mcp__muninn__search_hybrid), query mimir for relevant rules (mcp__mimir__query_relevant). Do this BEFORE reading files or writing code.'"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The hook references both muninn and [mimir](https://github.com/kamysh/mimir) — a companion belief graph that stores heuristics and patterns across sessions. If you are not using mimir, replace the hook command with:
-
-```
-"echo 'Before acting: query muninn for relevant code knowledge (mcp__muninn__search_hybrid). Do this BEFORE reading files or writing code.'"
-```
-
-Restart Claude Code for the hooks to take effect.
+Follow [the agent setup guide](claude-code-setup/INSTALL.md) for Codex or Claude
+Code. The shared skill explains tool choice, worktrees, JSON configuration and
+knowledge scope. Reminder hooks encourage useful searches and evaluation of
+results; they neither run searches themselves nor require a call on every task.
+Merge the client-specific instructions into existing configuration rather than
+replacing unrelated hooks or settings.
 
 ## What happens next
 

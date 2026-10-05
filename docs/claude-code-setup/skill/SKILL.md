@@ -1,80 +1,135 @@
 ---
 name: muninn
-description: Use when mcp__muninn tools are available — guides how to call the code-index search tools, which one to pick, how to read results, when to prefer muninn over grep, and when to write knowledge back
+description: Search indexed code and repository knowledge with Muninn, or configure its file selection through the JSON CLI. Use for code discovery, relationships, worktree searches, and indexing configuration.
 ---
 
-# Using Muninn
+# Muninn
 
-Muninn indexes your repositories and exposes search tools so you can answer questions about a codebase by semantic/structural/full-text search instead of reading or grepping file-by-file.
+Muninn saves exploration by finding relevant code and recorded repository
+knowledge. Use it when the location is unknown, a question spans files, or code
+relationships help. Read the returned source ranges and judge their relevance.
+Direct reads and `rg` are useful when the file/target is known, for literal text,
+or when index results are missing or stale. Explain consequential index misses.
+A reminder invites this judgment; it does not require a tool call, rating, or
+writeback on every task, and does not authorize configuration changes.
 
-The `UserPromptSubmit` hook does not run any search for you — it only prints a reminder before every message. **You must call a search tool yourself**, and **querying is not the goal — evaluating and using the result is.** Judge whether what came back actually answers the task; act on it, or refine and re-query. Do not fire a query, decide it "counts," and then grep for the same thing anyway.
+## Search the intended checkout
 
-## How to call
+For code searches, pass `repo` as the absolute path of the checkout you are
+working in, including a linked worktree. Alternatively, `cwd` can be a directory
+inside that checkout or registered directory. `repo` takes precedence. Supplying
+neither is an error; the MCP process does not infer your shell's directory.
+Git and database registration resolve the target; no `.muninn.toml` is needed.
 
-Every search tool takes:
+| Question | Tool |
+| --- | --- |
+| Behavior or concept, symbol unknown | `search_hybrid` (semantic + full-text) |
+| Keywords or identifier terms | `search_fulltext` (tokenized, not literal grep) |
+| Semantic similarity alone | `search_semantic` |
+| Callers/callees, definitions, other recorded relationships | `search_structural` |
+| Previously curated repository notes | `search_knowledge` |
 
-- **`repo: <absolute path>`** — the repository to search. **Pass this explicitly whenever the target repo is not your shell's working directory.** Do NOT pass the target path as `cwd`.
-- **`cwd`** — use only to let muninn walk up from your current directory to the nearest `.muninn.toml`.
-- **`limit`** — pass a generous value (≈15–20) for discovery; the default is small.
+The first three accept `query`, `repo` or `cwd`, and optional `limit` (default 10).
+Structural search accepts `symbol`, `repo` or `cwd`, and `relation`: `callers`,
+`callees`, `defines`, `imports`, `inheritors`, or `inherits`.
+Scores rank results; they are not relevance percentages.
 
-## Reading results — evaluate relevance, then act
+Structural results are name-based candidates, not compiler-verified bindings.
+For Git checkouts, call resolution prefers matches in the caller's file, keeps
+all local ties, and otherwise keeps all checkout-wide matches. Check paths and source before
+relying on an edge. Missing edges do not prove an absence of calls. Git checkout
+reconciliation rebuilds cross-file relationships after relevant changes;
+database-managed directory families also run repository reconciliation. Inspect
+the actual state and source before requesting an expensive reindex.
 
-Each hit gives `file_path` plus a `start_line..end_line` range.
+## Worktrees and freshness
 
-**Required discipline:** for each result, judge whether it is actually relevant
-to the task before using it — do not treat "the query ran" as satisfying the
-requirement. Then read the pointed-to range *before* doing anything else with
-that file. Do not open the file from line 1 when muninn already told you where
-the relevant section is. Do not grep for the same symbol you just searched.
+An enabled repository family discovers its Git worktrees automatically. New
+worktrees inherit the family policy and index without separate configuration.
+Search selects that checkout's completed view; unchanged file chunks/vectors
+are shared. Updating the main checkout preserves other worktrees' indexed
+content until those worktrees are reconciled with their own files.
 
-If the top results are not relevant / not what you need:
-- Switch tool (see table below) — do not silently fall back to Bash grep.
-- Surface the miss to the user if the search should have found something and
-  didn't (stale index, missing exclude, wrong repo path). This is a product signal.
+During merge/rebase or an unmerged index, Muninn retains the last completed
+index. It does not index conflict contents. A failed reconciliation also retains
+the previous index. A new checkout without a completed index may be temporarily
+unavailable. Check `muninn status PATH`, the daemon, and Git state when freshness
+matters; use direct source inspection while the index is catching up.
 
-Scores are **RRF rank-reciprocals (≈ 0.01–0.03), not relevance percentages.**
-Use the *rank order*, not the magnitude. Near-uniform low scores are normal —
-they are NOT a signal that "nothing matched."
+## Configure with JSON
 
-If results look stale or wrong (paths that no longer exist, build artifacts like
-`target/**`), the index is stale or mis-configured — run `muninn reindex <repo>`,
-check the repo's `.muninn.toml` excludes, and say so.
+Connections and credentials come from `~/.config/muninn/config.toml` and the
+existing credential setup. Family policies are in PostgreSQL. Configure them
+through the CLI rather than editing `.muninn.toml` or SQL. A policy change affects
+the repository's whole worktree family; preflight inventories only the selected
+checkout. `muninn add PATH` and `muninn config PATH` open the human TUI.
+Agents should use the JSON forms below.
 
-## Choosing a tool — and when to prefer muninn over grep
+Use these read-only operations for a registered family:
 
-| You want… | Tool |
-|-----------|------|
-| Find by *concept / behavior* when you don't know the symbol | `search_hybrid` (or `search_semantic`) |
-| An *exact* symbol or string, repo-wide | `search_fulltext` — this is muninn's grep |
-| Callers / callees / imports / inheritors / inherits / defines | `search_structural` — **don't grep for call sites** |
-| Retrieve stored notes | `search_knowledge` |
-| General / unsure | `search_hybrid` (semantic + full-text via RRF) |
+```sh
+muninn config "$ROOT" --json
+muninn preflight "$ROOT" --json
+```
 
-**`search_structural` caveats:**
-- Matches are **name-scoped, not path-scoped** — if multiple files define a same-named symbol (e.g. every crate's own `main`), a `callers`/`callees` result set can mix matches for different actual functions. Always check each result's `file_path`, don't assume the first hit is the one you meant.
-- Cross-file call edges are only fully resolved by a **full reindex** (`muninn reindex <repo>` / `muninn add`). The daemon's incremental single-file watcher only re-resolves same-file calls, so a call added to a live-edited repo may not show up as a caller/callee until the next full reindex.
+For an unregistered directory, begin with `preflight PATH --json`; it returns
+creation policy/defaults without registering. `config PATH --json` reports
+`not_registered` until registration exists.
 
-**Reach for muninn over grep/Read when:** you don't know the exact name (conceptual search → `search_hybrid`/`search_semantic`); you need the call graph (→ `search_structural` — its killer use); or you're searching across files/repos. **grep/Read are fine** when you already know the exact string *and* which file it's in. For an exact identifier across the whole repo, **`search_fulltext` is the muninn equivalent of grep** — prefer it; it is also the robust fallback when `search_hybrid` is drowned by a dominating corpus (vendored deps, generated files, `target/`).
+Inspect `.data.policy`, `.data.effective_policy`, `.data.defaults`,
+`.data.capabilities`, and `.data.preflight`. Preflight reports file counts,
+bytes, costly directories, limits and advice; it does not parse or embed files
+and cannot guarantee indexing cost. Git ignore files are not applied. Choose
+exclusions based on what the task needs and the actual inventory, including
+build outputs, dependencies and generated bundles. Review incomplete inventory
+and warnings before deciding to start. `index.exclude` drops files;
+`index.vendor` retains text search and defers embeddings. Family rules extend
+frozen defaults; last match wins, exclusion precedes vendor classification,
+and a pruned parent must be re-included before its children can be included.
 
-**Anti-pattern:** call a search tool, ignore what it returned, then grep for the same thing. If a search misses what it should find, that is a product signal — refine the query or switch tool, and surface the miss. Don't silently fall back to grep.
+For an existing family, construct a complete candidate from a fresh inspect
+response, preserving fields you do not intend to change:
 
-## When to record knowledge
+```sh
+muninn config "$ROOT" --json > view.json
+jq '.data | {api_version:1, expected_family_id:.family_id,
+  expected_revision:.revision, policy:.policy}' view.json > candidate.json
+# Edit candidate.json for the intended policy; this is a request, not stored config.
+muninn config "$ROOT" --json --check - < candidate.json
+muninn config "$ROOT" --json --apply - < candidate.json
+```
 
-`record_knowledge` stores a note anchored to the codebase. Use it when you discover something that:
+A new-family request has `{ "api_version": 1, "policy": ... }`, using the
+complete policy returned by preflight for that unregistered directory and any intended
+changes. Check it with `config PATH --json --check -`, then register with
+`muninn add "$ROOT" --json --input - < initial.json`.
+`add PATH --json` without input uses creation defaults and is idempotent for an
+existing family. Registration and saving do not start a new family's indexing.
 
-- Is **non-obvious** from reading the code (a hidden constraint, a non-local invariant, a surprising dependency)
-- Would **save time** if recalled at the start of a related future task
-- Is **stable** — not just the current state of in-progress work
+When indexing is wanted, inspect/preflight the saved policy again and explicitly
+start it. Use the returned family ID/revision to guard the decision:
 
-Do not record things derivable by searching: function signatures, file locations, obvious naming. Record the *why*, not the *what*.
+```sh
+muninn preflight "$ROOT" --json > ready.json
+jq '.data | {api_version:1, expected_family_id:.family_id,
+  expected_revision:.revision}' ready.json > start.json
+muninn start "$ROOT" --json --input - < start.json
+```
 
-## Working alongside mimir
+Start records authorization and performs indexing; the daemon can resume an
+interrupted authorized run. A policy change for an already enabled family can
+trigger reconciliation. JSON responses have `api_version`, `ok`, and `data` or
+`error`; check exit status and error codes. On a revision/identity conflict,
+re-read and review the change before retrying. Respect reported capabilities:
+changing an existing embedding profile is currently unsupported. Normal schema
+migrations run automatically; the old configuration import was a one-time upgrade.
 
-Muninn and mimir are complementary:
+## Durable knowledge
 
-- **Muninn** — facts about your code: what exists, how it's connected, what's non-obvious
-- **Mimir** — beliefs about how to work: heuristics, patterns, confidence-weighted rules that evolve over time
-
-**Muninn answers "where is X in the code." Mimir answers "what did I learn that should change my approach."** Do not query mimir for code locations or muninn for lessons.
-
-When the hook fires before a task, both should be used: read the muninn range hits, dispose of the mimir priors (follow or override with one line), then act.
+Record stable, non-obvious repository facts that save future exploration using
+`record_knowledge`; retrieve them with `search_knowledge` or `list_knowledge`.
+Knowledge tools currently use an exact `repo` path string, not worktree/family
+resolution. Use the established repository key (usually the main checkout path)
+for shared notes, and explicitly describe any branch-specific applicability.
+Do not silently create a separate note collection for each temporary worktree.
+Mimir is useful for durable lessons about approaches and prior decisions.

@@ -15,12 +15,12 @@ rely on. Follow this file instead.
 - Destructive operations (dropping a database, removing a container,
   overwriting a file you did not author) require user confirmation.
   Stop and ask, even when a step appears to call for it.
-- Every config-mutating command is scriptable — none block on `$EDITOR`.
-  Bootstrap with `muninn init key=value …` (Step 4); register repos with
-  `muninn add <path> [key=value …]` (Step 8); change config later with
-  `muninn config set (--global | --repo <path>) key=value …`. `$EDITOR`
-  opens **only** for the explicit `muninn config edit`, which an agent
-  should not use.
+- For family configuration, use the JSON CLI: `muninn add PATH --json`,
+  `muninn config PATH --json --check -` / `--apply -`, and explicit
+  `muninn start PATH --json`. The forms without `--json` open the human TUI.
+  See [the shared agent skill](docs/claude-code-setup/skill/SKILL.md) for complete
+  requests, revision guards and preflight. Global bootstrap still uses
+  `muninn init key=value …`; family policies live in the database.
 
 ## Variables
 
@@ -333,26 +333,29 @@ Claude Code will read the reference files (`skill/SKILL.md`, `CLAUDE.md`,
 `settings.json`), compare them against what is already on the machine,
 propose the minimal diff for each step, and apply it only after you confirm.
 
-## Step 8 — (Optional) Register the first repository
+## Step 8 — Register and configure the first family
 
-`muninn add <path>` registers a repo, writes a default `.muninn.toml`
-(all fields inherit the global config), and runs the initial index —
-non-interactive. Pass per-repo overrides as `key=value`:
+Read [the shared agent skill](docs/claude-code-setup/skill/SKILL.md). Inspect the
+creation policy and inventory before registering a new repo/directory:
 
 ```sh
 REPO=/path/to/repo
-muninn add "$REPO"                                    # defaults; index now
-muninn add "$REPO" index.exclude='["target/","dist/"]'  # with excludes
-muninn add "$REPO" --no-index                         # register only, index later
+muninn preflight "$REPO" --json
+muninn add "$REPO" --json
+muninn config "$REPO" --json
 ```
 
-Change a repo's config afterward with
-`muninn config set --repo "$REPO" key=value` (reindexes if needed).
+`add --json` registers without indexing. Use `--input -` with a complete initial
+JSON policy when configuration needs refinement. Review preflight and the saved
+policy, then explicitly start with `muninn start "$REPO" --json` (the skill
+shows the guarded request). Inspect/change existing families with
+`config PATH --json` and complete checked/applied JSON requests. No repo TOML
+file is created for a database-managed family.
 
-**Verify:**
-```sh
-muninn status "$REPO" >/dev/null && echo OK
-```
+An enabled Git family discovers/indexes linked worktrees automatically. Select
+the actual checkout for code search; all worktrees share the family policy.
+Incomplete Git operations retain the last completed index. Ordinary migrations
+run automatically; importing pre-1.0 configuration is a separate one-time upgrade.
 
 ## Final verification gate
 
@@ -416,7 +419,7 @@ database and role.**
 2. **Unregister the MCP server:** `claude mcp remove muninn` (restart Claude Code to apply).
 3. **Remove the binaries:** `rm -f "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"`
 4. **Remove config and state:** `rm -rf "$HOME/.config/muninn" "$HOME/.local/state/muninn"`, and delete muninn's line from `~/.pgpass` (the `localhost:${PORT}:${DB_NAME}:${DB_USER}:…` entry — edit carefully, the file serves all your PostgreSQL connections).
-5. **(Optional) per-repo markers:** each indexed repo has a `.muninn.toml` at its root. Run `muninn remove <path>` *before* step 3 to drop a repo's index data and marker cleanly, or just delete the `.muninn.toml` files. (Moot if you drop the whole database next.)
+5. **Family registrations:** `muninn remove <path>` removes registered index data; review its destructive scope before using it. Database-managed families have no required `.muninn.toml` marker. Deleting an old marker does not unregister them.
 6. **Drop the database and role** (confirm first):
    ```sh
    docker exec "$CONTAINER" psql -U postgres -c "DROP DATABASE IF EXISTS \"${DB_NAME}\";"

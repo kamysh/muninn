@@ -2,14 +2,17 @@
 
 ## Overview
 
-muninn uses two configuration files:
+Muninn 1.0 separates global bootstrap settings from database family policy:
 
-| File | Scope | Created by |
-|------|-------|-----------|
-| `~/.config/muninn/config.toml` | Global defaults for all repos | `muninn init` |
-| `<repo-root>/.muninn.toml` | Per-repo overrides | `muninn add` / `muninn config set --repo <path>` |
+| Location | Scope | Interface |
+| --- | --- | --- |
+| `~/.config/muninn/config.toml` | Database connection, credentials and bootstrap/service defaults | `muninn init` / `muninn config … --global` |
+| PostgreSQL family policy | File selection, embedding selection, debounce and name shared by a repo's worktrees (or one directory) | `muninn config PATH` TUI or `--json` |
 
-When both files exist, the per-repo file overrides settings section by section. If `.muninn.toml` has an `[embeddings]` section, it completely replaces the global `[embeddings]`. Sections not present in `.muninn.toml` inherit from the global config. Individual keys are not merged within a section: if you override `[embeddings]`, all required keys in that section must be present.
+Use `config PATH --json` to inspect the stored policy, effective rules, frozen
+defaults and capabilities. Changing global defaults does not rewrite registered
+family policies. Old `.muninn.toml` files belong to legacy registrations/import;
+they are not the configuration interface for database-managed families.
 
 The global config file may contain API keys. `muninn init` (and `muninn config set --global`) set its permissions to `0600` (owner read/write only) automatically.
 
@@ -166,37 +169,21 @@ the reindex prunes chunks for the newly-excluded files.
 
 ---
 
-## Per-repo `.muninn.toml` reference
+## Database family policy
 
-`.muninn.toml` lives at the repo root. Its presence marks the directory as a muninn repo — `muninn-mcp` walks up from the current working directory to find it. If this file is missing, `muninn-mcp` cannot resolve the repo from a `cwd` argument.
+Use the [shared agent skill](claude-code-setup/skill/SKILL.md#configure-with-json)
+for complete JSON request examples. Inspect and preflight are read-only;
+check validates a candidate without saving; apply saves a complete policy with
+family/revision guards. `muninn add PATH --json` registers without first indexing.
+`muninn start PATH --json` is the explicit start operation. Humans can use the TUI
+through `muninn add PATH` or `muninn config PATH`.
 
-All sections are optional. An empty file is valid and inherits everything from the global config.
+File selection rules are shared by a Git family, while preflight inventories
+the selected checkout. Git ignores are not automatically applied. Family rules
+extend frozen defaults; check effective rules and preflight before changing
+exclusions. An enabled family reconciles changed policies automatically.
 
-Overridable sections: `[database]`, `[embeddings]`, `[watcher]`, `[index]`. The `[mcp]` section cannot be overridden per-repo.
-
-**Top-level key:** `repo_name` — the display name shown in `muninn status`. Defaults to the directory name.
-
-```toml
-# repo_name = "my-project"
-
-# [embeddings]
-# Override to use a different backend for this repo.
-# WARNING: changing backend requires: muninn remove <path> && muninn add <path>
-# backend    = "voyage"
-# model      = "voyage-code-3"
-# api_key    = "pa-..."
-# batch_size = 64
-
-# [watcher]
-# debounce_ms = 300
-
-# [index]
-# Exclude paths from indexing (everything, including node_modules, is indexed
-# by default). See "Recommended starting point" under the [index] section above
-# for a suggested set. Minimal example:
-# exclude = ["**/*.map", "**/*.min.js", "**/dist/", "**/build/"]
-```
-
-**Embedding dimension lock:** If you try to change the embedding backend in `.muninn.toml` after the first index, `muninn config set --repo <path>` (or `config edit --repo <path>`) will reject it. Remove and re-add the repo to switch backends.
-
-**Unknown keys are errors.** All config structs reject unknown TOML keys. A typo in a key name is reported immediately, not silently ignored.
+Embedding profile changes for an existing family are currently unsupported;
+inspect `capabilities` rather than editing SQL or removing/re-adding a repository
+as an automatic workaround. Connection credentials remain global and never
+belong in the family policy request.

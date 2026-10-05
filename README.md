@@ -47,13 +47,18 @@ Everything runs locally. No source code, no file tree structure, no graph data e
 
 ## CLI reference
 
-All config-mutating commands are scriptable (`key=value`); `$EDITOR` opens only for the explicit `config edit`.
+Family configuration is stored in the database. Agents use JSON requests;
+`add PATH` and `config PATH` without `--json` open the human TUI. See the
+[shared agent skill](docs/claude-code-setup/skill/SKILL.md) for the full workflow.
 
 | Command | What it does |
 |---|---|
-| `muninn init [key=value …]` | Bootstrap `~/.config/muninn/config.toml` and run DB migrations |
-| `muninn config get\|set\|edit\|unset (--global \| --repo <path>) [key=value …]` | Read or change the global or a per-repo config; a repo `set`/`edit` reindexes if needed |
-| `muninn add <path> [key=value …] [--no-index]` | Register a repo (writes `.muninn.toml`) and run its initial index; `--no-index` registers only |
+| `muninn init [key=value …]` | Bootstrap global connection/default settings and run migrations |
+| `muninn config get\|set\|edit\|unset --global [key=value …]` | Manage global bootstrap settings |
+| `muninn config PATH --json [--check - \| --apply -]` | Inspect, validate or apply a guarded family policy request |
+| `muninn add PATH --json [--input -]` | Register a family without starting indexing |
+| `muninn preflight PATH --json` | Inspect file inventory, cost warnings and advice |
+| `muninn start PATH --json [--input -]` | Explicitly authorize and run indexing |
 | `muninn reindex [<path>] [--all] [--detach]` | Re-index a repo in the foreground; `--all`/`--detach` hand it to the daemon |
 | `muninn pause <path>` / `muninn resume <path>` | Pause/resume daemon indexing for a repo (index data is kept) |
 | `muninn remove <path> [--yes]` | Unregister a repo and delete all its index data |

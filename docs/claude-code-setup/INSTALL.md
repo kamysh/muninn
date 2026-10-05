@@ -1,122 +1,73 @@
-# Claude Code setup — muninn
+# Agent setup — Muninn 1.0
 
-Hand this directory to Claude Code with the instruction:
-**"Walk me through installing this. Show me each change before applying it and wait for my approval."**
+This directory contains the shared Muninn skill, a short global-instructions
+section, and Claude Code reminder-hook examples. The guidance applies to Codex
+and Claude Code; the hook settings file is specific to Claude Code.
 
-Claude Code will read the reference files here, compare them against what is
-already on the machine, propose the minimal diff for each step, and apply it
-only after you confirm.
+## Prerequisites
 
-## Prerequisites (verify before starting)
+Verify the installed binaries (`muninn --version`), global connection config
+(`muninn status`), and the existing Muninn MCP registration in the target client.
+Use the current installation's database and credentials. The skill describes
+repository registration, JSON configuration, preflight and explicit first start.
 
-- `~/.local/bin/muninn`, `~/.local/bin/muninn-mcp`, and `~/.local/bin/muninn-index` installed (`muninn --version` works)
-- `~/.config/muninn/config.toml` configured (`muninn status` succeeds)
-- `jq` on PATH
-- Claude Code installed, `claude` on PATH
+Agree on the setup changes before applying them. Approval covers the agreed
+stage through verification; preserve unrelated instructions, hooks, permissions,
+MCP registrations and settings.
 
-## What is in this directory
+## Skill and global instructions
 
-| File | Purpose |
-|---|---|
-| `skill/SKILL.md` | Target content for `~/.claude/skills/muninn/SKILL.md` |
-| `CLAUDE.md` | Target content for the muninn section of `~/.claude/CLAUDE.md` |
-| `settings.json` | Reference hooks and permissions — **not a drop-in replacement**, see Step 2 |
+| Client | Skill target | Global-instructions target |
+| --- | --- | --- |
+| Codex | `~/.codex/skills/muninn/SKILL.md` | Muninn guidance in `~/.codex/AGENTS.md` |
+| Claude Code | `~/.claude/skills/muninn/SKILL.md` | Muninn section in `~/.claude/CLAUDE.md` |
 
-## Steps (each requires human approval before Claude Code acts)
+Compare `skill/SKILL.md` with the installed skill, then copy the approved version.
+Use `CLAUDE.md` here as the short Muninn guidance for either client; replace the
+existing Muninn section or update equivalent prose rather than duplicating it.
+The skill is client-neutral and contains the actual usage/configuration workflow.
 
-### Step 1 — skill file
+## Reminder hooks
 
-Claude Code should:
-1. Read `skill/SKILL.md` and `~/.claude/skills/muninn/SKILL.md` (if it exists).
-2. Show the diff.
-3. Write the new file only after approval. Create `~/.claude/skills/muninn/` if absent.
+`settings.json` is a Claude Code reference, not a replacement for an existing
+settings file. Merge only the agreed Muninn entries. Its hooks explain when
+search helps, how to choose the checkout, and how to judge returned source.
+They do not search automatically, block file access, require a relevance score,
+create query sentinels, or require a writeback every turn.
 
-### Step 2 — settings.json hooks and permissions
+When upgrading older integration, replace the old Muninn hooks and remove their
+sentinel/rating requirements, including Muninn conditions in shared hooks.
+Preserve unrelated behavior in shared hooks; do not install a second reminder
+alongside an obsolete gate. Keep existing tool permissions unchanged unless
+permission changes are part of the agreement. The reference lists the four
+read-only code-search tools for installations that want explicit allow entries.
 
-`settings.json` here is a **reference**, not a replacement. The existing
-`~/.claude/settings.json` may have other permissions, hooks, and settings that
-must be preserved.
+Codex installations can retain their existing advisory Mimir/Muninn reminder;
+it should point to the updated skill. Do not copy Claude's settings file into
+Codex or replace a collaboration/permission hook with a tool-use reminder.
 
-Claude Code should:
-1. Read `settings.json` and `~/.claude/settings.json`.
-2. For each section (`permissions.allow`, each hook event), identify what is
-   present in the reference but absent in the target.
-3. Show the proposed additions as a clear before/after of the relevant sections.
-4. Apply each addition only after approval. Never remove existing entries.
+## MCP registration
 
-The things to add if absent:
+The existing client registration should point to the installed `muninn-mcp`.
+For Claude Code, inspect it with `claude mcp list`. If setup requires a new
+registration, the user-scoped command is:
 
-**`permissions.allow`** — these muninn search tools should not prompt:
-```
-mcp__muninn__search_hybrid
-mcp__muninn__search_fulltext
-mcp__muninn__search_semantic
-mcp__muninn__search_structural
-```
-
-**Hooks:**
-- **`SessionStart`**: muninn skill reminder echo
-- **`UserPromptSubmit`**: muninn search reminder + per-prompt sentinel reset
-- **`PostToolUse`** (matcher `mcp__muninn__search_hybrid|…`): muninn sentinel creation,
-  plus an `additionalContext` injection that requires the agent to state a `[muninn]
-  N/10: <reason>` relevance rating for that call's results before doing anything else.
-  This is the actual enforcement for "evaluate the results, don't just fire the
-  query" — the `UserPromptSubmit` reminder text alone cannot make that happen, only
-  this hook can, because it is emitted after the tool call completes and the agent
-  must act on it in its next output.
-
-See `settings.json` for the exact commands.
-
-### Step 3 — CLAUDE.md (global instructions)
-
-`~/.claude/CLAUDE.md` is loaded by Claude Code at the start of every session.
-The `CLAUDE.md` here contains the muninn section only.
-
-Claude Code should:
-1. Read `CLAUDE.md` and `~/.claude/CLAUDE.md` (if it exists).
-2. If the muninn section is already present, show what would change.
-3. If absent, show the section that would be appended.
-4. Apply only after approval. Never remove unrelated sections.
-
-### Step 4 — register MCP server
-
-Claude Code should run `claude mcp list` and check whether `muninn` is registered
-and pointing at `~/.local/bin/muninn-mcp`.
-
-If missing or wrong path:
-```
-claude mcp remove muninn --scope user   # only if it exists with wrong path
+```sh
 claude mcp add --scope user muninn ~/.local/bin/muninn-mcp
 ```
 
-Show the proposed commands and wait for approval before running each one.
+Changing a registration is part of the agreed setup stage, not a reason to
+reconfigure the database. Use the installed client's MCP controls for Codex.
 
-### Step 5 — verify
+## Verification
 
-After all changes are applied:
-1. Show the final `~/.claude/settings.json` for a last review.
-2. Run `claude mcp list` to confirm `muninn` is registered and Connected.
-3. Prompt the user to restart Claude Code for hooks and the new MCP binary to take effect.
-
-## If mimir is also installed
-
-When both mimir and muninn are wired, you can add a stronger enforcement hook
-that requires both tools to be queried before any file access. This goes in
-`PreToolUse` with matcher `Read|Edit|Write|Grep|Glob`:
-
-```json
-{
-  "matcher": "Read|Edit|Write|Grep|Glob",
-  "hooks": [{
-    "type": "command",
-    "command": "sid=$(jq -r .session_id 2>/dev/null); { [ -f \"/tmp/claude-mm-mimir-$sid\" ] && [ -f \"/tmp/claude-mm-muninn-$sid\" ]; } || { echo 'Policy: query mimir (mcp__mimir__query_relevant) AND muninn (mcp__muninn__search_*) BEFORE reading files or writing code. Run both, then retry.' >&2; exit 2; }"
-  }]
-}
-```
-
-Also expand the `UserPromptSubmit` sentinel reset to cover both tools:
-```
-sid=$(jq -r .session_id 2>/dev/null); rm -f "/tmp/claude-mm-mimir-$sid" "/tmp/claude-mm-muninn-$sid"
-```
-
-See `docs/claude-code-setup/settings.json` in the mimir repo for the full mimir hook set.
+- Parse the edited JSON; inspect a focused diff for unrelated changes.
+- Exercise changed reminder commands with representative event input: they
+  should exit successfully without mutating repositories or invoking searches.
+- Verify the skill's read-only `config`/`preflight` examples against the installed
+  CLI, and code search with the intended checkout path.
+- Inspect a fresh MCP process's `tools/list` descriptions. Existing MCP processes
+  keep the executable they started with until reconnected.
+- Distinguish verified files/fresh-process behavior from what an already-open
+  client has loaded. Reload/reconnect through that client's controls or use a
+  new session when needed; do not kill unrelated sessions to force a reload.

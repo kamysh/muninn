@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'mcp__muninn tools are available. Invoke the muninn skill now to load the code search protocol for this session.'"
+            "command": "printf '%s\\n' 'Muninn finds indexed code and repository knowledge when it saves exploration. See the muninn skill for worktree selection, search limits and JSON configuration. Its reminders do not require a call before every read or edit.'"
           }
         ]
       }
@@ -23,23 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Also query muninn for relevant code knowledge (mcp__muninn__search_hybrid) before reading files — muninn = where code is, mimir = what you learned.'"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'Also query muninn recorded knowledge for this repo (mcp__muninn__search_knowledge) at the same time as mimir — it holds durable, non-obvious facts past sessions wrote back about this specific codebase.'"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sid=$(jq -r .session_id 2>/dev/null); rm -f \"/tmp/claude-mm-muninn-$sid\""
+            "command": "printf '%s\\n' 'Consider Muninn for code discovery or useful repository notes. Select the current checkout for code search; use the established repository-path key for shared knowledge. Direct reads and rg remain appropriate for known locations or stale/missing results.'"
           }
         ]
       }
@@ -50,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sid=$(jq -r .session_id 2>/dev/null); touch \"/tmp/claude-mm-muninn-$sid\"; jq -n '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:\"POLICY REQUIREMENT: Output exactly one line before proceeding — [muninn] N/10: <reason> — where N is YOUR assessment of how useful the muninn results are for the current task. 1=empty/irrelevant, 5=partial match, 9-10=exact code locations found. You are the only one who can evaluate this. Omitting this line is a policy violation.\"}}'",
+            "command": "jq -n '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"Check whether the Muninn results answer the question. Read relevant returned source ranges, verify checkout paths, and treat structural edges as name-based candidates. Refine the query or use direct source inspection when needed; no rating is required.\"}}'",
             "timeout": 5
           }
         ]
