@@ -1,6 +1,5 @@
 /target
 /spec/_build
-/.muninn.toml
 config.toml
 result
 .claude/

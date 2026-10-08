@@ -40,12 +40,12 @@ pub fn finish(result: policy::Result<Value>) -> ! {
     println!("{response}");
     std::process::exit(code);
 }
-fn credential_availability(cfg: &GlobalConfig, candidate: &Policy) -> &'static str {
+pub(super) fn credential_availability(cfg: &GlobalConfig, backend: Backend) -> &'static str {
     let matches = matches!(
-        (&cfg.embeddings.backend, candidate.embeddings.backend),
+        (&cfg.embeddings.backend, backend),
         (EmbeddingBackend::Voyage, Backend::Voyage) | (EmbeddingBackend::OpenAI, Backend::OpenAI)
     );
-    if candidate.embeddings.backend == Backend::Local {
+    if backend == Backend::Local {
         "not_required"
     } else if matches
         && cfg
@@ -82,7 +82,29 @@ pub async fn run(path: &Path, mode: Mode) -> policy::Result<Value> {
             "cannot connect using global Muninn configuration",
         )
     })?;
-    let mut data = readonly::query(&mut client, path, mode, input.as_deref()).await?;
+    let mut data =
+        readonly::query_with_creation(&mut client, path, mode, input.as_deref(), |root| {
+            let name = root
+                .file_name()
+                .unwrap_or(root.as_os_str())
+                .to_string_lossy()
+                .into_owned();
+            let initial = if mode == Mode::Check {
+                policy::InitialRequest::parse(
+                    input
+                        .as_deref()
+                        .ok_or_else(|| error("invalid_request", "candidate JSON is required"))?,
+                )?
+                .policy
+            } else {
+                policy::policy_from_global(name, &cfg)?
+            };
+            Ok((initial, policy::defaults_from_global(&cfg)?))
+        })
+        .await?;
+    if mode == Mode::Check && data["family_id"].is_null() {
+        data["policy_source"] = json!("provided_initial_policy");
+    }
     enrich_credentials(&mut data, &cfg, mode == Mode::Check)?;
     Ok(data)
 }
@@ -99,11 +121,57 @@ pub(super) fn enrich_credentials(
     })
     .map_err(|_| error("invalid_stored_policy", "cannot decode policy response"))?;
     data["capabilities"]["credential_availability"] =
-        json!(credential_availability(cfg, &selected));
+        json!(credential_availability(cfg, selected.embeddings.backend));
+    data["capabilities"]["credential_availability_by_backend"] = json!({
+        "voyage": credential_availability(cfg, Backend::Voyage),
+        "openai": credential_availability(cfg, Backend::OpenAI),
+        "local": credential_availability(cfg, Backend::Local),
+    });
+    data["capabilities"]["global_embedding_backend"] = json!(cfg.embeddings.backend);
+    data["global_defaults"] = json!({
+        "embeddings": {"backend":cfg.embeddings.backend,"model":if cfg.embeddings.backend == EmbeddingBackend::Local {None}else{cfg.embeddings.model.as_ref()},"batch_size":cfg.embeddings.batch_size},
+        "watcher": {"debounce_ms":cfg.watcher.debounce_ms},
+        "index": {"exclude":cfg.index.exclude,"vendor":cfg.index.vendor},
+    });
+    data["defaults_source"] = json!(if data["family_id"].is_null() {
+        "global_snapshot"
+    } else {
+        "stored"
+    });
     data["capabilities"]["credential_scope"] = json!(if candidate {
         "candidate_policy"
     } else {
         "policy"
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_readiness_requires_matching_key_and_never_exposes_it() {
+        let mut config = GlobalConfig::default();
+        config.embeddings.api_key = Some("private-test-key-do-not-display".into());
+        let mut data = json!({"policy": Policy::shipped("Example".into())});
+        enrich_credentials(&mut data, &config, false).unwrap();
+        let available = &data["capabilities"]["credential_availability_by_backend"];
+        assert_eq!(available["voyage"], "configured_not_verified");
+        assert_eq!(available["openai"], "missing_for_selected_backend");
+        assert_eq!(available["local"], "not_required");
+        assert!(!data.to_string().contains("private-test-key"));
+
+        config.embeddings.backend = EmbeddingBackend::OpenAI;
+        config.embeddings.api_key = Some("   ".into());
+        enrich_credentials(&mut data, &config, false).unwrap();
+        assert_eq!(
+            data["capabilities"]["credential_availability_by_backend"]["openai"],
+            "missing_for_selected_backend"
+        );
+        assert_eq!(
+            data["capabilities"]["credential_availability"],
+            "missing_for_selected_backend"
+        );
+    }
 }

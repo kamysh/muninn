@@ -161,8 +161,8 @@ pub struct IndexConfig {
     /// Glob patterns (relative to the repo root) to DROP from indexing entirely.
     /// muninn indexes everything by default — including files normally hidden by
     /// .gitignore — because they are often worth searching. Resolution layers
-    /// shipped defaults ++ global ++ repo (last-match-wins, `!pattern` negates);
-    /// see `EffectiveConfig::merge`. Spec: Muninn.Config.exclude.
+    /// shipped defaults ++ global (last-match-wins, `!pattern` negates);
+    /// see `EffectiveConfig::from_global`. Spec: Muninn.Config.exclude.
     pub exclude: Vec<String>,
     /// Glob patterns to classify as Tier 2 (vendored): indexed but down-weighted
     /// in search and embedded lazily, rather than dropped. Same layered-fold
@@ -277,7 +277,7 @@ impl GlobalConfig {
         if !path.exists() {
             anyhow::bail!(
                 "no config file found at {}\n\
-                 Run `muninn config` to create one.",
+                 Run `muninn config --global` to create one.",
                 path.display()
             );
         }
@@ -419,146 +419,6 @@ retention_days = 7
 prune_interval_hours = 24
 "#;
 
-// ── Per-repo config ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct RepoConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub database: Option<DatabaseConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embeddings: Option<EmbeddingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub watcher: Option<WatcherConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index: Option<IndexConfig>,
-}
-
-impl RepoConfig {
-    pub const FILE_NAME: &'static str = ".muninn.toml";
-
-    /// Parse a RepoConfig from a TOML string (e.g. read from a temp file).
-    /// Returns an error with a descriptive message on unknown fields or bad syntax.
-    pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
-        toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
-    }
-
-    /// Load .muninn.toml from a repo root. Returns empty config if file absent.
-    pub fn load(repo_root: &std::path::Path) -> anyhow::Result<Self> {
-        let path = repo_root.join(Self::FILE_NAME);
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = std::fs::read_to_string(&path)?;
-        toml::from_str(&content).map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
-    }
-
-    /// Validate semantic constraints on a parsed RepoConfig.
-    /// Call after `load()` to surface configuration errors early.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(ref emb) = self.embeddings {
-            anyhow::ensure!(
-                emb.batch_size > 0,
-                "[embeddings] batch_size must be greater than 0"
-            );
-            if emb.backend != EmbeddingBackend::Local {
-                anyhow::ensure!(
-                    emb.model
-                        .as_deref()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false),
-                    "[embeddings] model is required for voyage and openai backends"
-                );
-            }
-        }
-        if let Some(ref w) = self.watcher {
-            anyhow::ensure!(
-                w.debounce_ms > 0,
-                "[watcher] debounce_ms must be greater than 0"
-            );
-        }
-        Ok(())
-    }
-
-    /// Return the template content for a new .muninn.toml (all sections commented out).
-    pub fn template_content(dir_name: &str) -> String {
-        format!(
-            "# .muninn.toml — per-repo config for {dir_name}\n\
-                 #\n\
-                 # The presence of this file marks the directory as a muninn repo root.\n\
-                 # An empty file (everything commented out) is perfectly valid — all settings\n\
-                 # are inherited from ~/.config/muninn/config.toml.\n\
-                 #\n\
-                 # Uncomment and edit only the sections you need to override.\n\
-                 # After editing, run:  muninn add <path/to/this/repo>\n\
-                 \n\
-                 # repo_name = \"{dir_name}\"\n\
-                 # Override the display name shown in `muninn list` and `muninn status`.\n\
-                 # Default: the directory name.\n\
-                 \n\
-                 # [database]\n\
-                 # Override to use a different PostgreSQL database for this repo.\n\
-                 # Useful when isolating large repos or using a remote database.\n\
-                 # host   = \"localhost\"\n\
-                 # port   = 5432\n\
-                 # dbname = \"muninn\"\n\
-                 # user   = \"alice\"\n\
-                 # dsn_override = \"postgresql://alice@localhost:5432/muninn\"\n\
-                 \n\
-                 # [embeddings]\n\
-                 # Override to use a different embedding backend for this repo.\n\
-                 # WARNING: changing backend after the first index requires re-indexing\n\
-                 # (run `muninn remove <path>` then `muninn add <path>`).\n\
-                 # backend    = \"voyage\"   # voyage | openai | local\n\
-                 # model      = \"voyage-code-3\"\n\
-                 # api_key    = \"pa-...\"\n\
-                 # cache_dir  = \"/path/to/cache\"   # local-only\n\
-                 # batch_size = 64\n\
-                 \n\
-                 # [watcher]\n\
-                 # Override the file-change debounce for this repo.\n\
-                 # Increase if you see excessive re-indexing during large rebases.\n\
-                 # debounce_ms = 300\n\
-                 \n\
-                 # [index]\n\
-                 # muninn indexes everything under the repo root by default (including\n\
-                 # gitignored files like node_modules — deliberately: dependency source\n\
-                 # stays searchable). The list below excludes only generated,\n\
-                 # non-searchable files and build/cache output; edit or clear it as\n\
-                 # needed. `.git/`, binaries, and files over 10 MiB are always skipped.\n\
-                 [index]\n\
-                 exclude = [\n\
-                 \x20 # generated / non-searchable — noise even inside node_modules\n\
-                 \x20 \"**/*.map\",                # source maps\n\
-                 \x20 \"**/*.min.js\",             # minified bundles\n\
-                 \x20 \"**/package-lock.json\", \"**/pnpm-lock.yaml\", \"**/yarn.lock\", \"**/go.sum\",\n\
-                 \n\
-                 \x20 # build output / caches — regenerated, not source (search src/ instead)\n\
-                 \x20 \"**/dist/\", \"**/build/\", \"**/target/\", \"**/.vite/\", \"**/.next/\",\n\
-                 \x20 \"**/coverage/\", \"**/.nyc_output/\",\n\
-                 \x20 \"**/__pycache__/\", \"**/.pytest_cache/\", \"**/.mypy_cache/\",\n\
-                 \x20 \"**/.terraform/\",\n\
-                 ]\n",
-            dir_name = dir_name
-        )
-    }
-
-    /// Create a .muninn.toml template in repo_root (does nothing if already exists).
-    /// Returns the path to the file.
-    pub fn create_template(
-        repo_root: &std::path::Path,
-        dir_name: &str,
-    ) -> anyhow::Result<std::path::PathBuf> {
-        let path = repo_root.join(Self::FILE_NAME);
-        if !path.exists() {
-            std::fs::write(&path, Self::template_content(dir_name))?;
-        }
-        Ok(path)
-    }
-}
-
 // ── Effective config ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -566,59 +426,31 @@ pub struct EffectiveConfig {
     pub database: DatabaseConfig,
     pub embeddings: EmbeddingConfig,
     pub watcher: WatcherConfig,
-    /// Resolved exclude globs: shipped defaults ++ global ++ repo (last-match-wins).
+    /// Resolved exclusion rules from stored policy or global defaults.
     pub exclude: Vec<String>,
-    /// Resolved vendor globs: shipped defaults ++ global ++ repo (last-match-wins).
+    /// Resolved vendor rules from stored policy or global defaults.
     pub vendor: Vec<String>,
     pub repo_name: String,
 }
 
-/// Resolve one glob axis by layering shipped defaults, the global config list,
-/// and the per-repo list IN THAT ORDER. The engine (`build_excludes`) then matches
-/// a path against the concatenated list last-match-wins, with `!pattern` negating
-/// a prior match — so a repo writes only its delta and inherits the rest, and can
-/// `!`-subtract a default. Spec: Muninn.Config.layerAxis (supersedes the earlier
-/// whole-list-replace merge).
-fn layer_axis(defaults: &[&str], global: &[String], repo: Option<&[String]>) -> Vec<String> {
-    let mut out: Vec<String> = defaults.iter().map(|s| s.to_string()).collect();
-    out.extend(global.iter().cloned());
-    if let Some(r) = repo {
-        out.extend(r.iter().cloned());
-    }
-    out
-}
-
 impl EffectiveConfig {
-    /// Merge global defaults with per-repo overrides.
-    /// `dir_name` is the fallback repo name when [repo].name is absent.
-    pub fn merge(global: &GlobalConfig, repo: &RepoConfig, dir_name: &str) -> Self {
+    /// Runtime defaults for database registrations without a stored family policy.
+    pub fn from_global(global: &GlobalConfig, dir_name: &str) -> Self {
         Self {
-            database: repo
-                .database
-                .clone()
-                .unwrap_or_else(|| global.database.clone()),
-            embeddings: repo
-                .embeddings
-                .clone()
-                .unwrap_or_else(|| global.embeddings.clone()),
-            watcher: repo
-                .watcher
-                .clone()
-                .unwrap_or_else(|| global.watcher.clone()),
-            exclude: layer_axis(
-                EXCLUDE_DEFAULTS,
-                &global.index.exclude,
-                repo.index.as_ref().map(|i| i.exclude.as_slice()),
-            ),
-            vendor: layer_axis(
-                VENDOR_DEFAULTS,
-                &global.index.vendor,
-                repo.index.as_ref().map(|i| i.vendor.as_slice()),
-            ),
-            repo_name: repo
-                .repo_name
-                .clone()
-                .unwrap_or_else(|| dir_name.to_string()),
+            database: global.database.clone(),
+            embeddings: global.embeddings.clone(),
+            watcher: global.watcher.clone(),
+            exclude: EXCLUDE_DEFAULTS
+                .iter()
+                .map(|s| s.to_string())
+                .chain(global.index.exclude.iter().cloned())
+                .collect(),
+            vendor: VENDOR_DEFAULTS
+                .iter()
+                .map(|s| s.to_string())
+                .chain(global.index.vendor.iter().cloned())
+                .collect(),
+            repo_name: dir_name.to_owned(),
         }
     }
 }
@@ -627,8 +459,7 @@ impl EffectiveConfig {
 // Comment- and formatting-preserving edits to a TOML config file, keyed by a
 // dotted path (e.g. "database.port", "index.exclude"). Pure content→content so
 // the caller can validate the result (by typed parse) before writing. Used by
-// the unified `muninn config get/set/unset` for both the global config and any
-// per-repo `.muninn.toml`.
+// `muninn config get/set/unset --global`.
 
 /// Set a dotted `key` to a TOML value literal (`value` is parsed as TOML, so
 /// `7432`, `"voyage"`, `["a","b"]`, `true` all work). Intermediate tables are
@@ -794,214 +625,38 @@ mod tests {
     }
 
     #[test]
-    fn effective_config_inherits_global_when_repo_empty() {
-        let global = GlobalConfig::default();
-        let repo = RepoConfig::default();
-        let eff = EffectiveConfig::merge(&global, &repo, "my-repo");
-        assert_eq!(eff.repo_name, "my-repo");
-        assert_eq!(eff.embeddings.backend, EmbeddingBackend::Voyage);
-        assert_eq!(eff.database.host, "localhost");
+    fn unbound_registration_uses_global_settings_and_shipped_rules() {
+        let mut global = GlobalConfig::default();
+        global.embeddings.backend = EmbeddingBackend::Local;
+        global.embeddings.model = None;
+        global.embeddings.batch_size = 32;
+        global.database.port = 5433;
+        global.watcher.debounce_ms = 777;
+        global.index.exclude = vec!["generated/".into(), "!keep/".into()];
+        global.index.vendor = vec!["third_party/".into()];
+        let effective = EffectiveConfig::from_global(&global, "example");
+        assert_eq!(effective.repo_name, "example");
+        assert_eq!(effective.database.port, 5433);
+        assert_eq!(effective.embeddings.backend, EmbeddingBackend::Local);
+        assert_eq!(effective.embeddings.batch_size, 32);
+        assert_eq!(effective.watcher.debounce_ms, 777);
+        let mut exclusions: Vec<String> = EXCLUDE_DEFAULTS.iter().map(|s| s.to_string()).collect();
+        exclusions.extend(global.index.exclude);
+        assert_eq!(effective.exclude, exclusions);
+        let mut vendors: Vec<String> = VENDOR_DEFAULTS.iter().map(|s| s.to_string()).collect();
+        vendors.extend(global.index.vendor);
+        assert_eq!(effective.vendor, vendors);
     }
 
     #[test]
-    fn effective_config_repo_overrides_embeddings() {
-        let global = GlobalConfig::default();
-        let repo = RepoConfig {
-            repo_name: None,
-            database: None,
-            embeddings: Some(EmbeddingConfig {
-                backend: EmbeddingBackend::Local,
-                model: None,
-                api_key: None,
-                cache_dir: None,
-                batch_size: 32,
-            }),
-            watcher: None,
-            index: None,
-        };
-        let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert_eq!(eff.embeddings.backend, EmbeddingBackend::Local);
-        assert_eq!(eff.embeddings.batch_size, 32);
-        assert_eq!(eff.database.port, 5432);
-    }
-
-    #[test]
-    fn effective_config_repo_name_override() {
-        let global = GlobalConfig::default();
-        let repo = RepoConfig {
-            repo_name: Some("custom-name".to_string()),
-            ..Default::default()
-        };
-        let eff = EffectiveConfig::merge(&global, &repo, "dir-name");
-        assert_eq!(eff.repo_name, "custom-name");
-    }
-
-    #[test]
-    fn repo_config_template_parses_without_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        RepoConfig::create_template(tmp.path(), "test-repo").unwrap();
-        let loaded = RepoConfig::load(tmp.path()).unwrap();
-        // Every section except [index] is commented out — should load as None.
-        assert!(loaded.repo_name.is_none());
-        assert!(loaded.database.is_none());
-        assert!(loaded.embeddings.is_none());
-        assert!(loaded.watcher.is_none());
-        // [index] ships active with the recommended noise-filtering default
-        // (issue #3) — node_modules itself must stay searchable, so only
-        // generated/build-output globs are excluded, never the tree itself.
-        let exclude = &loaded
-            .index
-            .expect("template ships an active [index]")
-            .exclude;
-        assert!(!exclude.is_empty());
-        assert!(!exclude.iter().any(|p| p.contains("node_modules")));
-    }
-
-    // ── exclude/vendor merge semantics (spec: Muninn.Config.layerAxis) ──
-    // Resolution layers shipped defaults ++ global ++ repo, IN THAT ORDER; the
-    // engine then matches a path last-match-wins with `!` negation. So the merged
-    // list always starts with the shipped defaults, then global, then repo.
-
-    fn global_with_exclude(globs: &[&str]) -> GlobalConfig {
-        GlobalConfig {
-            index: IndexConfig {
-                exclude: globs.iter().map(|s| s.to_string()).collect(),
-                vendor: vec![],
-            },
-            ..Default::default()
-        }
-    }
-
-    fn repo_with_exclude(globs: Option<&[&str]>) -> RepoConfig {
-        RepoConfig {
-            index: globs.map(|gs| IndexConfig {
-                exclude: gs.iter().map(|s| s.to_string()).collect(),
-                vendor: vec![],
-            }),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn exclude_layers_defaults_then_global_then_repo() {
-        let global = global_with_exclude(&["g_only/"]);
-        let repo = repo_with_exclude(Some(&["r_only/"]));
-        let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        // shipped defaults present, then global, then repo — in order, no replace.
-        assert!(eff.exclude.iter().any(|g| g == ".git/")); // a shipped default
-        assert!(eff.exclude.iter().any(|g| g == "g_only/"));
-        assert!(eff.exclude.iter().any(|g| g == "r_only/"));
-        // order: the last two entries are global then repo.
-        let n = eff.exclude.len();
-        assert_eq!(eff.exclude[n - 2], "g_only/");
-        assert_eq!(eff.exclude[n - 1], "r_only/");
-    }
-
-    #[test]
-    fn exclude_no_repo_index_inherits_defaults_plus_global() {
-        let global = global_with_exclude(&["g_only/"]);
-        let repo = repo_with_exclude(None);
-        let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert!(eff.exclude.iter().any(|g| g == ".git/"));
-        assert!(eff.exclude.iter().any(|g| g == "g_only/"));
-        assert!(!eff.exclude.iter().any(|g| g == "r_only/"));
-    }
-
-    #[test]
-    fn vendor_layers_defaults_plus_repo() {
-        // vendor resolves the same way; defaults include node_modules.
-        let global = GlobalConfig::default();
-        let repo = RepoConfig {
-            index: Some(IndexConfig {
-                exclude: vec![],
-                vendor: vec!["third_party/".to_string()],
-            }),
-            ..Default::default()
-        };
-        let eff = EffectiveConfig::merge(&global, &repo, "proj");
-        assert!(eff.vendor.iter().any(|g| g == "**/node_modules/**")); // a default
-        assert!(eff.vendor.iter().any(|g| g == "third_party/")); // repo addition
-        assert_eq!(eff.vendor.last().unwrap(), "third_party/"); // repo is last
-    }
-
-    use quickcheck::quickcheck;
-
-    quickcheck! {
-        // The merged list is exactly defaults ++ global ++ repo, in that order.
-        fn prop_exclude_merge_is_layered(global_globs: Vec<String>,
-                                         repo_globs: Option<Vec<String>>) -> bool {
-            let global = GlobalConfig {
-                index: IndexConfig { exclude: global_globs.clone(), vendor: vec![] },
-                ..Default::default()
-            };
-            let repo = RepoConfig {
-                index: repo_globs.clone().map(|g| IndexConfig { exclude: g, vendor: vec![] }),
-                ..Default::default()
-            };
-            let eff = EffectiveConfig::merge(&global, &repo, "proj");
-            let mut expected: Vec<String> =
-                EXCLUDE_DEFAULTS.iter().map(|s| s.to_string()).collect();
-            expected.extend(global_globs);
-            expected.extend(repo_globs.unwrap_or_default());
-            eff.exclude == expected
-        }
-    }
-
-    // ── config TOML parse / merge round-trip ──────────────────────────────────
-
-    #[test]
-    fn repo_config_exclude_parses_from_toml() {
-        let toml = "[index]\nexclude = [\"target/\", \"**/*.min.js\"]\n";
-        let rc = RepoConfig::from_toml_str(toml).unwrap();
-        let idx = rc.index.expect("index section present");
-        assert_eq!(idx.exclude, vec!["target/", "**/*.min.js"]);
-    }
-
-    #[test]
-    fn exclude_survives_toml_set_get_round_trip() {
-        let base = "[index]\nexclude = []\n";
-        let set = toml_set(base, "index.exclude", "[\"a/\", \"b/\"]").unwrap();
+    fn global_rules_survive_toml_set_get_round_trip() {
+        let base = GlobalConfig::template_content();
+        let updated = toml_set(base, "index.exclude", "[\"a/\", \"b/\"]").unwrap();
         assert_eq!(
-            toml_get(&set, "index.exclude").unwrap(),
-            Some("[\"a/\", \"b/\"]".to_string())
+            toml_get(&updated, "index.exclude").unwrap(),
+            Some("[\"a/\", \"b/\"]".into())
         );
-        // and the typed parse agrees with the textual round-trip
-        let rc = RepoConfig::from_toml_str(&set).unwrap();
-        assert_eq!(rc.index.unwrap().exclude, vec!["a/", "b/"]);
-    }
-
-    #[test]
-    fn repo_config_rejects_unknown_field() {
-        // deny_unknown_fields guards against silent typos in a hand-edited file.
-        let toml = "[index]\nexcludes = [\"oops\"]\n"; // note the typo: excludes
-        assert!(RepoConfig::from_toml_str(toml).is_err());
-    }
-
-    quickcheck! {
-        // Any IndexConfig round-trips through TOML serialize→parse unchanged,
-        // for glob strings that survive TOML quoting (no control chars / quotes).
-        fn prop_index_config_toml_round_trip(globs: Vec<String>) -> quickcheck::TestResult {
-            let safe: Vec<String> = globs
-                .into_iter()
-                .filter(|g| !g.contains(['"', '\\', '\n', '\r', '\t', '#']))
-                .collect();
-            let rc = RepoConfig {
-                index: Some(IndexConfig {
-                    exclude: safe.clone(),
-                    vendor: vec![],
-                }),
-                ..Default::default()
-            };
-            let toml = match toml::to_string(&rc) {
-                Ok(t) => t,
-                Err(_) => return quickcheck::TestResult::discard(),
-            };
-            let back = match RepoConfig::from_toml_str(&toml) {
-                Ok(b) => b,
-                Err(_) => return quickcheck::TestResult::discard(),
-            };
-            let got = back.index.map(|i| i.exclude).unwrap_or_default();
-            quickcheck::TestResult::from_bool(got == safe)
-        }
+        let global = GlobalConfig::from_toml_str(&updated).unwrap();
+        assert_eq!(global.index.exclude, ["a/", "b/"]);
     }
 }

@@ -130,8 +130,9 @@ muninn status
 ```
 
 `init` writes `~/.config/muninn/config.toml` with owner-only permissions and runs
-public migrations. With no assignments, it opens an editor only when the file
-does not exist; an existing file's contents are preserved. Credentials and runtime
+public migrations after Save. With no assignments it opens the TUI for creation
+or editing; `muninn config --global` opens the same form. Cancel preserves the
+existing file and does not connect to the database. Credentials and runtime
 settings belong here, while family policies are stored in the database.
 
 For hosted embeddings, see [Configuration](configuration.md). Hosted embedding
@@ -211,15 +212,26 @@ manual use. Closing it stops automatic updates; foreground indexing can still ru
 muninn add /absolute/path/to/repo
 ```
 
-The TUI shows policy, frozen defaults, inventory and advice. On the policy page,
-select the embedding backend before saving: **new-family defaults use Voyage,
-even if Step 4 selected local globally**. Select Local for the local setup above.
+The TUI opens one configuration form with explanations beside the focused
+setting. New repositories copy the global provider, request size, change delay
+and file-selection defaults. For the local setup above, Local is already selected.
+Review the visible defaults before saving; custom edits belong to this family.
 The embedding profile cannot currently be changed after family registration.
+Hosted providers send selected text to their API and require matching global
+provider/model/key settings. The form shows missing keys before saving or
+starting; use `muninn config edit --global` in another terminal, then Rescan to
+refresh availability. Local needs no hosted key and may download its model on
+first use. Keys are never displayed by the form.
 
-Review excluded/vendor files. Git ignores are not used. Dependencies may be
-large; the inventory suggests whether to start or refine rules, with or without
-an agent. Save registers the family without indexing it. The TUI then offers a
-separate Start confirmation. You can leave it unstarted and return with:
+Review the frozen shipped/global defaults and your custom exclusion/vendor rules
+in the form.
+Git ignores are not used. Vendor files remain available to text search without
+initial embeddings. The file inventory recommends Start for a suitable selection
+or refinement for large, incomplete, or dependency-heavy inventories; suggestions
+are never applied automatically. Save registers the family without indexing it.
+The same form then offers Start, Edit more, Ask an agent, or Leave unindexed.
+Selecting Start is the explicit indexing authorization; progress and the final
+result remain visible in the form. You can leave it unstarted and return with:
 
 ```sh
 muninn config /absolute/path/to/repo

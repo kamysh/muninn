@@ -1,6 +1,6 @@
-//! Runtime adapter for stored policy. Legacy registrations keep their TOML path.
+//! Runtime adapter for stored policy and global defaults for unbound registrations.
 use super::{Backend, CompiledRules, PolicyView};
-use crate::config::{EffectiveConfig, EmbeddingBackend, GlobalConfig, RepoConfig, WatcherConfig};
+use crate::config::{EffectiveConfig, EmbeddingBackend, GlobalConfig, WatcherConfig};
 use anyhow::{ensure, Result};
 use std::{path::Path, sync::Arc};
 use tokio_postgres::{GenericClient, Transaction};
@@ -79,9 +79,8 @@ pub async fn config(
     let view = policy(client, id).await?;
     let config = match &view {
         Some(view) => effective(global, view),
-        None => EffectiveConfig::merge(
+        None => EffectiveConfig::from_global(
             global,
-            &RepoConfig::load(root)?,
             &root.file_name().unwrap_or_default().to_string_lossy(),
         ),
     };

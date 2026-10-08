@@ -58,16 +58,16 @@ name or port conflict.
    paths; use absolute paths in service/MCP registration.
 4. **Global bootstrap.** Use `muninn init key=value …` for noninteractive setup.
    It writes `~/.config/muninn/config.toml` and applies public migrations. Do not
-   run bare `init` against a missing file: it opens `$EDITOR`. Existing global
+   run bare `init` in automation: it opens the TUI. Existing global
    settings can be inspected/updated through `config … --global`; family policy
    uses a different interface. Do not expose API keys in generated instructions.
 5. **Daemon.** Install/enable the agreed systemd or launchd service using the
    [platform procedures](docs/get-started.md#5-run-the-watcher). Verify its actual
    state and logs. Existing enabled registrations may index when it starts.
 6. **First family.** Use the JSON sequence below. Registration/configuration alone
-   does not authorize first indexing. New-family defaults use Voyage rather than
-   inheriting the global backend; explicitly choose the intended backend before
-   registration. Existing embedding-profile changes are unsupported.
+   does not authorize first indexing. New-family defaults snapshot the global
+   provider, watcher and file-selection settings. Inspect the visible defaults
+   and choose the intended backend before registration. Existing embedding-profile changes are unsupported.
 7. **Agent client.** Register Muninn in Codex and/or Claude and install the shared
    skill through [Agent setup](docs/claude-code-setup/INSTALL.md). Include the
    [purpose-focused reminder](docs/claude-code-setup/INSTALL.md#install-the-startup-reminder)

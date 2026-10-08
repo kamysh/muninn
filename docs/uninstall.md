@@ -30,8 +30,7 @@ muninn remove /registered/path
 
 Review the confirmation. The command removes the application schema and its code
 index, including graphs for registered checkouts, and removes the registry row.
-A legacy `.muninn.toml` at that path is also deleted if present. It coordinates
-with active indexing and may wait for the index lock; the old blanket description
+The command coordinates with active indexing and may wait for the index lock; the old blanket description
 that removal always refuses while indexing is obsolete.
 
 Source files and Git worktrees remain. Curated notes in `public.knowledge` are

@@ -88,9 +88,9 @@ muninn usage --days 30
 
 Agents should check a complete JSON policy before saving it and guard saves and
 start requests with the returned family ID/revision. See the
-[shared skill](docs/claude-code-setup/skill/SKILL.md). Initial policy defaults are
-shipped defaults, not a copy of global embedding settings: select the backend
-before registering. `status PATH`, `pause`, `resume` and `remove` still use the
+[shared skill](docs/claude-code-setup/skill/SKILL.md). New repositories snapshot global family settings at creation; review the
+visible defaults and select the backend before registering. Saved settings do
+not follow later global edits. `status PATH`, `pause`, `resume` and `remove` still use the
 registered locator shown by `status`; they are not arbitrary-worktree commands.
 In particular, `remove` deletes an entire registered family's code index.
 

@@ -4,18 +4,24 @@
 
 | Location | Purpose | Interface |
 | --- | --- | --- |
-| `~/.config/muninn/config.toml` | Database connection, embedding credentials/cache, global knowledge embeddings, logging and legacy defaults | `muninn init`, `muninn config get/set/edit/unset --global` |
+| `~/.config/muninn/config.toml` | Database connection, embedding credentials/cache, global knowledge embeddings, logging, defaults for new families and unbound registrations | `muninn init`, `muninn config get/set/edit/unset --global` |
 | Family schema in PostgreSQL | Name, ordered file-selection rules, embedding profile/batch size and watcher debounce, shared across linked worktrees | `muninn config PATH` TUI or `--json` |
 
-New-family policy comes from **shipped defaults**, not a copy of global settings.
-In particular it starts with Voyage, model `voyage-code-3`. A local global backend
-does not select local for a new family. Choose the family backend before saving
-its initial policy. Inspect the returned `policy`, `defaults`, `effective_policy`
-and `capabilities` rather than guessing precedence.
+New repositories begin with a **snapshot of global settings**: embedding provider,
+supported model and request size, watcher change delay, and global file-selection
+rules. Shipped file rules run first, followed by the captured global rules, then
+repository-specific rules. The TUI shows inherited global patterns alongside custom rules and marks edited
+values. Existing saved snapshots are shown separately from the current global
+patterns, which are a reference for new repositories. Older snapshots without
+source labels show the full saved default list without guessing provenance.
+The snapshot is captured when configuration opens and saved at registration;
+later global edits do not change that draft or any already-saved repository.
+Connection settings, credentials and machine-local cache paths remain global.
+Inspect `policy`, `defaults`, `effective_policy`, `global_defaults` and
+`capabilities` to see the selected values and current reference defaults.
 
 Global changes do not rewrite existing family policies. Policy/default history
-is stored in the database. `.muninn.toml` handling remains in the legacy code
-path; it is not a database-family configuration file.
+is stored in the database.
 
 ## Global bootstrap
 
@@ -24,10 +30,18 @@ muninn init database.host=localhost database.port=5432 \
   database.dbname=muninn database.user=muninn embeddings.backend=local
 ```
 
-Or use `muninn init` to edit the template on a fresh installation. With an
-existing config and no assignments, it preserves content and runs public
-migrations. Global setters also validate and run public migrations; global getters
-do not. The config file is written with mode `0600` because it can contain API keys.
+Use `muninn init`, `muninn config --global`, or `muninn config edit --global`
+to create or edit global settings in the TUI. Focused-setting explanations stay in a labelled bottom region, separated from
+the scrolling settings and above Save/Cancel. Press `?` for the complete focused
+explanation; while editing a value, PgUp/PgDn scroll its help. Ordered rule editing
+and masked API-key controls are built in. Save validates and writes the
+file, then connects to prepare the configured database; a connection failure
+leaves the saved file available for correction. Cancel leaves the file unchanged
+and does not connect. Assignment-based init and global set/get/unset remain
+available for automation. Global getters do not run migrations. The config file is written with mode `0600` because it can contain API keys.
+Running daemon and MCP processes read global configuration at startup; restart
+the daemon and reconnect MCP clients after changing connection, credential or
+logging settings. Repository configuration reloads globals when opened or rescanned.
 
 A complete minimal local config is:
 
@@ -101,6 +115,11 @@ policy apply. `capabilities` and candidate checking expose this limit. Do not
 suggest remove/re-add as a routine setting change: removal destroys the family
 index and registration. A model migration needs its own reviewed procedure.
 
+`muninn remove PATH` uses the registered path displayed by `muninn status`.
+Its confirmation names the repository and includes all indexed worktrees in the
+removal scope. An empty answer, No, or end of input cancels before waiting for
+indexing or asking the indexer to yield. An unregistered path has nothing to remove.
+
 ## File selection
 
 Git ignore files are not consulted. Rules classify paths as:
@@ -130,8 +149,9 @@ embeddings nor applies the legacy tier ranking penalty. Vendor text remains
 available through full-text/hybrid text results; semantic coverage requires a
 stored vector. These are current runtime limits, not promises of future behavior.
 
-Global `[index].exclude` and `.vendor` remain legacy merge inputs. They do not
-silently replace the shipped defaults or saved policy of a new/registered family.
+Global `[index].exclude` and `.vendor` are captured into a new family's frozen
+default rules and remain runtime defaults for unbound registrations. Later global
+edits do not replace an existing family's snapshot or saved policy.
 Use the family TUI or JSON interface to change selection.
 
 ## Inspect, check, save, start
@@ -153,7 +173,7 @@ complete JSON initial/check/apply/start requests. Requests are not configuration
 files. Check validates without saving. Apply replaces a complete policy with
 family/revision guards. Policy saves can reconcile an already-enabled family.
 Registration or saving an unstarted family does not start it; `start` or the
-TUI's separate Start confirmation does. A first start can download a model and
+TUI's explicit Start indexing action does. A first start can download a model and
 perform substantial indexing.
 
 `watcher.debounce_ms` is part of family policy. File selection and policy are

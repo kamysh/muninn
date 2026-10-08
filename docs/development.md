@@ -110,7 +110,9 @@ base and delta before RRF in one SQL statement/snapshot. Approximate base vector
 retrieval still has recall tradeoffs; a small RRF score is not a confidence estimate.
 
 File watching and fallback Git discovery find edits, newly linked checkouts and
-worktree removal. Removal from a successfully read Git registry retires the
+worktree removal. Git worktree moves preserve checkout identity and completed
+views; reconciliation updates the root and refreshes paths before adding new
+checkouts, including reuse of a moved worktree’s former location. Removal from a successfully read Git registry retires the
 checkout and drops its AGE graph. A root that is unavailable but remains registered
 retains its data. Discovery does not invoke `git worktree prune`.
 
@@ -133,7 +135,8 @@ confirmation enables the family and runs foreground indexing; the daemon can
 continue an interrupted authorized run. New linked worktrees inherit family policy.
 
 The global config holds connection/credentials and service/legacy settings.
-New family policy uses shipped creation defaults. Stored defaults and revisioned
+New family policy snapshots the global family settings; frozen file rules
+combine shipped rules with the captured global additions. Stored defaults and revisioned
 policy do not silently change when global settings or a new binary change defaults.
 Read-only policy queries never prepare schemas or write configuration. The current
 policy is locked against stale-policy publication during reconciliation.
@@ -153,8 +156,8 @@ transaction advisory lock.
 
 The MCP server is a stdio JSON-RPC process exposing eight tools. Code search
 requires `repo` or `cwd`; explicit `repo` wins. Resolve to the actual checkout,
-not the MCP process's working directory. Git/DB resolution does not require
-`.muninn.toml`; a legacy fallback remains.
+not the MCP process's working directory. Git and database registration resolve
+the selected checkout or registered directory.
 
 Curated knowledge currently has a different identity rule: exact `repo` strings.
 Use an established main-checkout key for shared notes. Do not create accidental
@@ -171,8 +174,8 @@ note silos for temporary worktrees. See the [agent skill](claude-code-setup/skil
   arbitrary worktree paths. `config PATH --json` and code searches resolve families.
 - Worktree queries do not implement the legacy vendor ranking penalty or lazy
   embedding warm-up. Tier-2 chunks without vectors still participate in text search.
-- New-family default backend is Voyage; global local-backend selection is not
-  inherited. Existing embedding-profile changes are unsupported.
+- New families snapshot global provider/model settings. Existing embedding-profile
+  changes remain unsupported; global edits never change saved profiles.
 - `dsn_override` and `max_connections` are parsed but unused; SSL modes and password
   lookup have limits detailed in [Configuration](configuration.md).
 - Formal models contain abstractions and known runtime mismatches. See

@@ -226,25 +226,14 @@ async fn resolve_repo(client: &Client, params: &SearchParams) -> Result<Repo> {
             }
         }
     }
-    let path = if let Some(ref explicit) = params.repo {
-        explicit.clone()
-    } else if let Some(ref cwd) = params.cwd {
-        let cwd_path = std::path::Path::new(cwd);
-        let root = muninn_core::repo_resolver::find_repo_root(cwd_path).ok_or_else(|| {
-            anyhow::anyhow!(
-                "no {} found above '{}'",
-                muninn_core::config::RepoConfig::FILE_NAME,
-                cwd
-            )
+    let path = params
+        .repo
+        .as_ref()
+        .or(params.cwd.as_ref())
+        .ok_or_else(|| {
+            anyhow::anyhow!("provide either 'repo' path or 'cwd' to resolve the repository")
         })?;
-        root.to_string_lossy().to_string()
-    } else {
-        anyhow::bail!("provide either 'repo' path or 'cwd' to resolve the repository");
-    };
-
-    store::get_repo_by_path(client, &path)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("repo not found or not indexed: '{}'", path))
+    anyhow::bail!("repo not found or not indexed: '{}'", path)
 }
 
 /// Enforce RepoDimMatchesBackend: the query embedding must have the same

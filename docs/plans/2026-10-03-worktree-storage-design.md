@@ -871,11 +871,6 @@ Command spellings here are proposals for review. All JSON commands are
 noninteractive, emit one JSON response on stdout, and put diagnostics/progress on
 stderr. Requests and responses carry `api_version: 1`; unknown fields and invalid
 policy keys fail validation. Paths resolve to a checkout and then its family.
-No operation reads or writes a per-repository `.muninn.toml` after cutover.
-Existing `config get/set --repo` operations route nonsecret family fields through
-the same DB validation/update service. A single-field set reads the revision,
-constructs the complete candidate, and fails on a concurrent update. Requests
-to edit a repository file explain the migration and point to the native TUI.
 
 | Proposed command | Contract |
 | --- | --- |

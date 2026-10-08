@@ -185,9 +185,9 @@ record PolicyUpdate (before after : FamilyPolicy) : Set where
   field sameFamily : FamilyPolicy.family before ≡ FamilyPolicy.family after
         newer : FamilyPolicy.revision before < FamilyPolicy.revision after
 
--- Resolution is a registry lookup from a path in a checkout, independent of
--- .muninn.toml. The runtime must establish the ancestor and registered-family
--- evidence; the selected checkout determines returned paths and visibility.
+-- Resolution is a registry lookup from a path in a checkout. The runtime must
+-- establish the ancestor and registered-family evidence; the selected checkout
+-- determines returned paths and visibility.
 -- Canonical-path containment is an external relation supplied by the resolver;
 -- it is not an empty, universally inhabited record asserting every path matches.
 record ResolvedCheckout (ancestorOrSelf : FilePath → FilePath → Set)

@@ -56,6 +56,7 @@ async fn reserve(
     client: &mut Client,
     path: &Path,
     input: Option<&InitialRequest>,
+    creation: impl FnOnce(&Path) -> Result<(Policy, Defaults)>,
 ) -> Result<Reservation> {
     let tx = client.transaction().await?;
     family_store::lock_registry(&tx)
@@ -87,18 +88,14 @@ async fn reserve(
             .root
             .to_path_buf()
             .map_err(|_| failure("cannot decode checkout root"))?;
-        let policy = input.map(|input| input.policy.clone()).unwrap_or_else(|| {
-            Policy::shipped(
-                root.file_name()
-                    .unwrap_or(root.as_os_str())
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        });
+        let (default_policy, defaults) = creation(&root)?;
+        let policy = input
+            .map(|input| input.policy.clone())
+            .unwrap_or(default_policy);
         let intent = Intent {
             format_version: 1,
             policy,
-            defaults: Defaults::shipped(),
+            defaults,
         };
         intent.policy.validate()?;
         intent.defaults.validate()?;
@@ -137,6 +134,31 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = anyhow::Result<PreparationConnection>>,
 {
+    add_with_creation(client, prepare, path, input, |root| {
+        Ok((
+            Policy::shipped(
+                root.file_name()
+                    .unwrap_or(root.as_os_str())
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Defaults::shipped(),
+        ))
+    })
+    .await
+}
+
+pub async fn add_with_creation<F, Fut>(
+    client: &mut Client,
+    prepare: F,
+    path: &Path,
+    input: Option<&InitialRequest>,
+    creation: impl FnOnce(&Path) -> Result<(Policy, Defaults)>,
+) -> Result<Value>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<PreparationConnection>>,
+{
     if let Some(input) = input {
         input.validate()?;
     }
@@ -160,7 +182,7 @@ where
         .prepare_public()
         .await
         .map_err(|_| failure("public preparation failed; committed migrations remain retryable"))?;
-    let reservation = reserve(client, path, input).await?;
+    let reservation = reserve(client, path, input, creation).await?;
     let id = reservation.family.id;
     finish(client, &prepare, path, reservation)
         .await

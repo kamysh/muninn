@@ -367,25 +367,14 @@ git commit -m "feat(core): Tier/EmbeddingState/content_hash on Chunk + chunk-tab
 - Produces:
   - `EffectiveConfig.vendor: Vec<String>`.
   - `pub const EXCLUDE_DEFAULTS: &[&str]`, `pub const VENDOR_DEFAULTS: &[&str]` in `config.rs`.
-  - `EffectiveConfig::merge` resolves `exclude` and `vendor` by `defaults ++ global ++ repo` (layered fold replaces the prior replace semantics).
   - `pub enum Decision { Drop, Tier1, Tier2 }` and `pub fn classify(repo_root: &Path, exclude: &[String], vendor: &[String], rel: &Path) -> Decision` in `pipeline.rs`, built on `ignore::overrides::Override` (last-match-wins, `!` negation already native).
 
 - [ ] **Step 1: Failing tests for merge resolution + classify (config.rs / pipeline.rs)**
 
-In `config.rs`:
-```rust
-#[test]
-fn exclude_layered_fold_inherits_and_adds() {
-    let mut global = GlobalConfig::default();
-    global.index.exclude = vec!["g_only/".into()];
-    let repo = RepoConfig { index: Some(IndexConfig { exclude: vec!["r_only/".into()], vendor: vec![] }), ..Default::default() };
-    let eff = EffectiveConfig::merge(&global, &repo, "p");
-    // defaults ++ global ++ repo — all present (no longer whole-list replace)
-    assert!(eff.exclude.iter().any(|g| g == "g_only/"));
-    assert!(eff.exclude.iter().any(|g| g == "r_only/"));
-    assert!(eff.exclude.iter().any(|g| g == ".git/")); // a shipped default
-}
-```
+The obsolete configuration merge example has been retired. Current runtime
+settings come from stored family policy or global defaults; see the current
+[development guide](../../development.md).
+
 In `pipeline.rs` tests:
 ```rust
 #[test]
@@ -491,7 +480,7 @@ Add an integration test that indexes a tiny temp repo with a `node_modules/` fil
 
 In `index_repo`, before the per-file loop, hoist the two `Override`s once (exclude, vendor); for each file compute `rel = file.strip_prefix(repo_path)` and `decision = classify(...)`; skip `Drop` (already excluded by the walker, but classify is the authority); call `index_file(..., tier)` with `Tier1`/`Tier2`. Pass `eff.exclude`/`eff.vendor` into `index_repo` (signature gains `vendor: &[String]`).
 
-**Update ALL callers of `index_repo`** — grep for `index_repo(` first. Known sites: `crates/cli/src/main.rs` (`run_foreground_index` → pass `&eff.vendor`), and `crates/indexer/src/main.rs` (the daemon reindex spawn → pass `&eff.vendor`; it already builds `eff = EffectiveConfig::merge(...)`). Both must pass the resolved vendor list or the build breaks.
+**Update ALL callers of `index_repo`** — grep for `index_repo(` first. Known sites: `crates/cli/src/main.rs` (`run_foreground_index` → pass `&eff.vendor`), and `crates/indexer/src/main.rs` (the daemon reindex spawn → pass `&eff.vendor`). Both must pass the resolved vendor list or the build breaks.
 
 In `index_file`, add `tier: Tier` param. After chunking, set on each chunk: `c.tier = tier; c.content_hash = Some(content_sha256(&c.content));`. Then:
 - `Tier1`: embed as today; set `embedding_state = Embedded` (or `Absent` on the empty-embedder warn-path).

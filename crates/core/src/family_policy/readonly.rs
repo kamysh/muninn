@@ -223,6 +223,27 @@ pub async fn query(
     operation: Operation,
     input: Option<&str>,
 ) -> Result<Value> {
+    query_with_creation(client, path, operation, input, |root| {
+        Ok((
+            Policy::shipped(
+                root.file_name()
+                    .unwrap_or(root.as_os_str())
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Defaults::shipped(),
+        ))
+    })
+    .await
+}
+
+pub async fn query_with_creation(
+    client: &mut tokio_postgres::Client,
+    path: &Path,
+    operation: Operation,
+    input: Option<&str>,
+    creation: impl FnOnce(&Path) -> Result<(Policy, Defaults)>,
+) -> Result<Value> {
     let tx = client
         .build_transaction()
         .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
@@ -239,7 +260,20 @@ pub async fn query(
         ));
     }
     let mut data = context.document();
-    let (mut selected, defaults) = context.policy_and_defaults();
+    let (mut selected, defaults) = if context.view.is_some() {
+        context.policy_and_defaults()
+    } else {
+        let (policy, defaults) = creation(&context.root)?;
+        policy.validate()?;
+        defaults.validate()?;
+        data["policy"] = json!(policy);
+        data["defaults"] = json!(defaults);
+        data["defaults_revision"] = json!(defaults.revision);
+        data["effective_policy"] = json!(policy.effective(&defaults));
+        data["effective_rules"] = json!(EffectiveRules::resolve(&policy, &defaults));
+        data["dimension"] = json!(policy.embeddings.backend.dimension());
+        (policy, defaults)
+    };
     if operation == Operation::Check {
         let input = input
             .ok_or_else(|| PolicyError::new("invalid_request", "candidate JSON is required"))?;

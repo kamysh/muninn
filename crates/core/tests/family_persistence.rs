@@ -1523,8 +1523,6 @@ async fn registration_verification(
         count(client, &format!("SELECT count(*) FROM {schema}.chunks")).await?,
         0
     );
-    assert!(!main.join(".muninn.toml").exists());
-    assert!(!worktree.join(".muninn.toml").exists());
     assert!(client.query_one("SELECT NOT ever_indexed AND indexed_at IS NULL AND indexing_enabled_at IS NULL AND registration_completed_at IS NOT NULL FROM repos WHERE id=$1", &[&id]).await?.get::<_,bool>(0));
     let initial = policy::InitialRequest {
         api_version: 1,
@@ -1748,3 +1746,134 @@ mod worktree_runtime;
 
 #[path = "family_persistence/runtime.rs"]
 mod policy_runtime;
+
+#[tokio::test]
+#[ignore = "requires explicit disposable container runner; never uses global configuration"]
+async fn global_default_snapshot_persistence() -> Result<()> {
+    use muninn_core::{
+        config::{EmbeddingBackend, GlobalConfig},
+        family_policy::{self as policy, readonly::Operation},
+    };
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let path = std::env::var_os("MUNINN_PERSISTENCE_TEST_CONFIG")
+        .context("use the guarded disposable runner")?;
+    let target: Target = serde_json::from_slice(&fs::read(path)?)?;
+    let mut client = target.connect().await?;
+    target.preparation().await?.prepare_public().await?;
+    let directory = tempfile::tempdir_in(&target.fixture_root)?;
+    let root = directory.path().join("snapshot-repo");
+    fs::create_dir(&root)?;
+    git(&root, &["init", "-b", "main"])?;
+    fs::write(root.join("main.rs"), "fn main() {}\n")?;
+    fs::create_dir(root.join("bulk"))?;
+    fs::write(root.join("bulk/generated.rs"), "generated\n")?;
+    let mut global = GlobalConfig::default();
+    global.embeddings.backend = EmbeddingBackend::Local;
+    global.embeddings.model = None;
+    global.embeddings.batch_size = 16;
+    global.embeddings.api_key = Some("private-fixture-key".into());
+    global.watcher.debounce_ms = 450;
+    global.index.exclude = vec!["bulk/".into()];
+    let inspected = policy::readonly::query_with_creation(
+        &mut client,
+        &root,
+        Operation::Preflight,
+        None,
+        |path| {
+            Ok((
+                policy::policy_from_global(
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    &global,
+                )?,
+                policy::defaults_from_global(&global)?,
+            ))
+        },
+    )
+    .await?;
+    assert!(inspected["family_id"].is_null());
+    assert_eq!(inspected["preflight"]["tier1"]["files"], 1);
+    let captured_policy: policy::Policy = serde_json::from_value(inspected["policy"].clone())?;
+    let captured_defaults: policy::Defaults =
+        serde_json::from_value(inspected["defaults"].clone())?;
+    global.embeddings.batch_size = 32;
+    global.watcher.debounce_ms = 900;
+    global.index.exclude.push("later/".into());
+    let request = policy::InitialRequest {
+        api_version: 1,
+        policy: captured_policy.clone(),
+    };
+    let preparations = AtomicUsize::new(0);
+    let interrupted = policy::registration::add_with_creation(
+        &mut client,
+        || async {
+            if preparations.fetch_add(1, Ordering::SeqCst) == 0 {
+                target.preparation().await
+            } else {
+                anyhow::bail!("deliberate family preparation interruption")
+            }
+        },
+        &root,
+        Some(&request),
+        |_| Ok((captured_policy.clone(), captured_defaults.clone())),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(interrupted.details["reservation_persisted"], true);
+    let reserved = interrupted.details["family_id"].clone();
+    let recovered = policy::registration::add_with_creation(
+        &mut client,
+        || target.preparation(),
+        &root,
+        None,
+        |_| panic!("recovery must not consult changed global defaults"),
+    )
+    .await?;
+    assert_eq!(recovered["family_id"], reserved);
+    assert_eq!(recovered["policy"], json!(captured_policy));
+    assert_eq!(recovered["defaults"], json!(captured_defaults));
+    assert_eq!(recovered["policy"]["embeddings"]["batch_size"], 16);
+    assert_eq!(recovered["policy"]["watcher"]["debounce_ms"], 450);
+    assert_eq!(recovered["indexing_enabled"], false);
+    assert!(!recovered.to_string().contains("private-fixture-key"));
+    let id: Uuid = serde_json::from_value(reserved)?;
+    target.record(id)?;
+    let after: Value =
+        policy::readonly::query_with_creation(&mut client, &root, Operation::Inspect, None, |_| {
+            panic!("stored policies must not consult new creation defaults")
+        })
+        .await?;
+    assert_eq!(after["policy"], recovered["policy"]);
+    assert_eq!(after["defaults"], recovered["defaults"]);
+    let repeated = policy::registration::add_with_creation(
+        &mut client,
+        || target.preparation(),
+        &root,
+        None,
+        |_| panic!("completed add must preserve the stored policy and defaults"),
+    )
+    .await?;
+    assert_eq!(repeated["policy"], recovered["policy"]);
+    assert_eq!(repeated["defaults"], recovered["defaults"]);
+    assert_eq!(repeated["revision"], 1);
+    assert_eq!(
+        policy::policy_from_global("next-repo".into(), &global)?
+            .embeddings
+            .batch_size,
+        32
+    );
+    println!("Global default snapshots verified: read-only inventory, captured scalar/rule values, immutable interrupted intent, recovery, idempotent existing add, no indexing or secrets.");
+    Ok(())
+}
+
+/// Focused runtime lifecycle regression; uses only the guarded disposable target.
+#[tokio::test]
+#[ignore]
+async fn automatic_worktree_reconciliation_lifecycle() -> Result<()> {
+    let path = std::env::var("MUNINN_PERSISTENCE_TEST_CONFIG")?;
+    let target: Target = serde_json::from_slice(&fs::read(path)?)?;
+    let mut client = target.connect().await?;
+    db::run_migrations(&mut client).await?;
+    let fixtures = tempfile::tempdir()?;
+    worktree_runtime::verify(&target, &mut client, fixtures.path()).await
+}

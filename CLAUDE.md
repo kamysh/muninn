@@ -25,7 +25,6 @@ Reading these instructions does not authorize an installation or live migration.
   Retain the last completed index during incomplete Git operations/conflicts.
 - New-family configuration lives in the database and has explicit first start.
   Use JSON for agent configuration, the TUI for humans. Credentials stay global.
-  Legacy `.muninn.toml` handling is not the new configuration workflow.
 - Read [spec/README.md](spec/README.md) before making formal claims. It records
   the model's scope and runtime gaps. Preserve general laws; a successful Agda
   check does not prove the Rust implementation correct.

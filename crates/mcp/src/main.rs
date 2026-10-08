@@ -94,7 +94,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
             }
         }),
         "tools/list" => {
-            let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. No .muninn.toml is needed. Searches use the selected checkout's last completed index; incomplete Git operations retain that index.";
+            let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. Searches use the selected checkout's last completed index; incomplete Git operations retain that index.";
             let cwd_desc = "Directory inside the target checkout or registered directory. Used when 'repo' is absent; no configuration marker is needed.";
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -371,12 +371,9 @@ fn extract_repo_hint(args: &serde_json::Value) -> Option<String> {
         return Some(repo.to_string());
     }
     if let Some(cwd) = args.get("cwd").and_then(|v| v.as_str()) {
-        let cwd_path = Path::new(cwd);
-        if let Some(root) = muninn_core::repo_resolver::find_repo_root(cwd_path) {
-            return Some(root.to_string_lossy().to_string());
-        }
         return Some(cwd.to_string());
     }
+
     None
 }
 
@@ -407,6 +404,10 @@ async fn record_usage(
     duration_ms: i64,
     result_count: Option<i64>,
 ) -> anyhow::Result<()> {
+    // These columns are PostgreSQL INT (int4), so their wire values must be i32.
+    // Checked conversions keep unusually large measurements from wrapping.
+    let duration_ms = i32::try_from(duration_ms)?;
+    let result_count = result_count.map(i32::try_from).transpose()?;
     client
         .execute(
             "INSERT INTO mcp_usage (tool, repo_path, duration_ms, result_count) \
@@ -416,6 +417,10 @@ async fn record_usage(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "usage_tests.rs"]
+mod usage_tests;
 
 async fn dispatch_tool(
     ctx: &SearchContext,

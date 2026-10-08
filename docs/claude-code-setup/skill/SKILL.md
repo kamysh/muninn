@@ -19,7 +19,7 @@ For code searches, pass `repo` as the absolute path of the checkout you are
 working in, including a linked worktree. Alternatively, `cwd` can be a directory
 inside that checkout or registered directory. `repo` takes precedence. Supplying
 neither is an error; the MCP process does not infer your shell's directory.
-Git and database registration resolve the target; no `.muninn.toml` is needed.
+Git and database registration resolve the target.
 
 | Question | Tool |
 | --- | --- |
@@ -62,7 +62,7 @@ inspection while the index is catching up.
 
 Connections and credentials come from `~/.config/muninn/config.toml` and the
 existing credential setup. Family policies are in PostgreSQL. Configure them
-through the CLI rather than editing `.muninn.toml` or SQL. A policy change affects
+through the CLI rather than editing SQL directly. A policy change affects
 the repository's whole worktree family; preflight inventories only the selected
 checkout. `muninn add PATH` and `muninn config PATH` open the human TUI.
 Agents should use the JSON forms below.
@@ -106,7 +106,9 @@ muninn config "$ROOT" --json --apply - < candidate.json
 
 A new-family request has `{ "api_version": 1, "policy": ... }`, using the
 complete policy returned by preflight for that unregistered directory and any intended
-changes. New-family defaults use Voyage, independently of the global backend.
+changes. New-family defaults snapshot the global provider/model, request size,
+watcher delay and global file rules. Existing saved policy/defaults remain stable
+when global settings change.
 For local embeddings set `policy.embeddings.backend` to `"local"` and
 `policy.embeddings.model` to `null` before registration. Check it with
 `config PATH --json --check -`, then register with

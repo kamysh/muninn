@@ -223,6 +223,81 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         t3.checkout
     );
 
+    // Git moves retain administrative identity. Discover the move and a new
+    // checkout at its former path in one periodic pass, without new embeddings.
+    let relocated = parent.join("runtime-relocated");
+    git(
+        &main,
+        &[
+            "worktree",
+            "move",
+            three.to_str().unwrap(),
+            relocated.to_str().unwrap(),
+        ],
+    )?;
+    git(
+        &main,
+        &["worktree", "add", "--detach", three.to_str().unwrap()],
+    )?;
+    let before_move = embedder.0.load(Ordering::SeqCst);
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let relocated_target = worktrees::resolve(client, &relocated).await?.unwrap();
+    assert_eq!(relocated_target.checkout, t3.checkout);
+    assert_eq!(relocated_target.graph, t3.graph);
+    let replacement = worktrees::resolve(client, &three).await?.unwrap();
+    assert_ne!(replacement.checkout, t3.checkout);
+    assert!(!found(client, &relocated_target, "gamma").await?.is_empty());
+    assert!(!found(client, &replacement, "gamma").await?.is_empty());
+    assert!(
+        worktrees::fulltext_search(client, &relocated_target, "gamma", 20)
+            .await?
+            .iter()
+            .all(|hit| Path::new(&hit.chunk.file_path).starts_with(&relocated))
+    );
+    assert_eq!(before_move, embedder.0.load(Ordering::SeqCst));
+    git(
+        &main,
+        &["worktree", "remove", "--force", three.to_str().unwrap()],
+    )?;
+    worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[]),
+    )
+    .await?;
+    assert_eq!(
+        count(
+            client,
+            &format!(
+                "SELECT count(*) FROM {s}.checkouts WHERE id='{}' AND registration_state='retired'",
+                replacement.checkout
+            )
+        )
+        .await?,
+        1
+    );
+    assert!(!found(client, &relocated_target, "gamma").await?.is_empty());
+
     // Blocking Git metadata prevents publication, including resolved-but-not-
     // completed merges. Other worktrees continue updating independently.
     let g = muninn_core::repo_resolver::discover_git_checkout(&one)

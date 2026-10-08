@@ -54,11 +54,24 @@ pub async fn add(path: &Path, with_input: bool) -> policy::Result<Value> {
             "cannot connect using global Muninn configuration",
         )
     })?;
-    let mut data = policy::registration::add(
+    let mut data = policy::registration::add_with_creation(
         &mut client,
         || db::connect_for_preparation(&cfg.database),
         path,
         input.as_ref(),
+        |root| {
+            let policy = match input.as_ref() {
+                Some(request) => request.policy.clone(),
+                None => policy::policy_from_global(
+                    root.file_name()
+                        .unwrap_or(root.as_os_str())
+                        .to_string_lossy()
+                        .into_owned(),
+                    &cfg,
+                )?,
+            };
+            Ok((policy, policy::defaults_from_global(&cfg)?))
+        },
     )
     .await?;
     enrich_credentials(&mut data, &cfg, false)?;
@@ -102,6 +115,16 @@ pub async fn start_configured(
     cfg: &GlobalConfig,
     path: &Path,
     request: &policy::start::Request,
+) -> policy::Result<Value> {
+    start_configured_with_progress(client, cfg, path, request, |_, _, _| {}).await
+}
+
+pub async fn start_configured_with_progress(
+    client: &mut tokio_postgres::Client,
+    cfg: &GlobalConfig,
+    path: &Path,
+    request: &policy::start::Request,
+    progress: impl Fn(usize, usize, &Path),
 ) -> policy::Result<Value> {
     use muninn_core::{embeddings, pipeline, store};
     // Reject a stale/wrong family before requesting preemption. Authorization
@@ -154,7 +177,7 @@ pub async fn start_configured(
         view.dimension as usize,
         &eff.exclude,
         &eff.vendor,
-        |_, _, _| {},
+        progress,
     )
     .await;
     let _ = store::unlock(&lock, view.family_id).await;

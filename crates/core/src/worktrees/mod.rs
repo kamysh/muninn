@@ -201,6 +201,7 @@ pub async fn reconcile_changed_family(
     lock(&tx, family).await?;
     let mut targets = Vec::new();
     let mut listed = Vec::new();
+    let mut available = Vec::new();
     for entry in &entries {
         // Git keeps unavailable/locked/prunable entries. Never retire them just
         // because canonicalization or discovery is currently impossible.
@@ -221,19 +222,74 @@ pub async fn reconcile_changed_family(
         );
         let stored = StoredPath::canonicalize(&git.root).await?;
         let admin = StoredPath::canonicalize(&git.git_dir).await?;
-        let existing=tx.query_opt(&format!("SELECT id,registration_state,git_dir,indexed_at IS NOT NULL FROM {s}.checkouts WHERE root=$1 AND registration_state<>'retired'"),&[&stored.bytes()]).await?;
+        available.push((git, stored, admin));
+    }
+    // Retire absent identities before inserting replacements. A moved checkout
+    // still has its Git administrative identity, even though its old root is
+    // absent; an unavailable entry still listed by Git must retain its index.
+    for row in tx
+        .query(
+            &format!(
+                "SELECT id,root,git_dir FROM {s}.checkouts WHERE registration_state<>'retired'"
+            ),
+            &[],
+        )
+        .await?
+    {
+        let id: Uuid = row.get(0);
+        let bytes: Vec<u8> = row.get(1);
+        let admin: Option<Vec<u8>> = row.get(2);
+        #[cfg(unix)]
+        let encoding = "unix-bytes";
+        #[cfg(windows)]
+        let encoding = "windows-utf16le";
+        let path = StoredPath::from_db(encoding, bytes)?.to_path_buf()?;
+        let identity_present = available
+            .iter()
+            .any(|(_, _, git_dir)| Some(git_dir.bytes()) == admin.as_deref());
+        let replaced = available.iter().any(|(_, root, git_dir)| {
+            root.to_path_buf().ok().as_ref() == Some(&path)
+                && Some(git_dir.bytes()) != admin.as_deref()
+        });
+        if !identity_present && (!listed.contains(&path) || replaced) {
+            graph::drop_graph(tx.client(), id).await?;
+            tx.execute(
+                &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
+                &[&id],
+            )
+            .await?;
+            tx.execute(&format!("UPDATE {s}.checkouts SET registration_state='retired',retired_at=now(),indexed_at=NULL WHERE id=$1"), &[&id]).await?;
+        }
+    }
+    // Apply relocations before additions so the old location can be reused by
+    // a newly created worktree in the same discovery pass.
+    let mut relocated = BTreeSet::new();
+    for (_, stored, admin) in &available {
+        if let Some(row) = tx.query_opt(
+            &format!("SELECT id,root FROM {s}.checkouts WHERE git_dir=$1 AND registration_state<>'retired'"),
+            &[&admin.bytes()],
+        ).await? {
+            let id: Uuid = row.get(0);
+            if row.get::<_, Vec<u8>>(1) != stored.bytes() {
+                tx.execute(&format!("UPDATE {s}.checkouts SET root=$1 WHERE id=$2"), &[&stored.bytes(), &id]).await?;
+                relocated.insert(id);
+            }
+        }
+    }
+    for (git, stored, admin) in available {
+        let existing = tx.query_opt(
+            &format!("SELECT id,registration_state,root,indexed_at IS NOT NULL FROM {s}.checkouts WHERE git_dir=$1 AND registration_state<>'retired'"),
+            &[&admin.bytes()],
+        ).await?;
         let mut initialized = false;
         let id = if let Some(row) = existing {
-            initialized = row.get(3);
+            let id: Uuid = row.get(0);
+            let moved = relocated.contains(&id);
             if row.get::<_, String>(1) == "suppressed" {
                 continue;
             }
-            ensure!(
-                row.get::<_, Option<Vec<u8>>>(2).as_deref() == Some(admin.bytes()),
-                "checkout identity changed at {}",
-                git.root.display()
-            );
-            row.get(0)
+            initialized = row.get::<_, bool>(3) && !moved;
+            id
         } else {
             let id = Uuid::new_v4();
             tx.execute(
@@ -270,31 +326,6 @@ pub async fn reconcile_changed_family(
         targets.first().map(|(_, t, _)| &t.root) == Some(&primary.root),
         "primary checkout cannot be indexed"
     );
-    // Removal is based on the Git registry, not a failed filesystem read.
-    for row in tx
-        .query(
-            &format!("SELECT id,root FROM {s}.checkouts WHERE registration_state<>'retired'"),
-            &[],
-        )
-        .await?
-    {
-        let id: Uuid = row.get(0);
-        let bytes: Vec<u8> = row.get(1);
-        #[cfg(unix)]
-        let encoding = "unix-bytes";
-        #[cfg(windows)]
-        let encoding = "windows-utf16le";
-        let path = StoredPath::from_db(encoding, bytes)?.to_path_buf()?;
-        if !listed.contains(&path) {
-            graph::drop_graph(tx.client(), id).await?;
-            tx.execute(
-                &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
-                &[&id],
-            )
-            .await?;
-            tx.execute(&format!("UPDATE {s}.checkouts SET registration_state='retired',retired_at=now(),indexed_at=NULL WHERE id=$1"),&[&id]).await?;
-        }
-    }
     garbage_collect(&tx, &s).await?;
     tx.commit().await?;
     let mut skips = Vec::new();
@@ -321,6 +352,7 @@ pub async fn reconcile_changed_family(
             exclude,
             vendor,
             &progress,
+            !initialized,
         )
         .await
         {
@@ -474,6 +506,7 @@ async fn reconcile_checkout(
     exclude: &[String],
     vendor: &[String],
     progress: &impl Fn(usize, usize, &Path),
+    refresh_graph: bool,
 ) -> Result<()> {
     let stamp = git_stamp(git).await?;
     let s = schema(target.family);
@@ -546,7 +579,7 @@ async fn reconcile_checkout(
         desired.insert(file.path.clone(), version);
         progress(n + 1, files.len(), &target.root.join(&file.path));
     }
-    if !initialized || previous != desired {
+    if refresh_graph || !initialized || previous != desired {
         if target.graph == target.family {
             publish_base(&tx, &s, target.checkout, &desired).await?;
             // Legacy rows have no reliable file-version identity. They remain

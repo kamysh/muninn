@@ -44,8 +44,6 @@ to be specified before implementation.
 
 - `repos.path` is unique, and its UUID determines both the per-repo PostgreSQL
   schema and the Apache AGE graph. `get_repo_by_path` requires an exact path.
-- MCP resolution walks to `.muninn.toml` when given `cwd`, then looks up that
-  path. The marker is commonly ignored by Git and absent in a new worktree.
 - Chunk rows contain absolute `file_path` values. Search reads from one repo's
   chunk table and returns those paths directly.
 - `content_hash` hashes *chunk text* for embedding backfill. It does not
@@ -55,10 +53,6 @@ to be specified before implementation.
   cannot make a worktree's structural graph correct.
 - The daemon watches only registered paths. Its incremental watcher does not
   currently rebuild cross-file edges; full reindex does.
-- Configuration currently combines a user-level file with optional
-  `.muninn.toml` overrides. The latter can override the database connection in
-  the schema, but that capability is not used in practice. The file also acts
-  as the MCP resolver's repository marker.
 - Curated knowledge is keyed by `repo_path`, so it needs an explicit policy
   when multiple checkout paths refer to one Git repository.
 
@@ -207,7 +201,7 @@ requires a concrete resource and recovery plan before execution.
 Store repository-family indexing policy in the database, keyed by family ID.
 This includes display name, exclude and vendor patterns, watcher settings, and
 the selected embedding backend and model. Every checkout in the family uses the
-same policy; there is no per-worktree `.muninn.toml` override. Keep built-in
+same policy. Keep built-in
 defaults in the program and, if user-wide policy overrides are needed, store
 those in the database too. Record the analysis identity with file versions and
 the model identity with embeddings so a policy change cannot silently reuse
@@ -267,12 +261,12 @@ checkout's results or requiring a fresh setup decision.
 - When a search supplies `repo` or `cwd`, resolve the nearest Git worktree root
   first, find its common Git directory, then find the registered family. If
   neither applies, walk upward to the nearest registered non-Git path in the
-  database. Resolution does not depend on a `.muninn.toml` marker. An explicit
+  database. An explicit
   worktree path selects that worktree, not the primary checkout.
 - The daemon discovers linked worktrees from registered families using `git
   worktree list --porcelain`, initially and on a bounded periodic scan. It
   watches each discovered checkout root. Worktree creation does not require
-  copying `.muninn.toml` or calling `muninn add`.
+  calling `muninn add`.
 - On first discovery, walk the worktree under the family's indexing rules and
   select or construct an immutable baseline and its sparse overlay, once Git
   is settled. Hash exact working-tree bytes, including ordinary uncommitted edits;
@@ -293,10 +287,6 @@ checkout's results or requiring a fresh setup decision.
   build, or active query needs them. Removing a checkout must not drop the
   application schema or AGE graph. Garbage collection follows reference reachability and reader/job
   lifetime; it is a separately reviewed operation.
-
-An existing `.muninn.toml` is read only during migration, then ceases to be a
-configuration source or root marker. Do not silently apply a branch-specific
-copy of that file to one checkout after the family policy has been established.
 
 ## Git operations and retained search snapshots
 
@@ -379,16 +369,6 @@ manifest and search path are ready, then switch each ready checkout to its new
 view atomically. Do not drop old chunk tables or graphs in the same migration; remove them only after
 verification and a separately reviewed cleanup step.
 
-Migrate configuration separately and visibly: read each registered path's
-effective settings under the old global-plus-repo rules, write its nonsecret
-family policy to the database, and retain connection details and secrets in
-the bootstrap file. Detect any actual per-repo database override and stop that
-family's migration for review rather than discarding it. Verify the new
-effective settings before cutover. Leave existing `.muninn.toml` files on disk
-for recovery; report that they are no longer read after cutover. The
-`muninn config get/set --repo` commands should operate on the family record in
-the database, regardless of which linked worktree path the user supplies.
-
 Keep `muninn add`, `remove`, `reindex`, `pause`, `resume`, and MCP `repo`/`cwd`
 interfaces working for existing registrations. Extend status output to show
 family and checkout state. Removing one worktree must not delete the family;
@@ -449,8 +429,8 @@ and concurrency tests. Old indexed state must never be reported as current.
 
 ## Acceptance criteria
 
-1. A newly created linked worktree is searchable without `muninn add` or a
-   copied `.muninn.toml`; results point inside that worktree.
+1. A newly created linked worktree is searchable without `muninn add`;
+   results point inside that worktree.
 2. Two worktrees at different commits return their own versions of a file.
    Editing, adding, renaming, or deleting a file changes only the affected
    worktree's results, including structural relationships.
@@ -469,7 +449,7 @@ and concurrency tests. Old indexed state must never be reported as current.
    baselines still reachable elsewhere, including hidden baseline entries and
    active query/build roots. Family removal cannot race a watcher or indexing job.
 8. A family policy set from any linked worktree is visible from all its
-   checkouts. Search resolution works without `.muninn.toml`, and migration
+   checkouts. Search resolution uses Git and registered families. Migration
    preserves existing effective indexing settings and credentials.
 9. `add` returns preflight advice without indexing. The TUI asks whether to
    start or refine the policy; JSON inspection and updates expose the same

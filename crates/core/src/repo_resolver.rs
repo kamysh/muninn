@@ -104,7 +104,7 @@ fn parse_git_worktrees(bytes: &[u8]) -> anyhow::Result<Vec<GitWorktree>> {
 /// Discover a checkout from an existing directory, including a nested directory.
 /// Returns None outside a working tree (including bare repositories and Git's
 /// internal directory). Missing paths, invalid repositories and Git errors fail.
-/// No `.muninn.toml`, branch name or commit is required.
+/// No configuration marker, branch name or commit is required.
 pub async fn discover_git_checkout(directory: &Path) -> anyhow::Result<Option<GitCheckout>> {
     let directory = tokio::fs::canonicalize(directory)
         .await
@@ -261,21 +261,6 @@ pub fn resolve_path(raw: &str) -> anyhow::Result<PathBuf> {
         Ok(p) => Ok(p),
         Err(_) if expanded.is_absolute() => Ok(expanded),
         Err(_) => Ok(std::env::current_dir()?.join(expanded)),
-    }
-}
-
-/// Walk up the directory tree from `cwd` (inclusive) until a directory
-/// containing `.muninn.toml` is found. Returns the first (nearest) match.
-/// Returns None if no ancestor contains .muninn.toml.
-pub fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
-    let mut current = cwd.to_path_buf();
-    loop {
-        if current.join(crate::config::RepoConfig::FILE_NAME).exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
     }
 }
 
@@ -604,7 +589,6 @@ mod tests {
     #[tokio::test]
     async fn non_git_and_bare_directories_have_no_checkout() {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join(".muninn.toml"), "").unwrap();
         assert_eq!(discover_git_checkout(temp.path()).await.unwrap(), None);
         let directory = crate::family_store::CheckoutIdentity::discover(temp.path())
             .await
@@ -653,54 +637,5 @@ mod tests {
             discovered.common_dir,
             root.join(".git").canonicalize().unwrap()
         );
-    }
-
-    fn make_tree(tmp: &Path, rel_paths: &[&str]) {
-        for p in rel_paths {
-            let full = tmp.join(p);
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(&full, "").unwrap();
-        }
-    }
-
-    #[test]
-    fn resolves_from_direct_repo_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        make_tree(tmp.path(), &[".muninn.toml"]);
-        let root = find_repo_root(tmp.path()).unwrap();
-        assert_eq!(root, tmp.path());
-    }
-
-    #[test]
-    fn resolves_from_nested_subdir() {
-        let tmp = tempfile::tempdir().unwrap();
-        make_tree(tmp.path(), &[".muninn.toml", "src/auth/handler.rs"]);
-        let cwd = tmp.path().join("src/auth");
-        let root = find_repo_root(&cwd).unwrap();
-        assert_eq!(root, tmp.path());
-    }
-
-    #[test]
-    fn returns_none_when_no_dot_muninn_toml() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
-        let root = find_repo_root(&tmp.path().join("src"));
-        assert!(root.is_none());
-    }
-
-    #[test]
-    fn stops_at_nearest_not_outermost() {
-        let tmp = tempfile::tempdir().unwrap();
-        // outer has .muninn.toml AND outer/inner has .muninn.toml
-        // cwd is inside inner — should resolve to inner, not outer
-        make_tree(
-            tmp.path(),
-            &[".muninn.toml", "inner/.muninn.toml", "inner/src/file.rs"],
-        );
-        let cwd = tmp.path().join("inner/src");
-        let root = find_repo_root(&cwd).unwrap();
-        assert_eq!(root, tmp.path().join("inner"));
     }
 }

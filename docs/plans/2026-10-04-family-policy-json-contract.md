@@ -44,7 +44,6 @@ Evidence read for this contract:
 
 | Current source | Consequence |
 | --- | --- |
-| `config.rs`: `EffectiveConfig::merge` | Currently merges shipped, global and repo rules on every load. Stored family defaults must replace that evolving input after cutover. |
 | `pipeline.rs`: `build_excludes` | Currently trims rules, skips empty rules and warns/continues on invalid globs. New policy validation must reject invalid/empty rules before persistence. |
 | `pipeline.rs`: `index_repo` | Disables standard ignore filters, always skips `.git`, and prunes excluded directories. Preflight must expose the same selection, including Git-ignored content. |
 | `config.rs`: shipped vendor defaults | `node_modules`, build outputs and virtual environments are vendor content, not excluded. Preserve these defaults; expose their cost and let the human/agent choose exclusions. |
@@ -672,8 +671,8 @@ The disposable integration scenarios exercise concurrent main/worktree adds,
 one shared schema/graph pair, idempotent checkout registration, completed-input
 refusal, path-based CAS conflicts/no-op, policy preservation after repeated add,
 immutable intent/completion, missing completed-graph refusal, and interrupted
-reservation recovery retaining its UUID and initial policy. They assert no chunks,
-no `.muninn.toml` creation and no first-index authorization. A targeted completion
+reservation recovery retaining its UUID and initial policy. They assert no chunks
+and no first-index authorization. A targeted completion
 failure checks that initial policy/default rows and the completion marker roll
 back together. The old-registry fixture checks that apply refuses without
 migrating. Existing coordinator and policy persistence scenarios remain in the
@@ -788,8 +787,7 @@ config/DB access; parser tests distinguish native, JSON and legacy forms.
 The approved disposable runner additionally exercises the actual TUI database
 adapter: read-only open/check, initial policy registration, a conflicting JSON
 edit, explicit review followed by successful CAS, no-op save, and worktree
-association in the same family. It asserts no chunks, no first-index authorization
-and no `.muninn.toml` creation. Both the existing core integration suite and this
+association in the same family. It asserts no chunks and no first-index authorization. Both the existing core integration suite and this
 TUI persistence test passed; container, listener and temporary credentials were
 removed. The CLI suite passed eight unit/terminal/parser tests and three process
 tests (the two explicitly ignored fixture tests ran separately through the PTY

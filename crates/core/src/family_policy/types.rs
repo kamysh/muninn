@@ -1,9 +1,69 @@
-use crate::config::{EXCLUDE_DEFAULTS, VENDOR_DEFAULTS};
+use crate::config::{EmbeddingBackend, GlobalConfig, EXCLUDE_DEFAULTS, VENDOR_DEFAULTS};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{fmt, path::Path};
 use uuid::Uuid;
+
+/// Capture only nonsecret family settings. Later global edits cannot alter it.
+pub fn policy_from_global(name: String, global: &GlobalConfig) -> Result<Policy> {
+    let backend = match global.embeddings.backend {
+        EmbeddingBackend::Voyage => Backend::Voyage,
+        EmbeddingBackend::OpenAI => Backend::OpenAI,
+        EmbeddingBackend::Local => Backend::Local,
+    };
+    let policy = Policy {
+        name,
+        index: Rules {
+            exclude: Vec::new(),
+            vendor: Vec::new(),
+        },
+        watcher: Watcher {
+            debounce_ms: global.watcher.debounce_ms,
+        },
+        embeddings: Embeddings {
+            backend,
+            model: if backend == Backend::Local {
+                None
+            } else {
+                global.embeddings.model.clone()
+            },
+            batch_size: global.embeddings.batch_size.try_into().map_err(|_| {
+                PolicyError::new(
+                    "invalid_global_defaults",
+                    "Global embedding batch size exceeds the supported family range",
+                )
+            })?,
+        },
+    };
+    policy.validate().map_err(|_| PolicyError::new("invalid_global_defaults", "Global embedding or watcher defaults are not supported for repository families; check the supported model and numeric ranges"))?;
+    Ok(policy)
+}
+
+/// Shipped rules precede the global additions, captured once for a new family.
+pub fn defaults_from_global(global: &GlobalConfig) -> Result<Defaults> {
+    use sha2::{Digest, Sha256};
+    let mut defaults = Defaults::shipped();
+    defaults
+        .index
+        .exclude
+        .extend(global.index.exclude.iter().cloned());
+    defaults
+        .index
+        .vendor
+        .extend(global.index.vendor.iter().cloned());
+    if !global.index.exclude.is_empty() || !global.index.vendor.is_empty() {
+        let bytes = serde_json::to_vec(&defaults.index).expect("serializable rule snapshot");
+        defaults.revision = format!("global-snapshot-v1-{:x}", Sha256::digest(bytes));
+    }
+    defaults.validate().map_err(|_| {
+        PolicyError::new(
+            "invalid_global_defaults",
+            "Global file-selection rules contain an invalid pattern",
+        )
+    })?;
+    Ok(defaults)
+}
 
 pub const MAX_REVISION: u64 = 9_007_199_254_740_991;
 pub type Result<T> = std::result::Result<T, PolicyError>;
@@ -455,6 +515,62 @@ pub fn failure(error: &PolicyError) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_creation_defaults_are_nonsecret_owned_snapshots() {
+        let mut global = GlobalConfig::default();
+        global.embeddings.backend = EmbeddingBackend::Local;
+        global.embeddings.model = None;
+        global.embeddings.batch_size = 16;
+        global.embeddings.api_key = Some("private-global-key".into());
+        global.watcher.debounce_ms = 450;
+        global.index.exclude = vec!["generated/".into()];
+        global.index.vendor = vec!["third_party/".into()];
+        let policy = policy_from_global("Example".into(), &global).unwrap();
+        let defaults = defaults_from_global(&global).unwrap();
+        assert_eq!(policy.embeddings.backend, Backend::Local);
+        assert_eq!(policy.embeddings.model, None);
+        assert_eq!(policy.embeddings.batch_size, 16);
+        assert_eq!(policy.watcher.debounce_ms, 450);
+        assert!(policy.index.exclude.is_empty());
+        assert_eq!(defaults.index.exclude.last().unwrap(), "generated/");
+        assert_eq!(defaults.index.vendor.last().unwrap(), "third_party/");
+        assert!(defaults.revision.starts_with("global-snapshot-v1-"));
+        assert!(!json!({"policy":policy,"defaults":defaults})
+            .to_string()
+            .contains("private-global-key"));
+        let saved = policy.effective(&defaults);
+        global.embeddings.batch_size = 32;
+        global.index.exclude.push("src/".into());
+        assert_eq!(policy.effective(&defaults), saved);
+        assert_ne!(
+            defaults_from_global(&global).unwrap().revision,
+            defaults.revision
+        );
+        assert_eq!(
+            policy_from_global("Other".into(), &global)
+                .unwrap()
+                .embeddings
+                .batch_size,
+            32
+        );
+    }
+
+    #[test]
+    fn invalid_global_family_defaults_are_rejected_without_substitution() {
+        let mut global = GlobalConfig::default();
+        global.embeddings.model = Some("unsupported-model".into());
+        assert_eq!(
+            policy_from_global("Example".into(), &global)
+                .unwrap_err()
+                .code,
+            "invalid_global_defaults"
+        );
+        global.index.exclude = vec!["[".into()];
+        assert_eq!(
+            defaults_from_global(&global).unwrap_err().code,
+            "invalid_global_defaults"
+        );
+    }
     use crate::pipeline::Decision;
     fn request() -> ApplyRequest {
         ApplyRequest {

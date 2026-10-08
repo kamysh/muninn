@@ -13,14 +13,16 @@ pub enum Field {
     Vendor(usize),
     AddVendor,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Policy,
+    Rules,
     Defaults,
-    Preflight,
     Agent,
     Conflict,
     Message,
+    Help,
+    Details,
 }
 
 pub struct Draft {
@@ -56,7 +58,7 @@ impl Draft {
             defaults,
             checked,
             latest: None,
-            status: "No changes saved. Policy applies to the whole family.".into(),
+            status: String::new(),
             view: View::Policy,
             selected: 0,
             scroll: 0,
@@ -175,7 +177,7 @@ impl Draft {
     }
     fn invalidate(&mut self) {
         self.checked = None;
-        self.status = "Draft changed; preflight needs to be run again. Nothing saved.".into();
+        self.status = "Draft changed. Refresh the preview before saving.".into();
     }
     pub fn receive_latest(&mut self, latest: Value) {
         self.latest = Some(latest);
