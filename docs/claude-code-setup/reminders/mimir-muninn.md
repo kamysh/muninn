@@ -19,3 +19,9 @@ At startup, resume or after compaction, identify which gaps in your understandin
 these tools could fill before reconstructing everything from scratch. Preserve
 durable, non-obvious findings so future sessions can benefit. Read the
 corresponding skills for tool selection and limitations.
+
+After Mimir or Muninn retrieval, briefly tell the user how useful the result was
+for this task on a 0–5 scale, why, and what it changes in your next step. Assess
+the information, not a belief's probability. When several calls answer one
+question, one summary is enough. Use plain language rather than repeating raw
+JSON unless requested.

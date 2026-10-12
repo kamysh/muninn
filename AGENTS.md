@@ -75,7 +75,9 @@ name or port conflict.
    according to the installed tools. Merge guidance rather than replacing whole
    settings files. Verify startup, resume and post-compaction delivery, including
    Codex hook review. The reminder supports informed tool choice; it does not
-   require a search before every action, a score or a writeback each turn.
+   require a search before every action, a hook-generated score or a writeback
+   each turn. The skill asks the agent to give the user a brief 0–5 usefulness
+   assessment after retrieval; that score is its task judgment, not search rank.
 
 ## JSON configuration and first start
 

@@ -47,6 +47,11 @@ search is tokenized; structural edges are name-based candidates. During a
 merge, rebase or unresolved conflict, Muninn retains the last completed index
 instead of indexing transient conflict contents. See [behavior and limits](docs/development.md#worktree-indexing-and-search).
 
+The Codex and Claude Code guidance asks agents to explain, in plain language,
+how useful a Muninn retrieval was for the current task: a 0–5 score, a reason
+and the next step. This is the agent’s judgment, not a search rank. The
+[agent setup guide](docs/claude-code-setup/INSTALL.md) installs that guidance.
+
 ## Data and privacy
 
 The database and processes can run on your machine. Local embeddings run there

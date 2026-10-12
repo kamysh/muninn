@@ -161,9 +161,10 @@ The optional PostToolUse example needs `jq` on the hook process's PATH.
 ### Advisory behavior and existing setups
 
 These hooks only print the selected text. They do not run searches, modify
-memory, block reads or require ratings. The guidance helps the agent choose a
-useful query and evaluate the evidence. Instructions in a skill still explain
-the detailed workflow and limitations.
+memory, block reads or compute ratings. The guidance asks the agent to
+explain retrieved information with a brief 0–5 usefulness assessment in
+plain language. Instructions in a skill explain the detailed workflow and
+limitations.
 
 Preserve collaboration hooks and unrelated settings. When upgrading older
 Muninn guidance, remove obsolete Muninn sentinel/rating conditions only within
@@ -195,7 +196,10 @@ gates or duplicating a separate Mimir startup reminder; review any overlap.
    question with a known, relevant Mimir lesson. Do not include an explicit tool
    command in these prompts: forced calls only check connectivity. Record whether
    retrieval helped, missed relevant information or was bypassed. Reminder delivery
-   alone does not demonstrate useful tool selection.
+   alone does not demonstrate useful tool selection. After retrieval, check
+   that the agent gives a concise 0–5 usefulness assessment, a reason and a
+   next step in plain language. A client-rendered tool preview may still
+   show raw JSON; the guidance controls the agent’s explanation.
 
 Direct command checks, after installing the selected text:
 

@@ -10,8 +10,21 @@ knowledge. Use it when the location is unknown, a question spans files, or code
 relationships help. Read the returned source ranges and judge their relevance.
 Direct reads and `rg` are useful when the file/target is known, for literal text,
 or when index results are missing or stale. Explain consequential index misses.
-A reminder invites this judgment; it does not require a tool call, rating, or
-writeback on every task, and does not authorize configuration changes.
+A reminder invites this judgment; it does not enforce a tool call or a
+hook-generated rating, require writeback on every task, or authorize
+configuration changes.
+
+## Explain retrieval to the user
+
+After a Muninn retrieval, tell the user how useful the result was for the
+current task: give a 0–5 score, one short reason, and what you will do with
+the information. Use 0 when nothing usable was found and 5 when the result
+directly resolves the question. This is your assessment of task usefulness,
+not a search rank or relevance percentage. When several retrievals answer
+one question, a single assessment of the combined findings is enough.
+Explain in plain language; do not repeat raw JSON unless the user asks for
+it. For example: "Muninn usefulness: 4/5 — this points to the relevant
+implementation; I’ll read that source range before changing code."
 
 ## Search the intended checkout
 

@@ -10,7 +10,12 @@ are useful for known targets, literal text and checking current source.
 At startup, resume or after compaction, identify which gaps Muninn could fill
 before rebuilding your understanding from scratch. Preserve durable, non-obvious
 repository findings for future sessions. Reminders guide this judgment without
-requiring a call before every read/edit, a rating or a writeback on every turn.
+requiring a call before every read/edit or a writeback on every turn.
+
+After Muninn retrieval, give the user a brief 0–5 usefulness assessment for
+the current task, one reason, and the next step it informs. Rate the
+information, not search rank. Combine related calls into one assessment
+and avoid repeating raw JSON unless the user requests it.
 
 Read the `muninn` skill for tool selection and the JSON configuration workflow.
 For code search, select the current checkout/worktree explicitly with `repo`,
