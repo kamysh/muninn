@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "muninn"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1558,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1582,6 +1582,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+ "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-python",
@@ -1593,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-index"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1612,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-mcp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",

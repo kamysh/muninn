@@ -511,7 +511,10 @@ async fn main() -> anyhow::Result<()> {
             if all {
                 // Fleet operation: always detached. Visibility via `muninn status`.
                 client
-                    .execute("UPDATE repos SET indexed_at = NULL", &[])
+                    .execute(
+                        "UPDATE repos SET indexed_at = NULL WHERE retired_at IS NULL",
+                        &[],
+                    )
                     .await?;
                 store::notify_repos_changed(&client).await?;
                 println!("Marked all repos for reindex. The daemon will pick them up shortly.");
@@ -576,7 +579,8 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Remove { path, yes } => {
             let repo_path = muninn_core::repo_resolver::resolve_path(&path)?;
-            let repo = store::get_repo_by_path(&client, &repo_path.to_string_lossy()).await?;
+            let repo =
+                store::get_repo_by_path_for_removal(&client, &repo_path.to_string_lossy()).await?;
 
             let target = removal::Target {
                 path: &repo_path,

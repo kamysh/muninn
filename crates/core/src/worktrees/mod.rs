@@ -29,6 +29,17 @@ pub struct Target {
     pub root: PathBuf,
 }
 
+#[derive(Debug)]
+pub struct PendingIndex(pub PathBuf);
+
+impl std::fmt::Display for PendingIndex {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "worktree has no completed index yet: {}", self.0.display())
+    }
+}
+
+impl std::error::Error for PendingIndex {}
+
 fn schema(family: Uuid) -> String {
     format!("\"{}\"", store::repo_schema(family))
 }
@@ -127,7 +138,9 @@ pub async fn resolve(client: &Client, path: &Path) -> Result<Option<Target>> {
                 // primary index through the legacy search path.
                 return Ok(None);
             }
-            ensure!(row.get::<_,bool>(1), "worktree has no completed index yet: {}",root.display());
+            if !row.get::<_, bool>(1) {
+                return Err(PendingIndex(root).into());
+            }
             let id: Uuid = row.get(0);
             return Ok(Some(Target { family:repo.id, checkout:id, graph:if row.get(2) {repo.id} else {id},root }));
         }
@@ -154,8 +167,9 @@ async fn discovery(root: &Path) -> Result<(GitCheckout, Vec<repo_resolver::GitWo
 }
 
 /// Discover/register worktrees, reconcile each available checkout, and retire
-/// only those absent from a successfully read Git registry. Missing directories
-/// which Git still lists retain their last index. No Git operation is performed.
+/// those absent from a successfully read Git registry or confirmed missing on
+/// disk. Other filesystem errors retain their last index. No Git operation is
+/// performed.
 #[allow(clippy::too_many_arguments)]
 pub async fn reconcile_family(
     client: &mut Client,
@@ -189,6 +203,69 @@ pub async fn reconcile_changed_family(
     progress: impl Fn(usize, usize, &Path),
     changed: Option<&[PathBuf]>,
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
+    reconcile_family_targets(
+        client, family, root, embedder, batch_size, dimension, exclude, vendor, progress, changed,
+        None,
+    )
+    .await
+}
+
+/// Initialize only the requested checkout. Search uses this path instead of
+/// waiting for the family watcher to discover and index every pending worktree.
+#[allow(clippy::too_many_arguments)]
+pub async fn reconcile_requested_checkout(
+    client: &mut Client,
+    family: Uuid,
+    root: &Path,
+    requested: &Path,
+    embedder: Arc<dyn EmbeddingBackend>,
+    batch_size: usize,
+    dimension: usize,
+    exclude: &[String],
+    vendor: &[String],
+) -> Result<()> {
+    // MCP can reach an already registered family before its watcher has
+    // started. Apply the new per-repo table migration on this path as well.
+    crate::db::run_repo_migrations(client, &store::repo_schema(family)).await?;
+    let (_, skips) = reconcile_family_targets(
+        client,
+        family,
+        root,
+        embedder,
+        batch_size,
+        dimension,
+        exclude,
+        vendor,
+        |_, _, _| {},
+        None,
+        Some(requested),
+    )
+    .await?;
+    if let Some(skip) = skips.into_iter().find(|skip| skip.path == requested) {
+        anyhow::bail!("indexing {}: {}", requested.display(), skip.reason);
+    }
+    ensure!(
+        resolve(client, requested).await?.is_some(),
+        "requested worktree was not registered: {}",
+        requested.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_family_targets(
+    client: &mut Client,
+    family: Uuid,
+    root: &Path,
+    embedder: Arc<dyn EmbeddingBackend>,
+    batch_size: usize,
+    dimension: usize,
+    exclude: &[String],
+    vendor: &[String],
+    progress: impl Fn(usize, usize, &Path),
+    changed: Option<&[PathBuf]>,
+    requested: Option<&Path>,
+) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     if let Some(view) = crate::family_policy::runtime::policy(client, family).await? {
         ensure!(
             view.indexing_enabled && !view.paused,
@@ -201,11 +278,16 @@ pub async fn reconcile_changed_family(
     lock(&tx, family).await?;
     let mut targets = Vec::new();
     let mut listed = Vec::new();
+    let mut missing_listed = Vec::new();
     let mut available = Vec::new();
     for entry in &entries {
-        // Git keeps unavailable/locked/prunable entries. Never retire them just
-        // because canonicalization or discovery is currently impossible.
-        listed.push(entry.path.clone());
+        // Git can keep a deleted worktree in its registry until pruning. A
+        // concrete NotFound is removal evidence; access errors are not.
+        if matches!(tokio::fs::metadata(&entry.path).await, Err(ref error) if error.kind() == std::io::ErrorKind::NotFound) {
+            missing_listed.push(entry.path.clone());
+        } else {
+            listed.push(entry.path.clone());
+        }
         if entry.bare {
             continue;
         }
@@ -226,11 +308,11 @@ pub async fn reconcile_changed_family(
     }
     // Retire absent identities before inserting replacements. A moved checkout
     // still has its Git administrative identity, even though its old root is
-    // absent; an unavailable entry still listed by Git must retain its index.
+    // absent; a briefly missing Git-listed entry keeps its completed view.
     for row in tx
         .query(
             &format!(
-                "SELECT id,root,git_dir FROM {s}.checkouts WHERE registration_state<>'retired'"
+                "SELECT id,root,git_dir,missing_since FROM {s}.checkouts WHERE registration_state<>'retired'"
             ),
             &[],
         )
@@ -239,6 +321,7 @@ pub async fn reconcile_changed_family(
         let id: Uuid = row.get(0);
         let bytes: Vec<u8> = row.get(1);
         let admin: Option<Vec<u8>> = row.get(2);
+        let missing_since: Option<chrono::DateTime<chrono::Utc>> = row.get(3);
         #[cfg(unix)]
         let encoding = "unix-bytes";
         #[cfg(windows)]
@@ -251,13 +334,54 @@ pub async fn reconcile_changed_family(
             root.to_path_buf().ok().as_ref() == Some(&path)
                 && Some(git_dir.bytes()) != admin.as_deref()
         });
-        if !identity_present && (!listed.contains(&path) || replaced) {
-            graph::drop_graph(tx.client(), id).await?;
+        let missing_on_disk = missing_listed.contains(&path);
+        if missing_on_disk
+            && !matches!(tokio::fs::metadata(&path).await, Err(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
+            continue;
+        }
+        if missing_on_disk {
+            if missing_since.is_none() {
+                tx.execute(
+                    &format!("UPDATE {s}.checkouts SET missing_since=now() WHERE id=$1"),
+                    &[&id],
+                )
+                .await?;
+                continue;
+            }
+            let elapsed: bool = tx
+                .query_one(
+                    "SELECT $1::timestamptz <= now() - interval '60 seconds'",
+                    &[&missing_since],
+                )
+                .await?
+                .get(0);
+            if !elapsed {
+                continue;
+            }
+        } else if missing_since.is_some() {
             tx.execute(
-                &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
+                &format!("UPDATE {s}.checkouts SET missing_since=NULL WHERE id=$1"),
                 &[&id],
             )
             .await?;
+        }
+        if !identity_present && (!listed.contains(&path) || replaced) {
+            // Keep a missing checkout's stored view for explicit recovery.
+            // Registry removal keeps its established storage cleanup behavior.
+            if !missing_on_disk {
+                graph::drop_graph(tx.client(), id).await?;
+                tx.execute(
+                    &format!("DELETE FROM {s}.checkout_structural_snapshots WHERE checkout=$1"),
+                    &[&id],
+                )
+                .await?;
+                tx.execute(
+                    &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
+                    &[&id],
+                )
+                .await?;
+            }
             tx.execute(&format!("UPDATE {s}.checkouts SET registration_state='retired',retired_at=now(),indexed_at=NULL WHERE id=$1"), &[&id]).await?;
         }
     }
@@ -332,6 +456,9 @@ pub async fn reconcile_changed_family(
     let mut completed = 0;
     let mut attempted = 0;
     for (initialized, target, git) in targets {
+        if requested.is_some_and(|path| path != target.root) {
+            continue;
+        }
         if initialized
             && changed.is_some_and(|paths| {
                 !paths
@@ -508,6 +635,7 @@ async fn reconcile_checkout(
     progress: &impl Fn(usize, usize, &Path),
     refresh_graph: bool,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     let stamp = git_stamp(git).await?;
     let s = schema(target.family);
     let tx = client.transaction().await?;
@@ -547,15 +675,33 @@ async fn reconcile_checkout(
         .as_ref()
         .map_or(batch_size, |p| p.policy.embeddings.batch_size as usize);
     let files = scan(&target.root, &selection)?;
+    let scanned = started.elapsed();
     let previous = if initialized {
         manifest(&tx, &s, target.checkout).await?
     } else {
         BTreeMap::new()
     };
     let mut desired = BTreeMap::new();
+    let paths: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+    let versions: HashMap<(String, Vec<u8>, i16), Uuid> = tx
+        .query(
+            &format!(
+                "SELECT id,path,content_hash,tier FROM {s}.file_versions WHERE path=ANY($1)"
+            ),
+            &[&paths],
+        )
+        .await?
+        .into_iter()
+        .map(|row| {
+            (
+                (row.get(1), row.get(2), row.get(3)),
+                row.get(0),
+            )
+        })
+        .collect();
     for (n, file) in files.iter().enumerate() {
-        let version=if let Some(row)=tx.query_opt(&format!("SELECT id FROM {s}.file_versions WHERE path=$1 AND content_hash=$2 AND tier=$3"),&[&file.path,&file.hash,&file.tier.as_i16()]).await? {
-            row.get(0)
+        let version=if let Some(version)=versions.get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16())) {
+            *version
         } else {
             let version=Uuid::new_v4();
             let paths = vec![file.path.clone(), target.root.join(&file.path).to_string_lossy().into_owned()];
@@ -579,6 +725,7 @@ async fn reconcile_checkout(
         desired.insert(file.path.clone(), version);
         progress(n + 1, files.len(), &target.root.join(&file.path));
     }
+    let versioned = started.elapsed();
     if refresh_graph || !initialized || previous != desired {
         if target.graph == target.family {
             publish_base(&tx, &s, target.checkout, &desired).await?;
@@ -615,8 +762,9 @@ async fn reconcile_checkout(
         }
         rebuild_graph(&tx, target, &files, &desired)
             .await
-            .context("replace checkout AGE graph")?;
+            .context("publish checkout structural index")?;
     }
+    let graphed = started.elapsed();
     // Re-read the selection and hashes before committing. A read/scan failure or
     // Git blocker rolls back chunks, deltas and graph together.
     let after = scan(&target.root, &selection)?;
@@ -638,6 +786,17 @@ async fn reconcile_checkout(
     }
     garbage_collect(&tx, &s).await?;
     tx.commit().await?;
+    if !initialized || started.elapsed().as_secs() >= 5 {
+        tracing::info!(
+            checkout = %target.root.display(),
+            files = files.len(),
+            scan_ms = scanned.as_millis() as u64,
+            versions_ms = (versioned - scanned).as_millis() as u64,
+            graph_ms = (graphed - versioned).as_millis() as u64,
+            finish_ms = (started.elapsed() - graphed).as_millis() as u64,
+            "worktree reconciliation completed"
+        );
+    }
     Ok(())
 }
 
@@ -712,7 +871,22 @@ async fn rebuild_graph(
     files: &[SourceFile],
     desired: &BTreeMap<String, Uuid>,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     let s = schema(target.family);
+    let versions: Vec<Uuid> = desired.values().copied().collect();
+    let mut chunks: HashMap<Uuid, Vec<(Uuid, u32)>> = HashMap::new();
+    for row in tx
+        .query(
+            &format!("SELECT file_version,id,start_line FROM {s}.chunks WHERE file_version=ANY($1)"),
+            &[&versions],
+        )
+        .await?
+    {
+        chunks
+            .entry(row.get(0))
+            .or_default()
+            .push((row.get(1), row.get::<_, i32>(2) as u32));
+    }
     let mut nodes = Vec::new();
     let mut parsed = Vec::new();
     let mut names: HashMap<String, Vec<(String, Uuid)>> = HashMap::new();
@@ -726,15 +900,7 @@ async fn rebuild_graph(
         }
         let symbols = parser::parse_file(&file.source, lang)?;
         let version = desired[&file.path];
-        for row in tx
-            .query(
-                &format!("SELECT id,start_line FROM {s}.chunks WHERE file_version=$1"),
-                &[&version],
-            )
-            .await?
-        {
-            let id: Uuid = row.get(0);
-            let start = row.get::<_, i32>(1) as u32;
+        for &(id, start) in chunks.get(&version).into_iter().flatten() {
             if let Some(sym) = symbols.iter().find(|sym| sym.range.start == start) {
                 nodes.push(graph::SymbolNodeInput {
                     chunk_id: id,
@@ -780,6 +946,101 @@ async fn rebuild_graph(
             }
         }
     }
-    store::ensure_graph(tx.client(), target.graph).await?;
-    graph::replace_graph(tx.client(), target.graph, &nodes, &edges).await
+    let prepared = started.elapsed();
+    let node_count = nodes.len();
+    let edge_count = edges.len();
+    if target.graph == target.family {
+        // The primary checkout and legacy graph readers retain their existing
+        // AGE representation. Linked checkouts use a single transactional row.
+        store::ensure_graph(tx.client(), target.graph).await?;
+        graph::replace_graph(tx.client(), target.graph, &nodes, &edges).await?;
+    } else {
+        let symbols: Vec<Symbol> = nodes
+            .into_iter()
+            .map(|node| Symbol {
+                name: node.name,
+                kind: node.kind,
+                file_path: node.file_path,
+                range: LineRange {
+                    start: node.start_line,
+                    end: node.end_line,
+                },
+                chunk_id: node.chunk_id,
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        edges.retain(|edge| seen.insert((edge.from, edge.to, edge.relation.clone())));
+        let node_json = serde_json::to_value(symbols)?;
+        let edge_json = serde_json::to_value(edges)?;
+        tx.execute(
+            &format!("INSERT INTO {s}.checkout_structural_snapshots(checkout,nodes,edges) VALUES($1,$2,$3) ON CONFLICT(checkout) DO UPDATE SET nodes=EXCLUDED.nodes,edges=EXCLUDED.edges"),
+            &[&target.checkout, &node_json, &edge_json],
+        )
+        .await?;
+    }
+    if started.elapsed().as_secs() >= 5 {
+        tracing::info!(
+            checkout = %target.root.display(),
+            nodes = node_count,
+            edges = edge_count,
+            prepare_ms = prepared.as_millis() as u64,
+            write_ms = (started.elapsed() - prepared).as_millis() as u64,
+            "worktree structural publication completed"
+        );
+    }
+    Ok(())
+}
+
+/// Read a linked checkout's structural snapshot. Indexed checkouts created by
+/// older binaries keep their AGE graph until their next reconciliation.
+pub async fn query_related(
+    client: &Client,
+    target: &Target,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<Vec<Symbol>> {
+    if target.graph != target.family {
+        let s = schema(target.family);
+        let snapshot_table_exists: bool = client
+            .query_one(
+                "SELECT to_regclass($1) IS NOT NULL",
+                &[&format!("{s}.checkout_structural_snapshots")],
+            )
+            .await?
+            .get(0);
+        if snapshot_table_exists {
+            let row = client
+            .query_opt(
+                &format!("SELECT nodes,edges FROM {s}.checkout_structural_snapshots WHERE checkout=$1"),
+                &[&target.checkout],
+            )
+            .await?;
+            if let Some(row) = row {
+                let nodes: Vec<Symbol> = serde_json::from_value(row.get(0))?;
+                let edges: Vec<StructuralEdge> = serde_json::from_value(row.get(1))?;
+                let by_id: HashMap<Uuid, Symbol> = nodes
+                    .into_iter()
+                    .map(|symbol| (symbol.chunk_id, symbol))
+                    .collect();
+                return Ok(edges
+                    .into_iter()
+                    .filter(|edge| edge.relation == relation)
+                    .filter_map(|edge| {
+                        let (origin, related) = if incoming {
+                            (edge.to, edge.from)
+                        } else {
+                            (edge.from, edge.to)
+                        };
+                        if by_id.get(&origin)?.name == symbol_name {
+                            by_id.get(&related).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect());
+            }
+        }
+    }
+    graph::query_related(client, target.graph, symbol_name, relation, incoming).await
 }

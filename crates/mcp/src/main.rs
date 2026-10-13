@@ -94,7 +94,7 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
             }
         }),
         "tools/list" => {
-            let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. Searches use the selected checkout's last completed index; incomplete Git operations retain that index.";
+            let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. A first search can register and index a new linked worktree when its family already permits indexing. Subsequent searches use that checkout's last completed index; incomplete Git operations retain it.";
             let cwd_desc = "Directory inside the target checkout or registered directory. Used when 'repo' is absent; no configuration marker is needed.";
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -421,6 +421,9 @@ async fn record_usage(
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod usage_tests;
+
+#[cfg(test)]
+mod worktree_tests;
 
 async fn dispatch_tool(
     ctx: &SearchContext,

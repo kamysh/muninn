@@ -13,7 +13,7 @@ agent can find relevant source, then read and verify it.
 
 Git worktrees add a second problem: each checkout has its own files, but copying
 a full chunk/vector index for every branch wastes space and embedding work.
-Muninn 1.0 groups linked worktrees into a **repository family**. It shares
+Muninn groups linked worktrees into a **repository family**. It shares
 unchanged file versions and embeddings, stores file differences per checkout,
 and searches the checkout the caller selected. Updating the primary checkout
 adjusts those differences without changing another checkout's published view.
@@ -63,9 +63,9 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-These docs describe the **1.0.0 source tree**. At the 2026-10-05 documentation
+These docs describe the **1.1.0 source tree**. At the 2026-10-05 documentation
 audit, the latest published release was [0.9.4](https://github.com/kamysh/muninn/releases/tag/v0.9.4).
-Do not install that release and expect the 1.0 TUI/JSON/worktree interfaces.
+Do not install that release and expect the 1.1 TUI/JSON/worktree interfaces.
 Use the source-build procedure until a matching release is available.
 
 | Task | Guide |
