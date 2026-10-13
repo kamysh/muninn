@@ -131,7 +131,10 @@ async fn worktree_latency() -> Result<()> {
         &[],
     )
     .await?;
-    println!("identical_worktree_index_ms={}", identical_start.elapsed().as_millis());
+    println!(
+        "identical_worktree_index_ms={}",
+        identical_start.elapsed().as_millis()
+    );
 
     git(
         &main,
@@ -161,14 +164,9 @@ async fn worktree_latency() -> Result<()> {
     let target = worktrees::resolve(&client, &child)
         .await?
         .context("child not indexed")?;
-    let related = worktrees::query_related(
-        &client,
-        &target,
-        "anchor",
-        StructuralRelation::Calls,
-        true,
-    )
-    .await?;
+    let related =
+        worktrees::query_related(&client, &target, "anchor", StructuralRelation::Calls, true)
+            .await?;
     ensure!(
         !related.is_empty(),
         "missing callers after first publication"

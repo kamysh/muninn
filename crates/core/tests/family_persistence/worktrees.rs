@@ -178,9 +178,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     // existing AGE graph remains readable when no snapshot row exists.
     let row = client
         .query_one(
-            &format!(
-                "SELECT nodes,edges FROM {s}.checkout_structural_snapshots WHERE checkout=$1"
-            ),
+            &format!("SELECT nodes,edges FROM {s}.checkout_structural_snapshots WHERE checkout=$1"),
             &[&t2.checkout],
         )
         .await?;
@@ -405,7 +403,13 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     let missing = parent.join("runtime-missing");
     git(
         &main,
-        &["worktree", "add", "-b", "missing", missing.to_str().unwrap()],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "missing",
+            missing.to_str().unwrap(),
+        ],
     )?;
     reconcile(client, repo.id, &main, &embedder).await?;
     let missing_target = worktrees::resolve(client, &missing).await?.unwrap();
@@ -419,10 +423,12 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     .await?;
     assert_eq!(before, 1);
     fs::remove_dir_all(&missing)?;
-    assert!(muninn_core::repo_resolver::list_git_worktrees(&main.join(".git"))
-        .await?
-        .iter()
-        .any(|entry| entry.path == missing));
+    assert!(
+        muninn_core::repo_resolver::list_git_worktrees(&main.join(".git"))
+            .await?
+            .iter()
+            .any(|entry| entry.path == missing)
+    );
     reconcile(client, repo.id, &main, &embedder).await?;
     assert_eq!(
         count(
@@ -437,7 +443,9 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     );
     client
         .execute(
-            &format!("UPDATE {s}.checkouts SET missing_since=now()-interval '61 seconds' WHERE id=$1"),
+            &format!(
+                "UPDATE {s}.checkouts SET missing_since=now()-interval '61 seconds' WHERE id=$1"
+            ),
             &[&missing_target.checkout],
         )
         .await?;

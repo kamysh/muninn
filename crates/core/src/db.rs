@@ -161,7 +161,9 @@ pub async fn connect_for_preparation(
     pg.application_name("muninn-family-preparation");
     // Index migrations can exceed a minute on existing repositories. Inherit
     // the server's statement limit while keeping lock waits bounded.
-    pg.options(format!("-c search_path={SEARCH_PATH} -c lock_timeout=15000"));
+    pg.options(format!(
+        "-c search_path={SEARCH_PATH} -c lock_timeout=15000"
+    ));
     if cfg.connect_timeout.is_none() {
         pg.connect_timeout(std::time::Duration::from_secs(10));
     }
