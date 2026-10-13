@@ -44,7 +44,8 @@ pub async fn register_repo(
                 r#"
         INSERT INTO repos (id, path, name, indexed_at, embedding_dim)
         VALUES ($1, $2, $3, NULL, $4)
-        ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name
+        ON CONFLICT (path) WHERE retired_at IS NULL
+        DO UPDATE SET name = EXCLUDED.name
         RETURNING {REPO_COLUMNS}
         "#
             ),
@@ -203,7 +204,22 @@ pub async fn delete_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
 pub async fn get_repo_by_path(client: &Client, path: &str) -> Result<Option<Repo>> {
     let row = client
         .query_opt(
-            &format!(r#"SELECT {REPO_COLUMNS} FROM repos WHERE path = $1"#),
+            &format!(r#"SELECT {REPO_COLUMNS} FROM repos WHERE path = $1 AND retired_at IS NULL"#),
+            &[&path],
+        )
+        .await?;
+    row.map(row_to_repo).transpose()
+}
+
+/// Explicit removal can also purge a retained, retired family. Prefer the
+/// active registration if a replacement clone now occupies the same path.
+pub async fn get_repo_by_path_for_removal(client: &Client, path: &str) -> Result<Option<Repo>> {
+    let row = client
+        .query_opt(
+            &format!(
+                "SELECT {REPO_COLUMNS} FROM repos WHERE path=$1 \
+                 ORDER BY (retired_at IS NULL) DESC, retired_at DESC LIMIT 1"
+            ),
             &[&path],
         )
         .await?;
@@ -213,7 +229,7 @@ pub async fn get_repo_by_path(client: &Client, path: &str) -> Result<Option<Repo
 pub async fn list_repos(client: &Client) -> Result<Vec<Repo>> {
     let rows = client
         .query(
-            &format!(r#"SELECT {REPO_COLUMNS} FROM repos ORDER BY name"#),
+            &format!(r#"SELECT {REPO_COLUMNS} FROM repos WHERE retired_at IS NULL ORDER BY name"#),
             &[],
         )
         .await?;

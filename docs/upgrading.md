@@ -4,7 +4,19 @@ Application upgrades update the three Muninn binaries and apply schema changes
 automatically during normal startup/preparation. PostgreSQL or extension upgrades
 are a separate operation with their own compatibility requirements.
 
-These docs describe 1.0 source. At the 2026-10-05 audit, GitHub's latest release
+The worktree structural-snapshot migration adds a table to each prepared family
+schema. New linked worktrees publish into it; existing linked AGE graphs remain
+readable until those checkouts are reconciled. The first search of a new linked
+worktree in an already indexed, enabled family can register and index it directly.
+
+The missing-root migrations add a persisted 60-second absence timer for families
+and Git-listed checkouts. The public registry's path constraint now applies only
+to active families, so a replacement clone may use the path of a retired family.
+Automatic retirement retains the old family's schema and index; explicit removal
+is still required to delete them. Reconnect old MCP processes after this upgrade
+because their registration SQL predates the changed path constraint.
+
+These docs describe 1.1 source. At the 2026-10-05 audit, GitHub's latest release
 was still 0.9.4. Use matching source/binaries; a `releases/latest` download can
 silently install the wrong interface.
 

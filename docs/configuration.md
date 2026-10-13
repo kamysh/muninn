@@ -1,4 +1,4 @@
-# Configuration reference — 1.0
+# Configuration reference — 1.1
 
 ## Two scopes
 

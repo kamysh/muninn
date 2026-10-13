@@ -70,8 +70,8 @@ moving-base/file-delta design addresses both problems.
 | Area | Ownership and contents |
 | --- | --- |
 | `public.repos` | Family routing, identity, preparation state and indexing authorization; retains legacy locator fields |
-| `repo_<uuid>` | One application schema per Git family or independent directory: chunks, file versions, base/deltas, checkout registry and saved policy/history |
-| AGE graph schemas | Code symbols/relationships; Git checkouts have separate graphs. AGE creates/removes these through its API |
+| `repo_<uuid>` | One application schema per Git family or independent directory: chunks, file versions, base/deltas, linked-checkout structural snapshots, checkout registry and saved policy/history |
+| AGE graph schemas | Structural relationships for the primary checkout and older linked checkouts that have not published a snapshot. AGE creates/removes these through its API |
 | `public.knowledge` | Curated notes, keyed by exact repository-path strings; currently separate from family identity |
 
 Kryzhen's Rust library creates application schemas while applying migrations.
@@ -88,7 +88,7 @@ to edit its settings.
 
 `repo_resolver` obtains checkout roots and Git common-directory identity from Git.
 `family_store` coordinates identity/preparation; `family_policy` implements policy,
-preflight and start; `worktrees` reconciles file versions and checkout graphs.
+preflight and start; `worktrees` reconciles file versions and structural views.
 
 The primary checkout is the current base. `base_files` maps its paths to shared
 `file_versions`; `file_deltas` contains only checkout-specific path overrides or
@@ -98,10 +98,12 @@ in its delta. Redundant overrides are removed. This changes representation while
 preserving other published views; it does not force every worktree to adopt main.
 
 Family locking serializes publication. Base changes, deltas and the reconciled
-checkout's graph commit transactionally. Embeddings can be reused for matching
-content. Graph replacement deletes edges before vertices in bounded batches,
-then reconstructs the selected checkout's relationships. Graphs themselves are
-not shared in the same way as chunk/vector content.
+checkout's structural view commit transactionally. Embeddings can be reused for
+matching content. The primary checkout retains its AGE graph; graph replacement
+deletes edges before vertices in bounded batches. New linked checkouts store
+symbols and edges in one transactional JSONB snapshot instead of constructing a
+separate AGE graph. Structural search reads that snapshot, falling back to an
+older linked checkout's AGE graph until it next reconciles.
 
 Text/vector queries combine visible base chunks with the selected delta. The
 base has partial GIN/HNSW indexes; semantic delta search is exact. Excluded paths
@@ -110,11 +112,18 @@ base and delta before RRF in one SQL statement/snapshot. Approximate base vector
 retrieval still has recall tradeoffs; a small RRF score is not a confidence estimate.
 
 File watching and fallback Git discovery find edits, newly linked checkouts and
-worktree removal. Git worktree moves preserve checkout identity and completed
-views; reconciliation updates the root and refreshes paths before adding new
-checkouts, including reuse of a moved worktree’s former location. Removal from a successfully read Git registry retires the
-checkout and drops its AGE graph. A root that is unavailable but remains registered
-retains its data. Discovery does not invoke `git worktree prune`.
+worktree removal. A first search of a new linked checkout in an already indexed,
+enabled family also registers and indexes that checkout. Git worktree moves
+preserve checkout identity and completed views; reconciliation updates the root
+and refreshes paths before adding new checkouts, including reuse of a moved
+worktree's former location. Removal from a successfully read Git registry retires
+the checkout, removes its structural snapshot and drops any older AGE graph. A
+worktree that Git still lists but whose directory stays missing for 60 seconds is
+also retired; its stored view is retained. Permission and other filesystem errors do
+not prove removal. A family root that stays missing for 60 seconds is logically retired by the daemon,
+which keeps the family's index and policy while stopping retries. A replacement
+clone may register at the same path with a new family ID. Discovery does not
+invoke `git worktree prune`.
 
 **Merge/rebase/conflicts suspend publication for the affected checkout.** It keeps
 its last completed index; an uninitialized checkout has no completed view. The

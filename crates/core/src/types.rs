@@ -137,7 +137,7 @@ pub enum SymbolKind {
     Import,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum StructuralRelation {
     Calls,
     Imports,

@@ -1,6 +1,6 @@
 [package]
 name = "muninn-core"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 
 [dependencies]
@@ -38,3 +38,4 @@ quickcheck = { workspace = true }
 quickcheck_macros = { workspace = true }
 tempfile = "3"
 futures = { workspace = true }
+tracing-subscriber = { workspace = true }

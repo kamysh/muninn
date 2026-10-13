@@ -7,9 +7,17 @@ curated knowledge must be recoverable.
 ## One linked worktree
 
 Remove the worktree through your normal Git workflow. The enabled family's daemon
-discovers its absence from Git's worktree registry, retires its checkout index and
-drops its AGE graph. Shared versions still used by other checkouts remain.
-A temporarily unavailable directory still listed by Git retains its data.
+discovers its absence from Git's worktree registry, retires its checkout index,
+removes its structural snapshot and drops any older AGE graph. Shared versions
+still used by other checkouts remain. If Git still lists a checkout whose local
+directory stays missing for 60 seconds, Muninn retires its registration but
+retains its stored index. Other filesystem errors do not trigger retirement.
+
+The daemon also retires a registered family when its stored local root is
+missing for 60 seconds. The retained index and policy are not deleted; the family
+disappears from ordinary status and indexing, and a replacement clone can be
+registered at the same path. Use explicit `muninn remove /registered/path` to
+delete retained data if needed.
 
 Do **not** use `muninn remove` to remove only one linked worktree: that command
 operates on a registered family's index, not a checkout-specific removal intent.

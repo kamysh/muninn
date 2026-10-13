@@ -283,6 +283,7 @@ mod migration_tests {
                     "repo-family-policy",
                     "repo-worktree-file-deltas",
                     "repo-worktree-base-indexes",
+                    "repo-worktree-structural-snapshots",
                 ],
             ),
         ] {

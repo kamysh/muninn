@@ -13,7 +13,7 @@ agent can find relevant source, then read and verify it.
 
 Git worktrees add a second problem: each checkout has its own files, but copying
 a full chunk/vector index for every branch wastes space and embedding work.
-Muninn 1.0 groups linked worktrees into a **repository family**. It shares
+Muninn groups linked worktrees into a **repository family**. It shares
 unchanged file versions and embeddings, stores file differences per checkout,
 and searches the checkout the caller selected. Updating the primary checkout
 adjusts those differences without changing another checkout's published view.
@@ -63,8 +63,8 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-These docs describe the **1.0.1 source tree**. Install matching binaries from
-[v1.0.1](https://github.com/kamysh/muninn/releases/tag/v1.0.1) after its release
+These docs describe the **1.1.0 source tree**. Install matching binaries from
+[v1.1.0](https://github.com/kamysh/muninn/releases/tag/v1.1.0) after its release
 workflow completes, or build from this source tree.
 
 | Task | Guide |

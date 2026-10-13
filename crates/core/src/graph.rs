@@ -121,13 +121,14 @@ pub(crate) async fn replace_graph(
     edges: &[StructuralEdge],
 ) -> Result<()> {
     let g = graph_name(id);
-    const BATCH: usize = 256;
+    const DELETE_BATCH: usize = 256;
+    const INSERT_BATCH: usize = 1024;
     // Bound each AGE write while retaining the caller's single publication
     // transaction. Remove edges first so node deletion need not repeatedly
     // search all edge labels for incident edges.
     for (pattern, entity) in [("()-[e]->()", "e"), ("(n)", "n")] {
         loop {
-            let sql = format!("SELECT * FROM ag_catalog.cypher('{g}', $$ MATCH {pattern} WITH {entity} LIMIT {BATCH} DELETE {entity} RETURN {entity} $$) AS (v ag_catalog.agtype)");
+            let sql = format!("SELECT * FROM ag_catalog.cypher('{g}', $$ MATCH {pattern} WITH {entity} LIMIT {DELETE_BATCH} DELETE {entity} RETURN {entity} $$) AS (v ag_catalog.agtype)");
             let rows = client
                 .simple_query(&sql)
                 .await
@@ -136,7 +137,7 @@ pub(crate) async fn replace_graph(
                 .iter()
                 .filter(|row| matches!(row, tokio_postgres::SimpleQueryMessage::Row(_)))
                 .count();
-            if count < BATCH {
+            if count < DELETE_BATCH {
                 break;
             }
         }
@@ -153,7 +154,7 @@ pub(crate) async fn replace_graph(
     ] {
         let label = kind_label(&kind);
         let values: Vec<_> = nodes.iter().filter(|n|n.kind==kind).map(|n|serde_json::json!({"chunk_id":n.chunk_id.to_string(),"name":n.name,"kind":label,"file_path":n.file_path,"start_line":n.start_line,"end_line":n.end_line})).collect();
-        for batch in values.chunks(BATCH) {
+        for batch in values.chunks(INSERT_BATCH) {
             let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
             // Set properties at creation: a following SET re-locates every
             // newly created vertex in AGE 1.6.
@@ -185,9 +186,9 @@ pub(crate) async fn replace_graph(
             .into_iter()
             .map(|(a, b)| serde_json::json!({"from":a.to_string(),"to":b.to_string()}))
             .collect();
-        for batch in values.chunks(BATCH) {
+        for batch in values.chunks(INSERT_BATCH) {
             let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH(a:{from}),(b:{to}) WHERE a.chunk_id=r.from AND b.chunk_id=r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH (a:{from} {{chunk_id:r.from}}) MATCH (b:{to} {{chunk_id:r.to}}) CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
             age_execute(
                 client,
                 &stmt,
