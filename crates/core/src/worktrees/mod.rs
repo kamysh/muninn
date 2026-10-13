@@ -34,7 +34,11 @@ pub struct PendingIndex(pub PathBuf);
 
 impl std::fmt::Display for PendingIndex {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "worktree has no completed index yet: {}", self.0.display())
+        write!(
+            formatter,
+            "worktree has no completed index yet: {}",
+            self.0.display()
+        )
     }
 }
 
@@ -283,7 +287,8 @@ async fn reconcile_family_targets(
     for entry in &entries {
         // Git can keep a deleted worktree in its registry until pruning. A
         // concrete NotFound is removal evidence; access errors are not.
-        if matches!(tokio::fs::metadata(&entry.path).await, Err(ref error) if error.kind() == std::io::ErrorKind::NotFound) {
+        if matches!(tokio::fs::metadata(&entry.path).await, Err(ref error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
             missing_listed.push(entry.path.clone());
         } else {
             listed.push(entry.path.clone());
@@ -685,38 +690,66 @@ async fn reconcile_checkout(
     let paths: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
     let versions: HashMap<(String, Vec<u8>, i16), Uuid> = tx
         .query(
-            &format!(
-                "SELECT id,path,content_hash,tier FROM {s}.file_versions WHERE path=ANY($1)"
-            ),
+            &format!("SELECT id,path,content_hash,tier FROM {s}.file_versions WHERE path=ANY($1)"),
             &[&paths],
         )
         .await?
         .into_iter()
-        .map(|row| {
-            (
-                (row.get(1), row.get(2), row.get(3)),
-                row.get(0),
-            )
-        })
+        .map(|row| ((row.get(1), row.get(2), row.get(3)), row.get(0)))
         .collect();
     for (n, file) in files.iter().enumerate() {
-        let version=if let Some(version)=versions.get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16())) {
+        let version = if let Some(version) =
+            versions.get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16()))
+        {
             *version
         } else {
-            let version=Uuid::new_v4();
-            let paths = vec![file.path.clone(), target.root.join(&file.path).to_string_lossy().into_owned()];
+            let version = Uuid::new_v4();
+            let paths = vec![
+                file.path.clone(),
+                target.root.join(&file.path).to_string_lossy().into_owned(),
+            ];
             // Read reusable vectors once per file, rather than scanning its
             // stored chunks once for every candidate chunk.
             let rows = tx.query(&format!("SELECT content,embedding FROM {s}.chunks WHERE file_path=ANY($1) AND embedding IS NOT NULL"), &[&paths]).await
                 .with_context(|| format!("load reusable embeddings for {}", file.path))?;
-            let vectors = rows.into_iter().map(|row| (row.get::<_, String>(0), row.get::<_, pgvector::Vector>(1).to_vec())).collect();
-            let reuse = ReuseEmbeddings { vectors, backend: embedder };
-            let (chunks,_) = tokio::time::timeout(std::time::Duration::from_secs(120),pipeline::prepare_chunks(target.family,file.path.clone(),file.source.clone(),&reuse,1500,batch_size,dimension,file.tier)).await
-                .with_context(|| format!("prepare {} exceeded 120 seconds", file.path))?
-                .with_context(|| format!("prepare {}", file.path))?;
-            tx.execute(&format!("INSERT INTO {s}.file_versions(id,path,content_hash,tier) VALUES($1,$2,$3,$4)"),&[&version,&file.path,&file.hash,&file.tier.as_i16()]).await?;
+            let vectors = rows
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.get::<_, String>(0),
+                        row.get::<_, pgvector::Vector>(1).to_vec(),
+                    )
+                })
+                .collect();
+            let reuse = ReuseEmbeddings {
+                vectors,
+                backend: embedder,
+            };
+            let (chunks, _) = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                pipeline::prepare_chunks(
+                    target.family,
+                    file.path.clone(),
+                    file.source.clone(),
+                    &reuse,
+                    1500,
+                    batch_size,
+                    dimension,
+                    file.tier,
+                ),
+            )
+            .await
+            .with_context(|| format!("prepare {} exceeded 120 seconds", file.path))?
+            .with_context(|| format!("prepare {}", file.path))?;
+            tx.execute(
+                &format!(
+                    "INSERT INTO {s}.file_versions(id,path,content_hash,tier) VALUES($1,$2,$3,$4)"
+                ),
+                &[&version, &file.path, &file.hash, &file.tier.as_i16()],
+            )
+            .await?;
             for chunk in chunks {
-                let vector=chunk.embedding.map(pgvector::Vector::from);
+                let vector = chunk.embedding.map(pgvector::Vector::from);
                 tx.execute(&format!("INSERT INTO {s}.chunks(id,repo_id,file_path,start_line,end_line,content,embedding,tier,embedding_state,content_hash,file_version,in_base) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false)"),
                     &[&chunk.id,&target.family,&file.path,&(chunk.range.start as i32),&(chunk.range.end as i32),&chunk.content,&vector,&chunk.tier.as_i16(),&chunk.embedding_state.as_str(),&chunk.content_hash,&version]).await?;
             }
@@ -877,7 +910,9 @@ async fn rebuild_graph(
     let mut chunks: HashMap<Uuid, Vec<(Uuid, u32)>> = HashMap::new();
     for row in tx
         .query(
-            &format!("SELECT file_version,id,start_line FROM {s}.chunks WHERE file_version=ANY($1)"),
+            &format!(
+                "SELECT file_version,id,start_line FROM {s}.chunks WHERE file_version=ANY($1)"
+            ),
             &[&versions],
         )
         .await?
