@@ -274,6 +274,7 @@ mod migration_tests {
                     "public-family-identity",
                     "public-family-lifecycle",
                     "public-family-registration-intent",
+                    "public-live-family-paths",
                 ],
             ),
             (
@@ -283,6 +284,7 @@ mod migration_tests {
                     "repo-checkout-registry",
                     "repo-checkout-observations",
                     "repo-family-policy",
+                    "repo-missing-checkout-grace",
                     "repo-worktree-file-deltas",
                     "repo-worktree-base-indexes",
                     "repo-worktree-structural-snapshots",
