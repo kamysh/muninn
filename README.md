@@ -63,10 +63,9 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-These docs describe the **1.0.0 source tree**. At the 2026-10-05 documentation
-audit, the latest published release was [0.9.4](https://github.com/kamysh/muninn/releases/tag/v0.9.4).
-Do not install that release and expect the 1.0 TUI/JSON/worktree interfaces.
-Use the source-build procedure until a matching release is available.
+These docs describe the **1.0.1 source tree**. Install matching binaries from
+[v1.0.1](https://github.com/kamysh/muninn/releases/tag/v1.0.1) after its release
+workflow completes, or build from this source tree.
 
 | Task | Guide |
 | --- | --- |

@@ -85,12 +85,11 @@ for missing extensions, preload and privilege setup.
 
 ## 3. Install matching binaries
 
-These docs describe the 1.0.0 source. At the 2026-10-05 audit, GitHub's latest
-release was 0.9.4. Until a matching release is published, use a checkout containing
-the 1.0 implementation and [Nix](https://nixos.org/download/), with flakes enabled:
+These docs describe the 1.0.1 source. To build matching binaries, use a 1.0.1
+checkout and [Nix](https://nixos.org/download/), with flakes enabled:
 
 ```sh
-# Run from the Muninn 1.0 source checkout.
+# Run from the Muninn 1.0.1 source checkout.
 nix build .#muninn-static
 mkdir -p "$HOME/.local/bin"
 install -m 755 result/bin/muninn result/bin/muninn-index result/bin/muninn-mcp \
@@ -117,7 +116,7 @@ muninn-index --version
 muninn-mcp --version
 ```
 
-All three should report the intended version (1.0.0 for this tree).
+All three should report the intended version (1.0.1 for this tree).
 
 ## 4. Bootstrap the global configuration
 
