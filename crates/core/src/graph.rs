@@ -559,22 +559,17 @@ fn parse_symbol_kind(s: &str) -> SymbolKind {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
-    use crate::{config::GlobalConfig, db};
-
-    async fn test_client() -> tokio_postgres::Client {
-        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let config_path = manifest.join("../../config.toml");
-        let cfg = GlobalConfig::load_from(&config_path).expect("load local config.toml");
-        db::connect(&cfg.database)
-            .await
-            .expect("connect to muninn db")
-    }
 
     #[tokio::test]
-    #[ignore = "requires live muninn database at localhost:5450"]
+    #[ignore = "requires the guarded disposable PostgreSQL harness"]
     async fn test_write_via_execute() {
-        let client = test_client().await;
-        let gname = "code_graph_63ca78b63feb4129841eb8c3842f8aec";
+        let client = crate::test_support::connect().await.expect("disposable DB");
+        let graph_id = Uuid::new_v4();
+        let gname = graph_name(graph_id);
+        client
+            .simple_query(&format!("SELECT ag_catalog.create_graph('{gname}')"))
+            .await
+            .expect("create test graph");
         let params = serde_json::json!({"rows": [{"chunk_id": "write-test-uuid", "name": "write_test", "file_path": "/test.rs", "start_line": 1, "end_line": 5}]});
         let agtype_json = params.to_string();
         let stmt = format!("test_write_{}", Uuid::new_v4().simple());
@@ -592,10 +587,10 @@ mod tests {
         let read_params = serde_json::json!({"chunk_id": "write-test-uuid"});
         let read_stmt = format!("test_read_{}", Uuid::new_v4().simple());
         let read_prepare = format!(
-            "PREPARE {read_stmt}(agtype) AS SELECT r::text \
+            "PREPARE {read_stmt}(agtype) AS SELECT r.v::text \
              FROM ag_catalog.cypher('{gname}', \
              $$ MATCH (n {{chunk_id: $chunk_id}}) RETURN {{name: n.name, kind: n.kind}} $$, \
-             $1) AS r"
+             $1) AS r(v ag_catalog.agtype)"
         );
         client
             .simple_query(&read_prepare)
@@ -628,5 +623,8 @@ mod tests {
             map.get("name").and_then(|v| v.as_str()).unwrap_or(""),
             "write_test"
         );
+        drop_graph(&client, graph_id)
+            .await
+            .expect("drop test graph");
     }
 }

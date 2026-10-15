@@ -12,6 +12,9 @@ use uuid::Uuid;
 // Order: family job lock (when applicable), this lock, registry transaction lock.
 const MIGRATION_LOCK: i32 = 2;
 
+type CancelFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<(), tokio_postgres::Error>> + Send>>;
+
 /// Provenance supplied by the registration/import caller, never inferred from
 /// storage_generation (both old registrations and new reservations use legacy).
 #[derive(Debug, Clone, Copy)]
@@ -33,9 +36,7 @@ pub enum GraphRequirement {
 pub struct PreparationConnection {
     client: Client,
     driver: JoinHandle<()>,
-    cancel: Option<
-        Pin<Box<dyn Future<Output = std::result::Result<(), tokio_postgres::Error>> + Send>>,
-    >,
+    cancel: Option<CancelFuture>,
     completed: bool,
 }
 

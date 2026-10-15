@@ -4,13 +4,12 @@
 //! content_hash / embedding against the per-repo chunks table. Tier 1 chunks are
 //! embedded eagerly; Tier 2 (vendored) chunks are full-text-only and Pending.
 //!
-//! Run against the live DB:
-//!   nix develop --command cargo test --test tiered_indexing
-//! DB config comes from ~/.config/muninn/config.toml + ~/.pgpass.
+//! Run through muninn-setup/test-all.sh against its disposable database.
+
+mod support;
 
 use futures::FutureExt;
 use muninn_core::{
-    config::GlobalConfig,
     db,
     embeddings::EmbeddingBackend,
     pipeline::{backfill_once, index_repo},
@@ -30,10 +29,11 @@ const TEST_DIM: usize = 64;
 // ── helpers ────────────────────────────────────────────────────────────────
 
 async fn connect() -> Client {
-    let cfg = GlobalConfig::load().expect("load ~/.config/muninn/config.toml");
-    db::connect(&cfg.database)
+    let mut client = support::connect().await.expect("connect to disposable DB");
+    db::run_migrations(&mut client)
         .await
-        .expect("connect to muninn DB")
+        .expect("public migrations");
+    client
 }
 
 /// A stub embedder that returns a fixed-dimension non-empty vector per text.

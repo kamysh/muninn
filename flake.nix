@@ -123,7 +123,7 @@
 
             pkgs.just
             pkgs.git
-          ];
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ];
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];

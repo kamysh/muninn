@@ -25,14 +25,26 @@ integration harness supplies its own credentials and identity checks:
 
 ```sh
 # Inside the dev shell, with Docker and the harness's pinned image available.
-bash muninn-setup/test-persistence.sh
+bash muninn-setup/test-all.sh
 ```
 
 Read the script's image, port, container and resource requirements first. It uses
 a disposable container, a temporary data filesystem, generated credentials and
 an ownership marker, and verifies cleanup. It refuses a conflicting container
-or port. Some legacy integration tests use different setup conventions; do not
-run an unreviewed broad database test suite against your normal configuration.
+or port. The complete runner executes every workspace target, including ignored
+database, terminal and latency tests, followed by documentation tests. Database
+tests use the guarded fixture and refuse to fall back to normal configuration.
+The PTY child entry point runs through its parent scenarios rather than directly.
+The historical migration test runs first on the empty fixture, before the
+remaining tests use the prepared public tables.
+Run `bash muninn-setup/test-persistence.sh` for the smaller persistence subset.
+Fixtures and their temporary files are created under `/var/tmp`.
+The runner mounts disposable credentials and configuration at the application's
+normal lookup paths inside the test processes only, including TUI reloads. It
+requires existing `~/.pgpass` and `~/.config` mount points; host files are unchanged.
+The complete suite has a 30-minute execution deadline; the smaller persistence
+runner retains its 10-minute limit per invocation. Override either with
+`MUNINN_TEST_TIMEOUT_SECONDS` when needed.
 
 For distributable binaries:
 

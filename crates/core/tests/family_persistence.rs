@@ -1024,8 +1024,7 @@ async fn policy_verification(target: &Target, client: &mut Client, root: &Path) 
         &a_path,
         &b_path,
         &suppressed_path,
-        a.id,
-        b.id,
+        (a.id, b.id),
         &initial,
     )
     .await?;
@@ -1106,10 +1105,9 @@ async fn policy_verification(target: &Target, client: &mut Client, root: &Path) 
         policy::apply(&mut other, a.id, &request)
     );
     assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
-    let (winner, loser) = if one.is_ok() {
-        (one?, two.unwrap_err())
-    } else {
-        (two?, one.unwrap_err())
+    let (winner, loser) = match one {
+        Ok(winner) => (winner, two.unwrap_err()),
+        Err(loser) => (two?, loser),
     };
     assert_eq!(loser.code, "revision_conflict");
     assert_eq!(winner.view.revision, 2);
@@ -1313,8 +1311,7 @@ async fn readonly_verification(
     a_path: &Path,
     b_path: &Path,
     suppressed: &Path,
-    a: Uuid,
-    b: Uuid,
+    (a, b): (Uuid, Uuid),
     initial: &muninn_core::family_policy::InitialRequest,
 ) -> Result<()> {
     use muninn_core::family_policy::{

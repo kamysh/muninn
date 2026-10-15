@@ -497,7 +497,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         &[],
         &[],
         |_, _, _| {},
-        Some(&[one.clone()]),
+        Some(std::slice::from_ref(&one)),
     )
     .await?;
     assert_eq!(retry.len(), 1);

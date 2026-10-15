@@ -243,6 +243,50 @@ pub async fn run_repo_migrations(client: &mut Client, schema: &str) -> anyhow::R
     Ok(())
 }
 
+/// Open a dedicated connection for LISTEN/NOTIFY.
+/// Returns the `Client` (used for the LISTEN command) and a channel that
+/// delivers notifications as they arrive. The connection is driven on a
+/// spawned task for its lifetime.
+pub async fn connect_listener(
+    cfg: &DatabaseConfig,
+) -> Result<(
+    Client,
+    mpsc::UnboundedReceiver<tokio_postgres::Notification>,
+)> {
+    let mut pg_cfg = make_pg_config(cfg);
+    pg_cfg.application_name("muninn-index-listener");
+
+    let (client, mut conn) = pg_cfg.connect(NoTls).await?;
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            match std::future::poll_fn(|cx| conn.poll_message(cx)).await {
+                Some(Ok(AsyncMessage::Notification(n))) => {
+                    let _ = tx.send(n);
+                }
+                Some(Ok(_)) => {}
+                Some(Err(e)) => {
+                    tracing::warn!("listener connection error: {e}");
+                    break;
+                }
+                None => break,
+            }
+        }
+    });
+
+    Ok((client, rx))
+}
+
+/// Open a dedicated `Client` for holding a PostgreSQL advisory lock.
+/// The lock lives as long as the returned `Arc<Client>` has references.
+/// When all references drop, the TCP connection closes and PostgreSQL frees
+/// the lock automatically.
+pub async fn connect_for_lock(cfg: &DatabaseConfig) -> Result<Arc<Client>> {
+    let client = connect_internal(cfg, Some("muninn-advisory-lock")).await?;
+    Ok(Arc::new(client))
+}
+
 #[cfg(test)]
 mod migration_tests {
     use super::{embedded_migrations, embedded_repo_migrations};
@@ -326,48 +370,4 @@ mod migration_tests {
         let all: Vec<_> = public.into_iter().chain(repo).collect();
         kryzhen::validation::check_duplicate_names(&all).unwrap();
     }
-}
-
-/// Open a dedicated connection for LISTEN/NOTIFY.
-/// Returns the `Client` (used for the LISTEN command) and a channel that
-/// delivers notifications as they arrive. The connection is driven on a
-/// spawned task for its lifetime.
-pub async fn connect_listener(
-    cfg: &DatabaseConfig,
-) -> Result<(
-    Client,
-    mpsc::UnboundedReceiver<tokio_postgres::Notification>,
-)> {
-    let mut pg_cfg = make_pg_config(cfg);
-    pg_cfg.application_name("muninn-index-listener");
-
-    let (client, mut conn) = pg_cfg.connect(NoTls).await?;
-
-    let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        loop {
-            match std::future::poll_fn(|cx| conn.poll_message(cx)).await {
-                Some(Ok(AsyncMessage::Notification(n))) => {
-                    let _ = tx.send(n);
-                }
-                Some(Ok(_)) => {}
-                Some(Err(e)) => {
-                    tracing::warn!("listener connection error: {e}");
-                    break;
-                }
-                None => break,
-            }
-        }
-    });
-
-    Ok((client, rx))
-}
-
-/// Open a dedicated `Client` for holding a PostgreSQL advisory lock.
-/// The lock lives as long as the returned `Arc<Client>` has references.
-/// When all references drop, the TCP connection closes and PostgreSQL frees
-/// the lock automatically.
-pub async fn connect_for_lock(cfg: &DatabaseConfig) -> Result<Arc<Client>> {
-    let client = connect_internal(cfg, Some("muninn-advisory-lock")).await?;
-    Ok(Arc::new(client))
 }

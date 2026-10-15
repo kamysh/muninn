@@ -20,9 +20,9 @@ existing connection settings and credentials. Do not print secrets into reports.
   when the user deliberately chooses to assemble the prerequisites.
 - **Agent integration only:** use [Agent setup](docs/claude-code-setup/INSTALL.md).
 
-These are 1.1.0 instructions. At the 2026-10-05 audit, the latest published
-release was 0.9.4. Use a source checkout containing the 1.1 implementation until
-a matching release exists; never silently install an older archive for this flow.
+These are 1.1.0 instructions. Use the matching v1.1.0 release binaries after its
+release workflow completes, or build from this source checkout. Never silently
+install an older archive for this flow.
 
 ## Agree on consequential setup choices
 

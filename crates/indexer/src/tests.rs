@@ -22,7 +22,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     );
     let fixture = PathBuf::from(target["fixture_root"].as_str().unwrap());
     anyhow::ensure!(
-        fixture.parent() == Some(Path::new("/tmp"))
+        fixture.parent() == Some(Path::new("/var/tmp"))
             && fixture
                 .file_name()
                 .unwrap()

@@ -177,5 +177,6 @@ async fn worktree_latency() -> Result<()> {
             .all(|symbol| symbol.file_path.starts_with(child.to_str().unwrap())),
         "wrong checkout path"
     );
+    store::delete_repo(&mut client, repo.id).await?;
     Ok(())
 }

@@ -12,3 +12,7 @@ pub mod search;
 pub mod store;
 pub mod types;
 pub mod worktrees;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
