@@ -91,13 +91,34 @@ muninn init database.host=localhost database.port=5432 \
   database.dbname=muninn database.user=muninn embeddings.backend=local
 ```
 
-For a remote server, use explicit host/port/database/user fields; `dsn_override`
-is not implemented by the connection builder. Current SSL options do not enforce
-TLS-only transport: the driver's default allows plaintext fallback, and the
-connector selected by `require` disables certificate validation. A remote setup
-needs a separately validated transport arrangement. Do not treat these mode names
-as libpq-equivalent guarantees. See
-[Configuration](configuration.md#database-connection).
+### Remote database through SSH
+
+Use an authenticated SSH tunnel to the database host. Direct remote TLS connections
+are not supported by this installation recipe: Muninn 1.1.0 does not enforce
+TLS-only transport for its SSL mode settings.
+
+Keep the remote database bound to loopback and run this in a separate terminal,
+replacing `user@database-host` with your SSH destination:
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:15432:127.0.0.1:5432 user@database-host
+```
+
+Verify the SSH host key through your normal trusted channel. Keep the tunnel
+running while Muninn is in use. Configure Muninn with `host=127.0.0.1`,
+`port=15432`, and `ssl_mode=disable`; the SSH connection encrypts and authenticates
+the remote hop. Use `127.0.0.1:15432:muninn:muninn:PASSWORD` in `.pgpass`, then:
+
+```sh
+muninn init database.host=127.0.0.1 database.port=15432 \
+  database.dbname=muninn database.user=muninn database.ssl_mode=disable embeddings.backend=local
+muninn status
+```
+
+`dsn_override` is not implemented; use the explicit connection fields above.
+See [Configuration](configuration.md#database-connection) for the native TLS
+limitation. The tunnel does not require installing a service.
 
 ## Verify and continue
 

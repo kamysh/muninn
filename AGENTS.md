@@ -20,8 +20,7 @@ existing connection settings and credentials. Do not print secrets into reports.
   when the user deliberately chooses to assemble the prerequisites.
 - **Agent integration only:** use [Agent setup](docs/claude-code-setup/INSTALL.md).
 
-These are 1.1.0 instructions. Use the matching v1.1.0 release binaries after its
-release workflow completes, or build from this source checkout. Never silently
+These are 1.1.0 instructions. Use the matching v1.1.0 release binaries or build from this source checkout. Never silently
 install an older archive for this flow.
 
 ## Agree on consequential setup choices
@@ -52,8 +51,8 @@ name or port conflict.
    role password; use it only for that agreed setup. It expects simple identifiers
    and a password safe for SQL interpolation, such as generated hexadecimal.
    Verify the application role can connect to the intended database.
-3. **Binaries.** Build `nix build .#muninn-static` from the selected source tree,
-   or inspect and install all three binaries from a matching published release.
+3. **Binaries.** Use the matching release download commands in Getting started.
+   A source build with `nix build .#muninn-static` is an optional alternative.
    Preserve old binaries on upgrade. Verify all versions and actual executable
    paths; use absolute paths in service/MCP registration.
 4. **Global bootstrap.** Use `muninn init key=value …` for noninteractive setup.

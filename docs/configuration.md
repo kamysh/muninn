@@ -86,9 +86,9 @@ SSL mode. The pinned tokio-postgres driver defaults to `Prefer`, which can fall
 back to plaintext when the server declines SSL. Thus even the `require` and
 verification names do not currently enforce TLS-only transport. Do not present
 these settings as a verified secure remote-database recipe. The recommended local
-postgres-ai setup binds its port to loopback. A remote deployment needs a separately
-validated transport arrangement; use explicit connection fields, not the unused
-DSN override. See [database setup](own-database.md).
+postgres-ai setup binds its port to loopback. For a remote database, use the
+[SSH tunnel recipe](own-database.md#remote-database-through-ssh), with explicit
+connection fields. Native TLS enforcement remains unsupported in this release.
 
 ### Embeddings and credentials
 
