@@ -1,4 +1,4 @@
-# Get started with Muninn 1.1
+# Get started with Muninn 1.2.1
 
 This is the human procedure for a **new installation**. For an existing install,
 start with [Upgrading](upgrading.md); do not create a replacement database.
@@ -66,9 +66,9 @@ Download the matching setup files (no build is needed):
 
 ```sh
 mkdir -p "$HOME/.local/share/muninn"
-curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.0.tar.gz \
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.1.tar.gz \
   | tar -xz -C "$HOME/.local/share/muninn"
-cd "$HOME/.local/share/muninn/muninn-1.2.0"
+cd "$HOME/.local/share/muninn/muninn-1.2.1"
 ```
 
 From this directory, run the helper after reviewing
@@ -95,7 +95,7 @@ for missing extensions, preload and privilege setup.
 
 ## 3. Install matching binaries
 
-Install the published **1.2.0** binaries; Nix and a Rust compiler are not needed:
+Install the published **1.2.1** binaries; Nix and a Rust compiler are not needed:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -105,7 +105,7 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARBALL=muninn-darwin-arm64.tar.gz ;;
   *) echo "See the source-build instructions for this platform" >&2; exit 1 ;;
 esac
-curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.0/${TARBALL}" \
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.1/${TARBALL}" \
   | tar -xz -C "$HOME/.local/bin"
 chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
@@ -122,7 +122,7 @@ muninn-index --version
 muninn-mcp --version
 ```
 
-All three should report the intended version (1.2.0 for this tree).
+All three should report the intended version (1.2.1 for this tree).
 
 ## 4. Bootstrap the global configuration
 
