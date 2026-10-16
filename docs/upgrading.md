@@ -16,9 +16,9 @@ Automatic retirement retains the old family's schema and index; explicit removal
 is still required to delete them. Reconnect old MCP processes after this upgrade
 because their registration SQL predates the changed path constraint.
 
-These docs describe 1.1 source. At the 2026-10-05 audit, GitHub's latest release
-was still 0.9.4. Use matching source/binaries; a `releases/latest` download can
-silently install the wrong interface.
+Use source and binaries from the same release. `releases/latest` selects the
+latest published release; use its versioned tag when consulting source or docs
+for those binaries.
 
 ## Application upgrades
 
