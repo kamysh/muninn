@@ -111,11 +111,110 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     );
     let initial = embedder.0.load(Ordering::SeqCst);
     assert!(initial > 0);
+    let demanded = parent.join("runtime-demanded");
+    let waiting = parent.join("runtime-waiting");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "demanded",
+            demanded.to_str().unwrap(),
+        ],
+    )?;
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "waiting",
+            waiting.to_str().unwrap(),
+        ],
+    )?;
+    worktrees::reconcile_requested_checkout(
+        client,
+        repo.id,
+        &main,
+        &demanded,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+    )
+    .await?;
+    let demanded_target = worktrees::resolve(client, &demanded).await?.unwrap();
+    assert!(!found(client, &demanded_target, "alpha").await?.is_empty());
+    assert!(worktrees::resolve(client, &waiting).await.is_err());
+    assert_eq!(initial, embedder.0.load(Ordering::SeqCst));
+    git(
+        &main,
+        &["worktree", "remove", "--force", waiting.to_str().unwrap()],
+    )?;
     reconcile(client, repo.id, &main, &embedder).await?;
     assert_eq!(initial, embedder.0.load(Ordering::SeqCst));
     assert!(!found(client, &t1, "alpha").await?.is_empty());
     assert_eq!(
-        graph::query_related(client, t1.graph, "alpha", StructuralRelation::Calls, false)
+        worktrees::query_related(client, &t1, "alpha", StructuralRelation::Calls, false)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(
+        count(
+            client,
+            &format!(
+                "SELECT count(*) FROM ag_catalog.ag_graph WHERE name='{}'",
+                store::graph_name(t1.graph)
+            )
+        )
+        .await?,
+        0,
+        "new linked worktrees must not rebuild AGE graphs"
+    );
+    // Simulate an indexed checkout from before the snapshot migration. Its
+    // existing AGE graph remains readable when no snapshot row exists.
+    let row = client
+        .query_one(
+            &format!("SELECT nodes,edges FROM {s}.checkout_structural_snapshots WHERE checkout=$1"),
+            &[&t2.checkout],
+        )
+        .await?;
+    let legacy_nodes: Vec<Symbol> = serde_json::from_value(row.get(0))?;
+    let legacy_edges: Vec<StructuralEdge> = serde_json::from_value(row.get(1))?;
+    client
+        .batch_execute(&format!(
+            "SELECT ag_catalog.create_graph('{}')",
+            store::graph_name(t2.graph)
+        ))
+        .await?;
+    graph::upsert_symbol_nodes(
+        client,
+        t2.graph,
+        &legacy_nodes
+            .iter()
+            .map(|symbol| graph::SymbolNodeInput {
+                chunk_id: symbol.chunk_id,
+                name: symbol.name.clone(),
+                kind: symbol.kind.clone(),
+                file_path: symbol.file_path.clone(),
+                start_line: symbol.range.start,
+                end_line: symbol.range.end,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    graph::upsert_edges(client, t2.graph, &legacy_edges).await?;
+    client
+        .execute(
+            &format!("DELETE FROM {s}.checkout_structural_snapshots WHERE checkout=$1"),
+            &[&t2.checkout],
+        )
+        .await?;
+    assert_eq!(
+        worktrees::query_related(client, &t2, "alpha", StructuralRelation::Calls, false)
             .await?
             .len(),
         1
@@ -145,12 +244,12 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .await?
         .is_empty());
     assert!(
-        graph::query_related(client, t1.graph, "alpha", StructuralRelation::Calls, false)
+        worktrees::query_related(client, &t1, "alpha", StructuralRelation::Calls, false)
             .await?
             .is_empty()
     );
     assert_eq!(
-        graph::query_related(client, t2.graph, "alpha", StructuralRelation::Calls, false)
+        worktrees::query_related(client, &t2, "alpha", StructuralRelation::Calls, false)
             .await?
             .len(),
         1
@@ -180,7 +279,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         0
     );
     assert_eq!(
-        graph::query_related(client, t2.graph, "alpha", StructuralRelation::Calls, false)
+        worktrees::query_related(client, &t2, "alpha", StructuralRelation::Calls, false)
             .await?
             .len(),
         1
@@ -298,6 +397,82 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     );
     assert!(!found(client, &relocated_target, "gamma").await?.is_empty());
 
+    // Git can keep a manually deleted worktree in its registry until pruning.
+    // Its confirmed missing directory retires the checkout without deleting
+    // its completed structural snapshot.
+    let missing = parent.join("runtime-missing");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "missing",
+            missing.to_str().unwrap(),
+        ],
+    )?;
+    reconcile(client, repo.id, &main, &embedder).await?;
+    let missing_target = worktrees::resolve(client, &missing).await?.unwrap();
+    let before = count(
+        client,
+        &format!(
+            "SELECT count(*) FROM {s}.checkout_structural_snapshots WHERE checkout='{}'",
+            missing_target.checkout
+        ),
+    )
+    .await?;
+    assert_eq!(before, 1);
+    fs::remove_dir_all(&missing)?;
+    assert!(
+        muninn_core::repo_resolver::list_git_worktrees(&main.join(".git"))
+            .await?
+            .iter()
+            .any(|entry| entry.path == missing)
+    );
+    reconcile(client, repo.id, &main, &embedder).await?;
+    assert_eq!(
+        count(
+            client,
+            &format!(
+                "SELECT count(*) FROM {s}.checkouts WHERE id='{}' AND registration_state='active' AND missing_since IS NOT NULL",
+                missing_target.checkout
+            )
+        )
+        .await?,
+        1
+    );
+    client
+        .execute(
+            &format!(
+                "UPDATE {s}.checkouts SET missing_since=now()-interval '61 seconds' WHERE id=$1"
+            ),
+            &[&missing_target.checkout],
+        )
+        .await?;
+    reconcile(client, repo.id, &main, &embedder).await?;
+    assert_eq!(
+        count(
+            client,
+            &format!(
+                "SELECT count(*) FROM {s}.checkouts WHERE id='{}' AND registration_state='retired'",
+                missing_target.checkout
+            )
+        )
+        .await?,
+        1
+    );
+    assert_eq!(
+        count(
+            client,
+            &format!(
+                "SELECT count(*) FROM {s}.checkout_structural_snapshots WHERE checkout='{}'",
+                missing_target.checkout
+            )
+        )
+        .await?,
+        before
+    );
+
     // Blocking Git metadata prevents publication, including resolved-but-not-
     // completed merges. Other worktrees continue updating independently.
     let g = muninn_core::repo_resolver::discover_git_checkout(&one)
@@ -322,7 +497,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         &[],
         &[],
         |_, _, _| {},
-        Some(&[one.clone()]),
+        Some(std::slice::from_ref(&one)),
     )
     .await?;
     assert_eq!(retry.len(), 1);
@@ -357,8 +532,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     assert!(!found(client, &t2, "alpha").await?.is_empty());
     fs::write(main.join("a.rs"), "fn gamma() {}\n")?;
 
-    // Missing-but-registered directories retain data; only actual registry
-    // removal retires a checkout and drops its AGE graph.
+    // A temporary move shorter than the grace period keeps the registration.
     let moved = parent.join("temporarily-away");
     fs::rename(&two, &moved)?;
     reconcile(client, repo.id, &main, &embedder).await?;

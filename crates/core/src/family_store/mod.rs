@@ -10,6 +10,7 @@ pub use preparation::{GraphRequirement, PreparationConnection, PreparedFamily};
 pub use types::*;
 
 use anyhow::{ensure, Context, Result};
+use std::io::ErrorKind;
 use std::path::Path;
 use tokio_postgres::{Client, GenericClient, Row, Transaction};
 use uuid::Uuid;
@@ -66,6 +67,88 @@ pub async fn get_family(client: &impl GenericClient, id: Uuid) -> Result<Option<
         .transpose()
 }
 
+/// Retire a family only when its stored local identity is confirmed absent.
+/// Other filesystem errors and Git discovery failures are not proof of removal.
+/// The family row and its schema remain available for explicit recovery/removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingState {
+    Present,
+    Pending,
+    Retired,
+}
+
+pub async fn retire_if_missing(client: &mut Client, id: Uuid) -> Result<MissingState> {
+    let tx = client.transaction().await?;
+    lock_registry(&tx).await?;
+    let Some(family) = get_family(&tx, id).await? else {
+        return Ok(MissingState::Present);
+    };
+    if family.retired_at.is_some() {
+        return Ok(MissingState::Present);
+    }
+    let path = match &family.identity {
+        Some(identity) => identity.key.to_path_buf()?,
+        None => Path::new(&family.legacy_path).to_path_buf(),
+    };
+    let absent = matches!(tokio::fs::metadata(&path).await, Err(ref error) if error.kind() == ErrorKind::NotFound);
+    if !absent {
+        tx.execute(
+            "UPDATE public.repos SET missing_since=NULL WHERE id=$1 AND missing_since IS NOT NULL",
+            &[&id],
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(MissingState::Present);
+    }
+    let elapsed: Option<bool> = tx
+        .query_one(
+            "SELECT missing_since <= now() - interval '60 seconds' FROM public.repos WHERE id=$1",
+            &[&id],
+        )
+        .await?
+        .get(0);
+    if elapsed.is_none() {
+        tx.execute(
+            "UPDATE public.repos SET missing_since=now() WHERE id=$1 AND missing_since IS NULL",
+            &[&id],
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(MissingState::Pending);
+    }
+    if elapsed == Some(false) {
+        return Ok(MissingState::Pending);
+    }
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,771913))",
+        &[&id.to_string()],
+    )
+    .await?;
+    // A checkout can be recreated while we wait for an indexing lock.
+    if !matches!(tokio::fs::metadata(&path).await, Err(ref error) if error.kind() == ErrorKind::NotFound)
+    {
+        tx.execute(
+            "UPDATE public.repos SET missing_since=NULL WHERE id=$1",
+            &[&id],
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(MissingState::Present);
+    }
+    let changed = tx
+        .execute(
+            "UPDATE public.repos SET retired_at=now() WHERE id=$1 AND retired_at IS NULL",
+            &[&id],
+        )
+        .await?;
+    tx.commit().await?;
+    Ok(if changed == 1 {
+        MissingState::Retired
+    } else {
+        MissingState::Present
+    })
+}
+
 /// Reserve a new, pending family or return the existing matching reservation.
 /// This commits its registry row only; no schema/graph is created. Existing legacy
 /// path ownership must be imported explicitly, never adopted by this operation.
@@ -110,7 +193,7 @@ pub(crate) async fn reserve_family_in_tx(
     }
     ensure!(
         tx.query_opt(
-            "SELECT id FROM public.repos WHERE path = $1",
+            "SELECT id FROM public.repos WHERE path = $1 AND retired_at IS NULL",
             &[&legacy_path]
         )
         .await?

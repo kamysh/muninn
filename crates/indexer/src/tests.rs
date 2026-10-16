@@ -22,7 +22,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     );
     let fixture = PathBuf::from(target["fixture_root"].as_str().unwrap());
     anyhow::ensure!(
-        fixture.parent() == Some(Path::new("/tmp"))
+        fixture.parent() == Some(Path::new("/var/tmp"))
             && fixture
                 .file_name()
                 .unwrap()
@@ -68,7 +68,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     let id: Uuid = receipt["family_id"].as_str().unwrap().parse()?;
     let mut watched = HashMap::new();
     let reindexing = Arc::new(Mutex::new(std::collections::HashSet::new()));
-    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     assert!(!watched.contains_key(&id));
     assert!(!reindexing.lock().await.contains(&id));
     policy::start::authorize(
@@ -83,7 +83,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     )
     .await?;
     // Simulate an interrupted foreground start. The daemon must resume it.
-    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if client
@@ -102,7 +102,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     assert!(watched.contains_key(&id));
     tokio::time::sleep(Duration::from_millis(150)).await;
     let before = client
@@ -150,7 +150,7 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     assert!(tokio::time::timeout(Duration::from_secs(3), rx.recv())
         .await?
         .is_some());
-    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     let signature = &watched.get(&id).unwrap().1;
     assert_eq!(signature.2, 35);
     assert_eq!(signature.4, Some(2));
@@ -160,6 +160,93 @@ async fn policy_dispatch() -> anyhow::Result<()> {
         let _ = handle.await;
     }
     store::delete_repo(&mut client, id).await?;
+
+    // A removed local repository is retired once, without dropping its schema.
+    // A new clone/directory may then claim the same path with a new identity.
+    let removed = fixture.join("daemon-removed-directory");
+    std::fs::create_dir(&removed)?;
+    let mut policy = policy::Policy::shipped("removed fixture".into());
+    policy.embeddings.backend = policy::Backend::Local;
+    policy.embeddings.model = None;
+    policy.index.exclude = vec!["*".into()];
+    let first = policy::registration::add(
+        &mut client,
+        || db::connect_for_preparation(&cfg.database),
+        &removed,
+        Some(&policy::InitialRequest {
+            api_version: 1,
+            policy: policy.clone(),
+        }),
+    )
+    .await?;
+    let first_id: Uuid = first["family_id"].as_str().unwrap().parse()?;
+    std::fs::remove_dir(&removed)?;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    assert!(client
+        .query_one(
+            "SELECT missing_since IS NOT NULL AND retired_at IS NULL FROM public.repos WHERE id=$1",
+            &[&first_id],
+        )
+        .await?
+        .get::<_, bool>(0));
+    std::fs::create_dir(&removed)?;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    assert!(client
+        .query_one(
+            "SELECT missing_since IS NULL AND retired_at IS NULL FROM public.repos WHERE id=$1",
+            &[&first_id],
+        )
+        .await?
+        .get::<_, bool>(0));
+    std::fs::remove_dir(&removed)?;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    client
+        .execute(
+            "UPDATE public.repos SET missing_since=now()-interval '61 seconds' WHERE id=$1",
+            &[&first_id],
+        )
+        .await?;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    assert!(client
+        .query_one(
+            "SELECT retired_at IS NOT NULL FROM public.repos WHERE id=$1",
+            &[&first_id]
+        )
+        .await?
+        .get::<_, bool>(0));
+    assert!(store::list_repos(&client)
+        .await?
+        .iter()
+        .all(|repo| repo.id != first_id));
+    assert!(client
+        .query_one(
+            "SELECT to_regnamespace($1) IS NOT NULL",
+            &[&store::repo_schema(first_id)],
+        )
+        .await?
+        .get::<_, bool>(0));
+    std::fs::create_dir(&removed)?;
+    let second = policy::registration::add(
+        &mut client,
+        || db::connect_for_preparation(&cfg.database),
+        &removed,
+        Some(&policy::InitialRequest {
+            api_version: 1,
+            policy,
+        }),
+    )
+    .await?;
+    let second_id: Uuid = second["family_id"].as_str().unwrap().parse()?;
+    assert_ne!(first_id, second_id);
+    assert_eq!(
+        store::get_repo_by_path(&client, &removed.to_string_lossy())
+            .await?
+            .unwrap()
+            .id,
+        second_id
+    );
+    store::delete_repo(&mut client, second_id).await?;
+    store::delete_repo(&mut client, first_id).await?;
     println!("daemon: no automatic first start; interrupted explicit start resumed; directory file event reconciled; policy notification and watcher restart verified");
     Ok(())
 }

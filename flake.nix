@@ -48,7 +48,7 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "1.0.1";
+          version = "1.1.0";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -123,7 +123,7 @@
 
             pkgs.just
             pkgs.git
-          ];
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ];
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];

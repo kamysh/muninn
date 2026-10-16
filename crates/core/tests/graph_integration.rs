@@ -5,15 +5,12 @@
 //! chunks table and AGE graph. Cleanup is guaranteed even on assertion failure
 //! via the `with_repo` helper that catches panics and always deletes.
 //!
-//! Run against the live DB:
-//!   cd /path/to/muninn
-//!   nix develop --command cargo test --test graph_integration
-//!
-//! DB config comes from ~/.config/muninn/config.toml + ~/.pgpass.
+//! Run through muninn-setup/test-all.sh against its disposable database.
+
+mod support;
 
 use futures::FutureExt;
 use muninn_core::{
-    config::GlobalConfig,
     db,
     graph::{
         delete_file_symbols, query_related, upsert_edges, upsert_symbol_nodes, SymbolNodeInput,
@@ -28,10 +25,11 @@ use uuid::Uuid;
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 async fn connect() -> Client {
-    let cfg = GlobalConfig::load().expect("load ~/.config/muninn/config.toml");
-    db::connect(&cfg.database)
+    let mut client = support::connect().await.expect("connect to disposable DB");
+    db::run_migrations(&mut client)
         .await
-        .expect("connect to muninn DB")
+        .expect("public migrations");
+    client
 }
 
 /// Register an ephemeral test repo (embedding_dim=64).

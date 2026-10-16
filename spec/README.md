@@ -3,14 +3,15 @@
 `Muninn.agda` is the aggregate entry point. These modules state mathematical
 contracts for chunks, policies, registration, checkout views and indexing. They
 are not generated Rust and do not constitute a refinement proof of the running
-application. [Development](../docs/development.md) describes the current 1.0
+application. [Development](../docs/development.md) describes the current 1.1
 implementation; historical proposal/status records remain under `docs/plans/`.
 
 ## Current implementation in brief
 
 The application uses one schema per family, managed through the Kryzhen library,
-and independent AGE-managed graphs for Git checkouts. File versions/chunks are
-shared through a moving base and relational file deltas. Main updates preserve
+an AGE graph for the primary checkout, and transactional structural snapshots
+for linked worktrees. File versions/chunks are shared through a moving base and
+relational file deltas. Main updates preserve
 other published checkout views. There are no custom physical prefix/radix trees.
 
 Family policies/default histories are in the database. A TUI and guarded JSON

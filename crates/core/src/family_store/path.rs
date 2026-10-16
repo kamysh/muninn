@@ -47,9 +47,9 @@ impl StoredPath {
         match encoding {
             "unix-bytes" => ensure!(!bytes.contains(&0), "NUL in Unix identity path"),
             "windows-utf16le" => {
-                ensure!(bytes.len() % 2 == 0, "odd UTF-16 path length");
+                ensure!(bytes.len().is_multiple_of(2), "odd UTF-16 path length");
                 ensure!(
-                    !bytes.chunks_exact(2).any(|b| b == [0, 0]),
+                    !bytes.as_chunks::<2>().0.contains(&[0, 0]),
                     "NUL in Windows identity path"
                 );
             }

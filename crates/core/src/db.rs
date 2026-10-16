@@ -161,7 +161,9 @@ pub async fn connect_for_preparation(
     pg.application_name("muninn-family-preparation");
     // Index migrations can exceed a minute on existing repositories. Inherit
     // the server's statement limit while keeping lock waits bounded.
-    pg.options(format!("-c search_path={SEARCH_PATH} -c lock_timeout=15000"));
+    pg.options(format!(
+        "-c search_path={SEARCH_PATH} -c lock_timeout=15000"
+    ));
     if cfg.connect_timeout.is_none() {
         pg.connect_timeout(std::time::Duration::from_secs(10));
     }
@@ -241,88 +243,6 @@ pub async fn run_repo_migrations(client: &mut Client, schema: &str) -> anyhow::R
     Ok(())
 }
 
-#[cfg(test)]
-mod migration_tests {
-    use super::{embedded_migrations, embedded_repo_migrations};
-    use sha2::{Digest, Sha256};
-
-    #[test]
-    fn historical_files_remain_immutable() {
-        for (contents, expected) in [
-            (
-                include_bytes!("../../../migrations/public/001_init.sql").as_slice(),
-                "d6b3afd665da9f5d1df7c745896249ebbe38298693e507c554f160915f71d81a",
-            ),
-            (
-                include_bytes!("../../../migrations/repo/001_chunks.sql").as_slice(),
-                "c75635b98918fa12f08a2e219e8732873f4bb1f05c1677b5e19d240096659db8",
-            ),
-        ] {
-            assert_eq!(format!("{:x}", Sha256::digest(contents)), expected);
-        }
-    }
-
-    #[test]
-    fn additive_blocks_follow_their_own_schema_history() {
-        for (migrations, expected) in [
-            (
-                embedded_migrations().unwrap(),
-                vec![
-                    "init",
-                    "public-family-identity",
-                    "public-family-lifecycle",
-                    "public-family-registration-intent",
-                ],
-            ),
-            (
-                embedded_repo_migrations().unwrap(),
-                vec![
-                    "repo-chunks",
-                    "repo-checkout-registry",
-                    "repo-checkout-observations",
-                    "repo-family-policy",
-                    "repo-worktree-file-deltas",
-                    "repo-worktree-base-indexes",
-                ],
-            ),
-        ] {
-            let ordered = kryzhen::graph::topo_sort(migrations).unwrap();
-            let names: Vec<_> = ordered.iter().map(|m| m.name.0.as_str()).collect();
-            assert_eq!(
-                names
-                    .iter()
-                    .copied()
-                    .collect::<std::collections::BTreeSet<_>>(),
-                expected.into_iter().collect()
-            );
-            for (index, migration) in ordered.iter().enumerate() {
-                for dependency in &migration.requires {
-                    assert!(ordered[..index]
-                        .iter()
-                        .any(|prior| prior.name == *dependency));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn embedded_sets_have_independent_dependency_graphs() {
-        let public = embedded_migrations().expect("parse public migrations");
-        let repo = embedded_repo_migrations().expect("parse repository template");
-
-        for migrations in [&public, &repo] {
-            assert!(!migrations.is_empty(), "embedded migration set is empty");
-            kryzhen::validation::check_duplicate_names(migrations).unwrap();
-            // Sorting each set independently rejects cross-set dependencies.
-            kryzhen::graph::topo_sort(migrations.to_vec()).unwrap();
-        }
-
-        // Bodies/checksums are stored by name across all target schemas.
-        let all: Vec<_> = public.into_iter().chain(repo).collect();
-        kryzhen::validation::check_duplicate_names(&all).unwrap();
-    }
-}
-
 /// Open a dedicated connection for LISTEN/NOTIFY.
 /// Returns the `Client` (used for the LISTEN command) and a channel that
 /// delivers notifications as they arrive. The connection is driven on a
@@ -365,4 +285,89 @@ pub async fn connect_listener(
 pub async fn connect_for_lock(cfg: &DatabaseConfig) -> Result<Arc<Client>> {
     let client = connect_internal(cfg, Some("muninn-advisory-lock")).await?;
     Ok(Arc::new(client))
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::{embedded_migrations, embedded_repo_migrations};
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn historical_files_remain_immutable() {
+        for (contents, expected) in [
+            (
+                include_bytes!("../../../migrations/public/001_init.sql").as_slice(),
+                "d6b3afd665da9f5d1df7c745896249ebbe38298693e507c554f160915f71d81a",
+            ),
+            (
+                include_bytes!("../../../migrations/repo/001_chunks.sql").as_slice(),
+                "c75635b98918fa12f08a2e219e8732873f4bb1f05c1677b5e19d240096659db8",
+            ),
+        ] {
+            assert_eq!(format!("{:x}", Sha256::digest(contents)), expected);
+        }
+    }
+
+    #[test]
+    fn additive_blocks_follow_their_own_schema_history() {
+        for (migrations, expected) in [
+            (
+                embedded_migrations().unwrap(),
+                vec![
+                    "init",
+                    "public-family-identity",
+                    "public-family-lifecycle",
+                    "public-family-registration-intent",
+                    "public-live-family-paths",
+                ],
+            ),
+            (
+                embedded_repo_migrations().unwrap(),
+                vec![
+                    "repo-chunks",
+                    "repo-checkout-registry",
+                    "repo-checkout-observations",
+                    "repo-family-policy",
+                    "repo-missing-checkout-grace",
+                    "repo-worktree-file-deltas",
+                    "repo-worktree-base-indexes",
+                    "repo-worktree-structural-snapshots",
+                ],
+            ),
+        ] {
+            let ordered = kryzhen::graph::topo_sort(migrations).unwrap();
+            let names: Vec<_> = ordered.iter().map(|m| m.name.0.as_str()).collect();
+            assert_eq!(
+                names
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected.into_iter().collect()
+            );
+            for (index, migration) in ordered.iter().enumerate() {
+                for dependency in &migration.requires {
+                    assert!(ordered[..index]
+                        .iter()
+                        .any(|prior| prior.name == *dependency));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn embedded_sets_have_independent_dependency_graphs() {
+        let public = embedded_migrations().expect("parse public migrations");
+        let repo = embedded_repo_migrations().expect("parse repository template");
+
+        for migrations in [&public, &repo] {
+            assert!(!migrations.is_empty(), "embedded migration set is empty");
+            kryzhen::validation::check_duplicate_names(migrations).unwrap();
+            // Sorting each set independently rejects cross-set dependencies.
+            kryzhen::graph::topo_sort(migrations.to_vec()).unwrap();
+        }
+
+        // Bodies/checksums are stored by name across all target schemas.
+        let all: Vec<_> = public.into_iter().chain(repo).collect();
+        kryzhen::validation::check_duplicate_names(&all).unwrap();
+    }
 }

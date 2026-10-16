@@ -10,7 +10,7 @@ maintain the database stack themselves. Availability of PostgreSQL and individua
 extension packages does not establish that their versions, loading behavior and
 privileges work together. You take responsibility for validating that combination.
 
-Muninn 1.0 requires **pgvector, Apache AGE and pgcrypto**; there is no supported
+Muninn 1.1 requires **pgvector, Apache AGE and pgcrypto**; there is no supported
 AGE-free fallback, even if only text/semantic search is wanted.
 
 ## Compatibility and loading

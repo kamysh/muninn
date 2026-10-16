@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cfg = GlobalConfig::load()?;
-    let client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
+    let mut client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
     // Self-apply migrations on startup: the daemon may come up (launchd/systemd)
     // before any CLI command has migrated the DB, and every scan SELECTs the
     // current repo columns. Idempotent. Spec: schema is current before queries.
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Initial scan
-    scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
 
     loop {
         // Wait for a NOTIFY or fall back to a 60 s poll for resilience.
@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
         }
-        scan_and_dispatch(&cfg, &client, &mut watched, &reindexing).await;
+        scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     }
 
     Ok(())
@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
 /// Query the repos table and dispatch watcher / reindex tasks as needed.
 async fn scan_and_dispatch(
     cfg: &GlobalConfig,
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
     watched: &mut HashMap<Uuid, WatcherEntry>,
     reindexing: &Arc<Mutex<std::collections::HashSet<Uuid>>>,
 ) {
@@ -122,6 +122,25 @@ async fn scan_and_dispatch(
     });
 
     for repo in repos {
+        match muninn_core::family_store::retire_if_missing(client, repo.id).await {
+            Ok(muninn_core::family_store::MissingState::Retired) => {
+                if let Some((handle, _)) = watched.remove(&repo.id) {
+                    handle.abort();
+                }
+                tracing::info!("retired missing repository {} ({})", repo.path, repo.id);
+                continue;
+            }
+            Ok(muninn_core::family_store::MissingState::Pending) => {
+                if let Some((handle, _)) = watched.remove(&repo.id) {
+                    handle.abort();
+                }
+                continue;
+            }
+            Ok(muninn_core::family_store::MissingState::Present) => {}
+            Err(error) => {
+                tracing::warn!("cannot check missing repository {}: {}", repo.id, error);
+            }
+        }
         // Paused repos are skipped entirely — no reindex, no watcher — without
         // dropping data. If a watcher is running for a now-paused repo, evict it.
         // Spec: Muninn.Index.daemonDecision (paused → Skip).

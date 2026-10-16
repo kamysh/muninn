@@ -968,7 +968,7 @@ async fn persistence() -> anyhow::Result<()> {
     );
     let fixture_root = PathBuf::from(target["fixture_root"].as_str().unwrap());
     anyhow::ensure!(
-        fixture_root.parent() == Some(Path::new("/tmp"))
+        fixture_root.parent() == Some(Path::new("/var/tmp"))
             && fixture_root
                 .file_name()
                 .unwrap()

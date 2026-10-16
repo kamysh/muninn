@@ -20,9 +20,9 @@ existing connection settings and credentials. Do not print secrets into reports.
   when the user deliberately chooses to assemble the prerequisites.
 - **Agent integration only:** use [Agent setup](docs/claude-code-setup/INSTALL.md).
 
-These are 1.0.0 instructions. At the 2026-10-05 audit, the latest published
-release was 0.9.4. Use a source checkout containing the 1.0 implementation until
-a matching release exists; never silently install an older archive for this flow.
+These are 1.1.0 instructions. Use the matching v1.1.0 release binaries after its
+release workflow completes, or build from this source checkout. Never silently
+install an older archive for this flow.
 
 ## Agree on consequential setup choices
 
@@ -138,8 +138,9 @@ Report each observed outcome separately:
 `muninn status` is a registry overview. Its path form, and `pause`, `resume` and
 `remove`, require the registered locator displayed there; arbitrary worktree paths
 are supported by code search and policy commands, not those legacy controls.
-`remove` deletes the family's code index, including its worktree graphs. Removing
-one worktree should use Git's normal workflow and daemon reconciliation instead.
+`remove` deletes the family's code index, including structural snapshots and
+any older worktree AGE graphs. Removing one worktree should use Git's normal
+workflow and daemon reconciliation instead.
 Curated knowledge remains keyed by exact repository-path strings.
 
 ## Development boundaries

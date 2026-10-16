@@ -6,12 +6,16 @@ name=muninn-persistence-test-20261004
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo"
 test_bwrap=${MUNINN_TEST_BWRAP:-bwrap}
+test_timeout=${MUNINN_TEST_TIMEOUT_SECONDS:-600}
+[[ "$test_timeout" =~ ^[1-9][0-9]*$ ]] || { echo 'Test timeout must be a positive number of seconds'; exit 1; }
 for tool in docker psql cargo jq openssl ss timeout "$test_bwrap"; do command -v "$tool" >/dev/null; done
+[[ -d "$HOME/.config" && -f "$HOME/.pgpass" ]] || { echo 'Credential/configuration mount points are required'; exit 1; }
 [[ -z $(docker ps -aq --filter "name=^/${name}$") ]] || { echo 'Container name already exists'; exit 1; }
 [[ $(docker image inspect --format '{{.Id}}' "$image") == "$image" ]]
 [[ -z $(ss -H -ltn 'sport = :5451') ]] || { echo 'Port 5451 is occupied'; exit 1; }
 umask 077
-fixture=$(mktemp -d /tmp/muninn-persistence-test-XXXXXX)
+fixture=$(mktemp -d /var/tmp/muninn-persistence-test-XXXXXX)
+export TMPDIR="$fixture"
 nonce=$(openssl rand -hex 16)
 cleanup() {
     result=$?
@@ -94,9 +98,23 @@ printf '%s' "$app_password" | jq -Rs --arg run_id "$nonce" --arg fixture_root "$
     '{host:"127.0.0.1",port:5451,database:"muninn_persistence_test",user:"muninn_persistence_test",password:.,run_id:$run_id,fixture_root:$fixture_root}' > "$fixture/connection.json"
 printf '127.0.0.1:5451:muninn_persistence_test:muninn_persistence_test:%s\n' "$app_password" > "$fixture/client-pgpass"
 unset admin_password app_password
-# Present only disposable credentials at the application's existing lookup path.
-# The bind mount exists only in each test process's private mount namespace;
-# neither HOME nor the host user's .pgpass is changed.
+mkdir "$fixture/client-config"
+cat > "$fixture/client-config/config.toml" <<'TOML'
+[database]
+host = "127.0.0.1"
+port = 5451
+dbname = "muninn_persistence_test"
+user = "muninn_persistence_test"
+[embeddings]
+backend = "voyage"
+model = "voyage-code-3"
+batch_size = 64
+[watcher]
+debounce_ms = 300
+TOML
+# Present disposable credentials and configuration at the real lookup paths,
+# including configuration reloaded by the TUI. These mounts exist only in each
+# test process's namespace; HOME and the host user's files remain unchanged.
 test_cargo() {
     test_filter=$1
     shift
@@ -106,16 +124,20 @@ test_cargo() {
     [[ ${#test_executables[@]} == 1 ]] || { echo 'Expected exactly one test executable'; exit 1; }
     MUNINN_PERSISTENCE_TEST_CONFIG="$fixture/connection.json" \
         "$test_bwrap" --die-with-parent --bind / / --dev /dev \
-        --ro-bind "$fixture/client-pgpass" "$HOME/.pgpass" -- \
-        timeout --signal=TERM --kill-after=10s 600s "${test_executables[0]}" "$test_filter" --ignored --nocapture
+        --ro-bind "$fixture/client-pgpass" "$HOME/.pgpass" \
+        --tmpfs "$HOME/.config" \
+        --ro-bind "$fixture/client-config" "$HOME/.config/muninn" -- \
+        timeout --signal=TERM --kill-after=10s "${test_timeout}s" "${test_executables[0]}" "$test_filter" --ignored --nocapture
 }
 # An explicitly supplied private verifier reuses this same guarded DB lifecycle.
 if (( $# )); then
     [[ "$1" = /* && -x "$1" ]] || { echo 'Verifier must be an absolute executable path'; exit 1; }
     MUNINN_PERSISTENCE_TEST_CONFIG="$fixture/connection.json" \
         "$test_bwrap" --die-with-parent --bind / / --dev /dev \
-        --ro-bind "$fixture/client-pgpass" "$HOME/.pgpass" -- \
-        timeout --signal=TERM --kill-after=10s 600s "$@"
+        --ro-bind "$fixture/client-pgpass" "$HOME/.pgpass" \
+        --tmpfs "$HOME/.config" \
+        --ro-bind "$fixture/client-config" "$HOME/.config/muninn" -- \
+        timeout --signal=TERM --kill-after=10s "${test_timeout}s" "$@"
 else
     test_cargo family_persistence -p muninn-core --test family_persistence
     test_cargo tui::tests::persistence -p muninn --bin muninn

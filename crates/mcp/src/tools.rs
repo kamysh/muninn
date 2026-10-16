@@ -1,6 +1,6 @@
 use anyhow::Result;
 use muninn_core::types::Repo;
-use muninn_core::{embeddings::EmbeddingBackend, graph, knowledge, search, store, worktrees};
+use muninn_core::{db, embeddings::EmbeddingBackend, graph, knowledge, search, store, worktrees};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -54,7 +54,7 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+    if let Some(target) = resolve_worktree(ctx, &params).await? {
         let embedder = family_embedder(ctx, target.family).await?;
         let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
         let vector = embedding.into_iter().next().unwrap_or_default();
@@ -90,7 +90,7 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+    if let Some(target) = resolve_worktree(ctx, &params).await? {
         let results =
             worktrees::fulltext_search(&ctx.client, &target, &params.query, limit).await?;
         return Ok(SearchResponse {
@@ -106,7 +106,7 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
-    if let Some(target) = resolve_worktree(&ctx.client, &params).await? {
+    if let Some(target) = resolve_worktree(ctx, &params).await? {
         let embedder = family_embedder(ctx, target.family).await?;
         let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
         let vector = embedding.into_iter().next().unwrap_or_default();
@@ -165,15 +165,10 @@ pub async fn search_structural(
         cwd: params.cwd,
         limit: None,
     };
-    if let Some(target) = resolve_worktree(&ctx.client, &search_params).await? {
-        let symbols = graph::query_related(
-            &ctx.client,
-            target.graph,
-            &params.symbol,
-            relation,
-            incoming,
-        )
-        .await?;
+    if let Some(target) = resolve_worktree(ctx, &search_params).await? {
+        let symbols =
+            worktrees::query_related(&ctx.client, &target, &params.symbol, relation, incoming)
+                .await?;
         return Ok(serde_json::json!({"symbols":symbols}));
     }
     let repo = resolve_repo(&ctx.client, &search_params).await?;
@@ -183,13 +178,61 @@ pub async fn search_structural(
 }
 
 async fn resolve_worktree(
-    client: &Client,
+    ctx: &SearchContext,
     params: &SearchParams,
 ) -> Result<Option<worktrees::Target>> {
-    match params.repo.as_ref().or(params.cwd.as_ref()) {
-        Some(path) => worktrees::resolve(client, std::path::Path::new(path)).await,
-        None => Ok(None),
+    let Some(path) = params.repo.as_ref().or(params.cwd.as_ref()) else {
+        return Ok(None);
+    };
+    let path = std::path::Path::new(path);
+    let pending = match worktrees::resolve(&ctx.client, path).await {
+        Ok(Some(target)) => return Ok(Some(target)),
+        Ok(None) => None,
+        Err(error) if error.is::<worktrees::PendingIndex>() => Some(error),
+        Err(error) => return Err(error),
+    };
+    let Some(git) = muninn_core::repo_resolver::discover_git_checkout(path).await? else {
+        return Ok(None);
+    };
+    let Some(repo) = worktrees::registered_family(&ctx.client, &git.root).await? else {
+        return Ok(None);
+    };
+    // A search may initialize a linked checkout only for a family whose first
+    // indexing was already authorized and completed.
+    if !repo.ever_indexed || repo.paused {
+        return pending.map_or(Ok(None), Err);
     }
+    let (effective, policy) =
+        muninn_core::family_policy::runtime::config(&*ctx.client, repo.id, &git.root, &ctx.config)
+            .await?;
+    if policy
+        .as_ref()
+        .is_some_and(|view| !view.indexing_enabled || view.paused)
+    {
+        return pending.map_or(Ok(None), Err);
+    }
+    let root = muninn_core::family_policy::runtime::root(
+        &*ctx.client,
+        repo.id,
+        std::path::Path::new(&repo.path),
+    )
+    .await?;
+    let embedder = family_embedder(ctx, repo.id).await?;
+    let mut index_client =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-worktree-index").await?;
+    worktrees::reconcile_requested_checkout(
+        &mut index_client,
+        repo.id,
+        &root,
+        &git.root,
+        embedder,
+        effective.embeddings.batch_size,
+        repo.embedding_dim as usize,
+        &effective.exclude,
+        &effective.vendor,
+    )
+    .await?;
+    worktrees::resolve(&ctx.client, &git.root).await
 }
 
 async fn family_embedder(ctx: &SearchContext, id: Uuid) -> Result<Arc<dyn EmbeddingBackend>> {
