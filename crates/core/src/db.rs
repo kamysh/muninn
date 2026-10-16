@@ -1,10 +1,9 @@
 use anyhow::Result;
 use include_dir::{include_dir, Dir};
-use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_postgres::{AsyncMessage, Client, NoTls};
+use tokio_postgres::{AsyncMessage, Client};
 
 use crate::config::{DatabaseConfig, SslMode};
 
@@ -60,29 +59,6 @@ pub(crate) fn embedded_repo_migrations() -> anyhow::Result<Vec<kryzhen::Migratio
     parse_migrations_dir(&REPO_MIGRATIONS_DIR)
 }
 
-/// Read password for (host, port, dbname, user) from ~/.pgpass.
-fn pgpass_lookup(host: &str, port: u16, dbname: &str, user: &str) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home).join(".pgpass");
-    let content = std::fs::read_to_string(path).ok()?;
-    let port_s = port.to_string();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(5, ':').collect();
-        if parts.len() != 5 {
-            continue;
-        }
-        let m = |pat: &str, val: &str| pat == "*" || pat == val;
-        if m(parts[0], host) && m(parts[1], &port_s) && m(parts[2], dbname) && m(parts[3], user) {
-            return Some(parts[4].to_owned());
-        }
-    }
-    None
-}
-
 fn make_pg_config(cfg: &DatabaseConfig) -> tokio_postgres::Config {
     let mut c = tokio_postgres::Config::new();
     c.host(&cfg.host);
@@ -93,62 +69,52 @@ fn make_pg_config(cfg: &DatabaseConfig) -> tokio_postgres::Config {
     if let Some(secs) = cfg.connect_timeout {
         c.connect_timeout(std::time::Duration::from_secs(secs));
     }
-    if let Some(pw) = pgpass_lookup(&cfg.host, cfg.port, &cfg.dbname, &cfg.user) {
+    if let Some(pw) = crate::password::resolve(
+        cfg.password.as_deref(),
+        cfg.pgpassfile.as_deref(),
+        &cfg.host,
+        cfg.port,
+        &cfg.dbname,
+        &cfg.user,
+    ) {
         c.password(pw);
     }
     c
 }
 
-async fn connect_with_config(
-    pg_cfg: tokio_postgres::Config,
-    ssl_mode: Option<SslMode>,
-    ssl_root_cert: Option<&str>,
-    ssl_client_cert: Option<&str>,
-    ssl_client_key: Option<&str>,
-) -> Result<Client> {
-    match ssl_mode {
-        None | Some(SslMode::Disable) | Some(SslMode::Allow) | Some(SslMode::Prefer) => {
-            let (client, conn) = pg_cfg.connect(NoTls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    tracing::warn!("db connection error: {e}");
-                }
-            });
-            Ok(client)
-        }
-        Some(mode) => {
-            let tls = tls_connector(mode, ssl_root_cert, ssl_client_cert, ssl_client_key)?;
-            let (client, conn) = pg_cfg.connect(tls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    tracing::warn!("db connection error: {e}");
-                }
-            });
-            Ok(client)
-        }
-    }
-}
+type PgConnection = tokio_postgres::Connection<
+    tokio_postgres::Socket,
+    postgres_native_tls::TlsStream<tokio_postgres::Socket>,
+>;
+type OpenConnection = (Client, PgConnection, MakeTlsConnector);
 
-fn tls_connector(
-    mode: SslMode,
+async fn open_connection(
+    mut pg: tokio_postgres::Config,
+    mode: Option<SslMode>,
     root: Option<&str>,
     cert: Option<&str>,
     key: Option<&str>,
-) -> Result<MakeTlsConnector> {
-    let mut builder = TlsConnector::builder();
-    if matches!(mode, SslMode::Require) {
-        builder.danger_accept_invalid_certs(true);
-    }
-    if let Some(path) = root {
-        builder.add_root_certificate(native_tls::Certificate::from_pem(&std::fs::read(path)?)?);
-    }
-    if let (Some(cert), Some(key)) = (cert, key) {
-        builder.identity(native_tls::Identity::from_pkcs8(
-            &std::fs::read(cert)?,
-            &std::fs::read(key)?,
-        )?);
-    }
-    Ok(MakeTlsConnector::new(builder.build()?))
+) -> Result<OpenConnection> {
+    use tokio_postgres::config::SslMode as DriverMode;
+    let mode = mode.unwrap_or(SslMode::Prefer);
+    let tls = crate::tls::connector(&mode, root, cert, key)?;
+    pg.ssl_mode(match mode {
+        SslMode::Disable | SslMode::Allow => DriverMode::Disable,
+        SslMode::Prefer => DriverMode::Prefer,
+        SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull => DriverMode::Require,
+    });
+    let result = pg.connect(tls.clone()).await;
+    let (client, connection) = match result {
+        // libpq allow semantics: plaintext first, retry TLS on a server rejection.
+        // Network errors are not a reason to retry; no mode retries in plaintext
+        // after a TLS handshake or certificate error.
+        Err(error) if mode == SslMode::Allow && error.as_db_error().is_some() => {
+            pg.ssl_mode(DriverMode::Require);
+            pg.connect(tls.clone()).await?
+        }
+        result => result?,
+    };
+    Ok((client, connection, tls))
 }
 
 /// Dedicated coordinator transport, including cancellation with identical TLS
@@ -167,28 +133,18 @@ pub async fn connect_for_preparation(
     if cfg.connect_timeout.is_none() {
         pg.connect_timeout(std::time::Duration::from_secs(10));
     }
-    match cfg.ssl_mode {
-        None | Some(SslMode::Disable) | Some(SslMode::Allow) | Some(SslMode::Prefer) => {
-            let (client, connection) = pg.connect(NoTls).await?;
-            let token = client.cancel_token();
-            Ok(PreparationConnection::new(client, connection, async move {
-                token.cancel_query(NoTls).await
-            }))
-        }
-        Some(mode) => {
-            let tls = tls_connector(
-                mode,
-                cfg.ssl_root_cert.as_deref(),
-                cfg.ssl_client_cert.as_deref(),
-                cfg.ssl_client_key.as_deref(),
-            )?;
-            let (client, connection) = pg.connect(tls.clone()).await?;
-            let token = client.cancel_token();
-            Ok(PreparationConnection::new(client, connection, async move {
-                token.cancel_query(tls).await
-            }))
-        }
-    }
+    let (client, connection, tls) = open_connection(
+        pg,
+        cfg.ssl_mode,
+        cfg.ssl_root_cert.as_deref(),
+        cfg.ssl_client_cert.as_deref(),
+        cfg.ssl_client_key.as_deref(),
+    )
+    .await?;
+    let token = client.cancel_token();
+    Ok(PreparationConnection::new(client, connection, async move {
+        token.cancel_query(tls).await
+    }))
 }
 
 /// Connect using the given config.
@@ -207,14 +163,20 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
     if let Some(name) = app_name {
         pg_cfg.application_name(name);
     }
-    connect_with_config(
+    let (client, connection, _) = open_connection(
         pg_cfg,
         cfg.ssl_mode,
         cfg.ssl_root_cert.as_deref(),
         cfg.ssl_client_cert.as_deref(),
         cfg.ssl_client_key.as_deref(),
     )
-    .await
+    .await?;
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            tracing::warn!("db connection error: {error}");
+        }
+    });
+    Ok(client)
 }
 
 /// Apply pending public migrations, regardless of the connection's search_path.
@@ -256,7 +218,14 @@ pub async fn connect_listener(
     let mut pg_cfg = make_pg_config(cfg);
     pg_cfg.application_name("muninn-index-listener");
 
-    let (client, mut conn) = pg_cfg.connect(NoTls).await?;
+    let (client, mut conn, _) = open_connection(
+        pg_cfg,
+        cfg.ssl_mode,
+        cfg.ssl_root_cert.as_deref(),
+        cfg.ssl_client_cert.as_deref(),
+        cfg.ssl_client_key.as_deref(),
+    )
+    .await?;
 
     let (tx, rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {

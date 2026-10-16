@@ -1,6 +1,6 @@
 [package]
 name = "muninn-core"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 
 [dependencies]
@@ -29,13 +29,13 @@ tracing = { workspace = true }
 # Local embedding backend: model2vec static embeddings (pure Rust — no ONNX
 # runtime, no native ML lib, no ABI/version pinning). `fancy-regex` instead of
 # the default `onig` keeps the tokenizer dependency pure-Rust (no oniguruma C).
-model2vec-rs = { version = "0.2", default-features = false, features = ["hf-hub", "fancy-regex"] }
+model2vec-rs = { version = "0.2.1", default-features = false, features = ["hf-hub", "fancy-regex"] }
 pgvector = { version = "0.4.2", features = ["postgres"] }
 sha2 = { workspace = true }
 
 [dev-dependencies]
 quickcheck = { workspace = true }
 quickcheck_macros = { workspace = true }
-tempfile = "3"
+tempfile = "3.27.0"
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -79,10 +79,11 @@ entries, and set mode `0600`:
 localhost:5432:muninn:muninn:YOUR_PASSWORD
 ```
 
-Muninn's own reader matches the configured host/port/database/user literally,
-with `*` wildcard support. It does not implement every libpq escaped-field rule;
-use simple values and a generated hexadecimal password for this setup. The same
-user account must launch the CLI, daemon and local MCP process.
+Muninn matches host/port/database/user with `*` wildcard support. Escape `:` as
+`\:` and `\` as `\\` in each field; preserve quotes and spaces literally.
+Alternatively configure `database.password`, `PGPASSWORD`, or an explicit
+`database.pgpassfile` / `PGPASSFILE`. The same user account must launch the CLI,
+daemon and local MCP process.
 
 Install the [matching binaries](get-started.md#3-install-matching-binaries), then:
 
@@ -93,9 +94,9 @@ muninn init database.host=localhost database.port=5432 \
 
 ### Remote database through SSH
 
-Use an authenticated SSH tunnel to the database host. Direct remote TLS connections
-are not supported by this installation recipe: Muninn 1.1.0 does not enforce
-TLS-only transport for its SSL mode settings.
+An authenticated SSH tunnel is an alternative to direct TLS. For direct TLS,
+use `ssl_mode="verify-full"` and the certificate settings in
+[database credentials and TLS](database-connections.md).
 
 Keep the remote database bound to loopback and run this in a separate terminal,
 replacing `user@database-host` with your SSH destination:
@@ -117,8 +118,8 @@ muninn status
 ```
 
 `dsn_override` is not implemented; use the explicit connection fields above.
-See [Configuration](configuration.md#database-connection) for the native TLS
-limitation. The tunnel does not require installing a service.
+See [Configuration](configuration.md#database-connection) for native TLS
+options. The tunnel does not require installing a service.
 
 ## Verify and continue
 

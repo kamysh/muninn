@@ -6,10 +6,12 @@ pub mod family_store;
 pub mod graph;
 pub mod knowledge;
 pub mod parser;
+mod password;
 pub mod pipeline;
 pub mod repo_resolver;
 pub mod search;
 pub mod store;
+mod tls;
 pub mod types;
 pub mod worktrees;
 

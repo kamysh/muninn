@@ -53,9 +53,10 @@ For a **new** Muninn role, choose a password and add its entry to `~/.pgpass`:
 localhost:5432:muninn:muninn:YOUR_PASSWORD
 ```
 
-Use a generated hexadecimal password (`openssl rand -hex 32` can generate one)
-with the bundled setup helper: its SQL interpolation does not escape arbitrary
-quotes. Edit the file without overwriting entries for other databases, and run:
+Generate a fresh password with `openssl rand -hex 32`, or use an existing password:
+escape colons and backslashes in each `.pgpass` field; quotes and spaces are
+literal. The setup helper also accepts `PGPASSWORD` and `PGPASSFILE`.
+Edit the file without overwriting entries for other databases, and run:
 
 ```sh
 chmod 600 "$HOME/.pgpass"
@@ -65,9 +66,9 @@ Download the matching setup files (no build is needed):
 
 ```sh
 mkdir -p "$HOME/.local/share/muninn"
-curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.1.0.tar.gz \
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.0.tar.gz \
   | tar -xz -C "$HOME/.local/share/muninn"
-cd "$HOME/.local/share/muninn/muninn-1.1.0"
+cd "$HOME/.local/share/muninn/muninn-1.2.0"
 ```
 
 From this directory, run the helper after reviewing
@@ -94,7 +95,7 @@ for missing extensions, preload and privilege setup.
 
 ## 3. Install matching binaries
 
-Install the published **1.1.0** binaries; Nix and a Rust compiler are not needed:
+Install the published **1.2.0** binaries; Nix and a Rust compiler are not needed:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -104,7 +105,7 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARBALL=muninn-darwin-arm64.tar.gz ;;
   *) echo "See the source-build instructions for this platform" >&2; exit 1 ;;
 esac
-curl -fL "https://github.com/kamysh/muninn/releases/download/v1.1.0/${TARBALL}" \
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.0/${TARBALL}" \
   | tar -xz -C "$HOME/.local/bin"
 chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
@@ -121,7 +122,7 @@ muninn-index --version
 muninn-mcp --version
 ```
 
-All three should report the intended version (1.1.0 for this tree).
+All three should report the intended version (1.2.0 for this tree).
 
 ## 4. Bootstrap the global configuration
 

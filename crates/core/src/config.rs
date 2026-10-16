@@ -51,7 +51,7 @@ pub enum SslMode {
 
 // ── Database config ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     // Required fields — must be present in every config layer.
@@ -59,6 +59,12 @@ pub struct DatabaseConfig {
     pub port: u16,
     pub dbname: String,
     pub user: String,
+    /// Literal password; precedes PGPASSWORD and password-file lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Password file; precedes PGPASSFILE and ~/.pgpass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pgpassfile: Option<String>,
 
     // Optional fields — absent means use the driver or pool default.
     /// If set, used verbatim as the connection string; other fields are ignored
@@ -87,6 +93,20 @@ pub struct DatabaseConfig {
     pub application_name: Option<String>,
 }
 
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("dbname", &self.dbname)
+            .field("user", &self.user)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("pgpassfile", &self.pgpassfile)
+            .field("ssl_mode", &self.ssl_mode)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -94,6 +114,8 @@ impl Default for DatabaseConfig {
             port: 5432,
             dbname: "muninn".to_string(),
             user: std::env::var("USER").unwrap_or_else(|_| "muninn".to_string()),
+            password: None,
+            pgpassfile: None,
             dsn_override: None,
             ssl_mode: None,
             ssl_root_cert: None,
@@ -239,7 +261,19 @@ impl GlobalConfig {
     }
 
     pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
-        toml::from_str(content).map_err(|e| anyhow::anyhow!("{}", e))
+        toml::from_str(content).map_err(|e: toml::de::Error| {
+            let line = e.span().map(|span| {
+                content[..span.start]
+                    .bytes()
+                    .filter(|b| *b == b'\n')
+                    .count()
+                    + 1
+            });
+            anyhow::anyhow!(
+                "invalid Muninn config TOML{}",
+                line.map(|n| format!(" at line {n}")).unwrap_or_default()
+            )
+        })
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -299,13 +333,13 @@ impl GlobalConfig {
             }
         }
         let content = std::fs::read_to_string(&path)?;
-        Ok(toml::from_str(&content)?)
+        Self::from_toml_str(&content)
     }
 
     pub fn load_from(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("cannot read config {}: {}", path.display(), e))?;
-        Ok(toml::from_str(&content)?)
+        Self::from_toml_str(&content)
     }
 
     /// Create a template config at the default path.
@@ -318,7 +352,15 @@ impl GlobalConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, CONFIG_TEMPLATE)?;
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&path)?.write_all(CONFIG_TEMPLATE.as_bytes())?;
         Ok(path)
     }
 }
@@ -340,9 +382,10 @@ port   = 5432
 dbname = "muninn"
 user   = "YOUR_DB_USER"    # REQUIRED — replace with your PostgreSQL username (e.g. "alice")
 
-# Password: muninn never stores a password here.
-# Add a line to ~/.pgpass instead:  localhost:5432:muninn:alice:yourpassword
-# (file must be chmod 600)
+# Password precedence: password, nonempty PGPASSWORD, then password file.
+# File selection: pgpassfile, PGPASSFILE, then ~/.pgpass (chmod 600).
+# password = "literal password"   # Optional; TOML string escaping applies.
+# pgpassfile = "/path/to/pgpass"   # Optional explicit password file.
 
 # ── Optional connection settings ──────────────────────────────────────────────
 # ssl_mode = "prefer"        # disable | allow | prefer | require | verify-ca | verify-full
@@ -468,7 +511,7 @@ pub fn toml_set(content: &str, key: &str, value: &str) -> anyhow::Result<String>
     use toml_edit::{DocumentMut, Item, Table, Value};
     let mut doc: DocumentMut = content
         .parse()
-        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+        .map_err(|_| anyhow::anyhow!("config is not valid TOML"))?;
     // Parse the value as a TOML literal (number / bool / array / quoted string);
     // fall back to a bare string when it doesn't parse, so `backend=local` and
     // `model=voyage-code-3` work without shell-quoting the inner quotes. Type
@@ -497,7 +540,7 @@ pub fn toml_unset(content: &str, key: &str) -> anyhow::Result<String> {
     use toml_edit::DocumentMut;
     let mut doc: DocumentMut = content
         .parse()
-        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+        .map_err(|_| anyhow::anyhow!("config is not valid TOML"))?;
     let segs: Vec<&str> = key.split('.').collect();
     let (last, parents) = segs.split_last().unwrap();
     let mut tbl = doc.as_table_mut();
@@ -516,7 +559,7 @@ pub fn toml_get(content: &str, key: &str) -> anyhow::Result<Option<String>> {
     use toml_edit::DocumentMut;
     let doc: DocumentMut = content
         .parse()
-        .map_err(|e| anyhow::anyhow!("config is not valid TOML: {}", e))?;
+        .map_err(|_| anyhow::anyhow!("config is not valid TOML"))?;
     // Navigate with `.get()` (not `&item[seg]`, whose Index impl panics on a
     // missing or non-table segment). Any absent / through-scalar segment → None.
     let mut item = doc.as_item();

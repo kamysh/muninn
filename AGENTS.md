@@ -20,7 +20,7 @@ existing connection settings and credentials. Do not print secrets into reports.
   when the user deliberately chooses to assemble the prerequisites.
 - **Agent integration only:** use [Agent setup](docs/claude-code-setup/INSTALL.md).
 
-These are 1.1.0 instructions. Use the matching v1.1.0 release binaries or build from this source checkout. Never silently
+These are 1.2.0 instructions. Use the matching v1.2.0 release binaries or build from this source checkout. Never silently
 install an older archive for this flow.
 
 ## Agree on consequential setup choices
@@ -48,8 +48,10 @@ name or port conflict.
    chosen custom stack. Keep server upgrades separate from app installation.
 2. **Credentials.** Reuse the matching `~/.pgpass` entry or establish a new one
    with owner-only permissions. The bundled `create-db-user.sh` changes the
-   role password; use it only for that agreed setup. It expects simple identifiers
-   and a password safe for SQL interpolation, such as generated hexadecimal.
+   role password; use it only for that agreed setup. It supports escaped password
+   files and `PGPASSWORD`, quoting SQL values and identifiers separately.
+   Application config also accepts `database.password` and `database.pgpassfile`;
+   see [credentials and TLS](docs/database-connections.md).
    Verify the application role can connect to the intended database.
 3. **Binaries.** Use the matching release download commands in Getting started.
    A source build with `nix build .#muninn-static` is an optional alternative.

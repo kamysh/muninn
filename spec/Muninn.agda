@@ -24,6 +24,8 @@
 --   Muninn.Concurrency   — advisory-lock mutex (re-exports AdvisoryLock), watcher eviction
 module Muninn where
 
+import Muninn.Connection
+
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public
 open import Muninn.IndexFsm     public

@@ -13,9 +13,9 @@ installation files before using the relative paths below:
 
 ```sh
 mkdir -p "$HOME/.local/share/muninn"
-curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.1.0.tar.gz \
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.0.tar.gz \
   | tar -xz -C "$HOME/.local/share/muninn"
-cd "$HOME/.local/share/muninn/muninn-1.1.0"
+cd "$HOME/.local/share/muninn/muninn-1.2.0"
 ```
 
 If you already have that checkout, change to its root instead. This downloads
