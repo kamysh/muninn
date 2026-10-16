@@ -197,8 +197,9 @@ note silos for temporary worktrees. See the [agent skill](claude-code-setup/skil
   embedding warm-up. Tier-2 chunks without vectors still participate in text search.
 - New families snapshot global provider/model settings. Existing embedding-profile
   changes remain unsupported; global edits never change saved profiles.
-- `dsn_override` and `max_connections` are parsed but unused; SSL modes and password
-  lookup have limits detailed in [Configuration](configuration.md).
+- `dsn_override` and `max_connections` are parsed but unused. Authentication and
+  TLS policy, including its real-server regression matrix, is documented in
+  [Database credentials and TLS](database-connections.md).
 - Formal models contain abstractions and known runtime mismatches. See
   [the proof boundary](../spec/README.md); type-checking alone does not close them.
 

@@ -6,6 +6,21 @@ repository notes help, and **how** to select a checkout or configure its family.
 The hook examples are client-specific: [codex-hooks.json](codex-hooks.json) for
 Codex and [settings.json](settings.json) for Claude Code.
 
+## Obtain the installation files
+
+If you installed release binaries without a source checkout, download the matching
+installation files before using the relative paths below:
+
+```sh
+mkdir -p "$HOME/.local/share/muninn"
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.0.tar.gz \
+  | tar -xz -C "$HOME/.local/share/muninn"
+cd "$HOME/.local/share/muninn/muninn-1.2.0"
+```
+
+If you already have that checkout, change to its root instead. This downloads
+scripts and client guidance; it does not build the application.
+
 ## Before changing client settings
 
 Complete the [Muninn installation](../get-started.md): matching binaries, postgres-ai

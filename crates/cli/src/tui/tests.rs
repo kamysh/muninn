@@ -1267,6 +1267,14 @@ fn pseudoterminal_global_edit_and_secrets() {
     assert!(!terminal.frame().contains("replacement-private-key"));
     assert!(!terminal.frame().contains("canary-original-secret"));
     terminal.key(b"\r");
+    terminal.focus("Database password");
+    terminal.key(b"\r");
+    assert!(terminal.frame().contains("> [Keep current password]"));
+    terminal.focus("Replace password");
+    terminal.key(b"\r");
+    terminal.key(b"replacement-db-password");
+    assert!(!terminal.frame().contains("replacement-db-password"));
+    terminal.key(b"\r");
     terminal.focus("Save global configuration");
     terminal.key(b"\r");
     assert!(

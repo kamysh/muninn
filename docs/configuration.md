@@ -66,29 +66,27 @@ manually. `[index]` and `[mcp]` are optional. Unknown keys are rejected.
 ### Database connection
 
 Required fields are `host`, `port`, `dbname`, `user`; `host` may be a PostgreSQL
-Unix-socket directory. Muninn reads the first matching entry in `~/.pgpass`.
-Keep that file owner-only and use literal values matching the configured fields.
-The current reader supports `*` fields, but is not libpq's complete escaped-field
-parser and does not read `PGPASSFILE`. Simple generated hexadecimal passwords
-avoid delimiter/escaping differences with the setup helper and `psql`.
+Unix-socket directory. Password precedence is optional `database.password`,
+nonempty `PGPASSWORD`, then the first matching password-file entry.
+The file is selected by optional `database.pgpassfile`, then `PGPASSFILE`, then
+`~/.pgpass`. Files must be owner-only; escape colons and backslashes in every
+field. Quotes and spaces are literal. See [credentials and TLS](database-connections.md)
+for examples and the complete policy.
 
 | Optional field | Current behavior |
 | --- | --- |
 | `connect_timeout` | Connection timeout in seconds; family preparation supplies 10 seconds when omitted |
 | `application_name` | Regular connections use it unless a caller supplies its own name; listener/preparation use dedicated names |
-| `ssl_mode` | Omitted, `disable`, `allow`, `prefer`: current code uses `NoTls`. `require`: selects a TLS connector with certificate validation disabled. `verify-ca`, `verify-full`: select the native TLS verifier; there is no separate CA-only implementation. See the transport limitation below |
-| `ssl_root_cert` | Optional PEM CA certificate added to native TLS trust |
-| `ssl_client_cert`, `ssl_client_key` | PEM client certificate/key pair for TLS client authentication |
+| `password`, `pgpassfile` | Optional literal password and explicit password-file path |
+| `ssl_mode` | Default `prefer`; `disable` uses plaintext; `allow` tries plaintext then TLS on server rejection; `require` requires encryption; `verify-ca` also verifies trust; `verify-full` also verifies hostname |
+| `ssl_root_cert` | Optional PEM CA bundle replacing native system trust |
+| `ssl_client_cert`, `ssl_client_key` | PEM certificate chain and matching unencrypted PKCS#8 private key; supply both |
 | `dsn_override`, `max_connections` | Accepted by the config type but **not used** by the current connection builder; do not rely on them for routing or pooling |
 
-**Transport limitation:** Muninn selects a connector but does not set the driver's
-SSL mode. The pinned tokio-postgres driver defaults to `Prefer`, which can fall
-back to plaintext when the server declines SSL. Thus even the `require` and
-verification names do not currently enforce TLS-only transport. Do not present
-these settings as a verified secure remote-database recipe. The recommended local
-postgres-ai setup binds its port to loopback. A remote deployment needs a separately
-validated transport arrangement; use explicit connection fields, not the unused
-DSN override. See [database setup](own-database.md).
+`require`, `verify-ca` and `verify-full` refuse servers without TLS. All connection
+paths, including listeners, preparation, locks and cancellation, share this policy.
+Use `verify-full` with the appropriate CA for a remote database. The optional
+[SSH tunnel recipe](own-database.md#remote-database-through-ssh) remains available.
 
 ### Embeddings and credentials
 

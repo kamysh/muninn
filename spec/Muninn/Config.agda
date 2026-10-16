@@ -23,7 +23,7 @@ open import Relation.Nullary using (¬_)
 
 data SslMode : Set where
   Disable    : SslMode   -- never use TLS
-  Allow      : SslMode   -- use TLS if server offers it
+  Allow      : SslMode   -- plaintext first; TLS if the server requires it
   Prefer     : SslMode   -- try TLS, fall back to plain (libpq default)
   Require    : SslMode   -- TLS required, no certificate verification
   VerifyCa   : SslMode   -- TLS + verify CA chain
@@ -36,7 +36,8 @@ record DbConfig : Set where
     port   : ℕ
     dbname : String
     user   : String
-    -- password intentionally absent: supplied via ~/.pgpass
+    password        : Maybe String   -- literal; precedes PGPASSWORD and file lookup
+    pgpassfile      : Maybe FilePath -- precedes PGPASSFILE and ~/.pgpass
     -- Optional: absent means use the driver or pool default.
     dsnOverride     : Maybe String    -- if present, used verbatim; other fields ignored
     sslMode         : Maybe SslMode

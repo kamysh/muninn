@@ -35,10 +35,10 @@ macro_rules! setting {
     };
 }
 const SETTINGS: &[Setting] = &[
-    setting!("database.host","Database host","PostgreSQL hostname or Unix-socket directory. Passwords come from ~/.pgpass; this form does not change database users or passwords.",Text,false),
-    setting!("database.port","Database port","PostgreSQL port, usually 5432. Must match the matching ~/.pgpass entry.",Number,false),
+    setting!("database.host","Database host","PostgreSQL hostname or Unix-socket directory. This form configures connections; it does not change database roles.",Text,false),
+    setting!("database.port","Database port","PostgreSQL port, usually 5432. When using a password file, its entry must match this port.",Number,false),
     setting!("database.dbname","Database name","Existing PostgreSQL database used by Muninn. Saving prepares its Muninn schema; it does not create a database.",Text,false),
-    setting!("database.user","Database user","Existing application role. Its password belongs in the matching owner-only ~/.pgpass entry.",Text,false),
+    setting!("database.user","Database user","Existing application role used for connections.",Text,false),
     setting!("embeddings.backend","Provider","Local runs on this machine without an API key; first use may download weights. Voyage/OpenAI send selected text to that provider. Changing provider clears the old key and selects its standard model.",Provider,false),
     setting!("embeddings.model","Model","Local uses minishlab/potion-base-32M. Standard new-repository models: Voyage voyage-code-3; OpenAI text-embedding-3-small. Existing repository profiles stay fixed.",Optional,false),
     setting!("embeddings.api_key","API key","Hosted providers require their own key. Stored only in this owner-only global file. Choose Replace or Clear explicitly. An empty replacement keeps the current key; Esc keeps the current key.",Secret,false),
@@ -49,8 +49,8 @@ const SETTINGS: &[Setting] = &[
     setting!("embeddings.cache_dir","Model cache directory","Optional local cache location. Empty uses the application default. This machine-specific path is not copied into repository settings.",Optional,true),
     setting!("database.connect_timeout","Connection timeout (s)","Seconds to wait while connecting. Empty uses the normal driver behavior; family preparation supplies 10 seconds if unset.",OptionalNumber,true),
     setting!("database.application_name","Connection name","Optional name visible in PostgreSQL activity. Some internal connections use their own names.",Optional,true),
-    setting!("database.ssl_mode","TLS mode","Optional: disable, allow, prefer, require, verify-ca, verify-full. Current driver can fall back to plaintext; these names do not guarantee TLS-only transport.",Optional,true),
-    setting!("database.ssl_root_cert","TLS CA certificate","Optional PEM certificate path added to native TLS trust.",Optional,true),
+    setting!("database.ssl_mode","TLS mode","Default prefer. disable: plaintext; allow: plaintext first; prefer: TLS first; require: encryption; verify-ca: trusted chain; verify-full: chain and hostname. The last three refuse plaintext on every connection.",Optional,true),
+    setting!("database.ssl_root_cert","TLS CA certificate","Optional PEM CA bundle replacing system trust for verification.",Optional,true),
     setting!("database.ssl_client_cert","TLS client certificate","Optional PEM certificate path for client authentication; pair with the private-key path.",Optional,true),
     setting!("database.ssl_client_key","TLS client key path","Path to the PEM private key, not the private key itself.",Optional,true),
     setting!("mcp.record_usage","Record MCP usage","Record successful tool-call statistics in the database for muninn usage.",Bool,true),
@@ -58,6 +58,8 @@ const SETTINGS: &[Setting] = &[
     setting!("mcp.logging.dir","MCP log directory","Directory for daily rotating MCP logs.",Text,true),
     setting!("mcp.logging.retention_days","Log retention (days)","Days of local MCP logs to retain.",Number,true),
     setting!("mcp.logging.prune_interval_hours","Log cleanup interval (h)","Hours between checks for expired local MCP logs.",Number,true),
+    setting!("database.password","Database password","Optional literal password, stored in this owner-only config. Takes precedence over PGPASSWORD and the password file. Replace or Clear explicitly; an empty replacement keeps the current value.",Secret,false),
+    setting!("database.pgpassfile","Password file","Optional path; takes precedence over PGPASSFILE and ~/.pgpass. Used only when neither config password nor nonempty PGPASSWORD is supplied.",Optional,true),
 ];
 
 struct Draft {
@@ -165,7 +167,7 @@ enum Action {
 enum Modal {
     Edit(usize, Option<usize>, Vec<char>, usize),
     Provider(usize),
-    Secret(usize),
+    Secret(usize, usize),
     Docs(String, String),
     Confirm(bool, bool),
     Rule(usize, usize),
@@ -186,6 +188,14 @@ fn display(draft: &Draft, index: usize) -> String {
     let field = &SETTINGS[index];
     let value = draft.value(field.key);
     if matches!(field.kind, Kind::Secret) {
+        if field.key == "database.password" {
+            return if value.is_string() {
+                "Configured (hidden)"
+            } else {
+                "Environment / password file"
+            }
+            .into();
+        }
         let configured = value.as_str().is_some_and(|s| !s.is_empty());
         if draft.value("embeddings.backend") == "local" {
             return if configured {
@@ -309,7 +319,7 @@ fn focus_help(draft: &Draft, ui: &Ui) -> (String, String) {
     let index = match ui.modal.as_ref() {
         Some(Modal::Edit(index, ..)) => Some(*index),
         Some(Modal::Provider(_)) => Some(4),
-        Some(Modal::Secret(_)) => Some(6),
+        Some(Modal::Secret(index, _)) => Some(*index),
         Some(Modal::Rule(..)) => ui.rules,
         _ => match actions(draft, ui).get(ui.focus) {
             Some(Action::Field(index)) => Some(*index),
@@ -412,7 +422,10 @@ fn draw(term: &Term, draft: &Draft, ui: &mut Ui, path: &Path) -> anyhow::Result<
                 let _ = (chars,cursor);
                 vec![format!("Edit {}{}",field.label,if rule.is_some(){" pattern"}else{""}),"This edits your draft; global Save writes the file.".into()]
             }
-            Modal::Secret(selected) => ["Replace key (input hidden)", "Clear key", "Keep current key"].iter().enumerate().map(|(i,s)|format!("{} [{s}]",if i==*selected{">"}else{" "})).collect(),
+            Modal::Secret(index, selected) => {
+                let noun = if SETTINGS[*index].key == "database.password" { "password" } else { "key" };
+                [format!("Replace {noun} (input hidden)"), format!("Clear {noun}"), format!("Keep current {noun}")].iter().enumerate().map(|(i,s)|format!("{} [{s}]",if i==*selected{">"}else{" "})).collect()
+            },
             Modal::Provider(selected)=>vec!["Choose embedding provider".into(),"Changing provider clears its existing API key.".into(),String::new()].into_iter().chain(["Local — runs here, no API key","Voyage — hosted, Voyage key required","OpenAI — hosted, OpenAI key required"].into_iter().enumerate().map(|(i,s)|format!("{} {s}",if i==*selected{">"}else{" "}))).collect(),
             Modal::Confirm(save,yes)=>vec![if *save{"Save global configuration?"}else{"Discard changes?"}.into(),if *save{"Writes an owner-only global file, then prepares its configured database. Existing repository snapshots remain unchanged. Restart daemon and reconnect MCP clients to apply changed global settings."}else{"Your draft will be discarded; the global file remains unchanged."}.into(),String::new(),format!("{} [{}]",if *yes{">"}else{" "},if *save{"Save"}else{"Discard"}),format!("{} [Keep editing]",if !*yes{">"}else{" "})],
             Modal::Rule(_,selected)=>["Edit pattern","Move earlier","Move later","Remove pattern","Back"].iter().enumerate().map(|(i,s)|format!("{} [{s}]",if i==*selected{">"}else{" "})).collect(),
@@ -442,7 +455,7 @@ fn draw(term: &Term, draft: &Draft, ui: &mut Ui, path: &Path) -> anyhow::Result<
 
         let menu_count = match modal {
             Modal::Confirm(_, _) => 2,
-            Modal::Provider(_) | Modal::Secret(_) => 3,
+            Modal::Provider(_) | Modal::Secret(..) => 3,
             Modal::Rule(_, _) => 5,
             _ => 0,
         };
@@ -642,7 +655,7 @@ pub fn run(content: &str, path: &Path) -> anyhow::Result<Option<String>> {
                         Key::Enter => {
                             let input: String = chars.iter().collect();
                             if matches!(SETTINGS[index].kind, Kind::Secret) && input.is_empty() {
-                                ui.notice = "Empty replacement kept the current key. Use Clear key to remove it.".into();
+                                ui.notice = "Empty replacement kept the current value. Use Clear to remove it.".into();
                                 continue;
                             }
                             let result = if let Some(row) = rule {
@@ -688,22 +701,22 @@ pub fn run(content: &str, path: &Path) -> anyhow::Result<Option<String>> {
                     }
                     ui.modal = Some(Modal::Edit(index, rule, chars, cursor));
                 }
-                Modal::Secret(mut selected) => {
+                Modal::Secret(index, mut selected) => {
                     match key {
                         Key::Escape => continue,
                         Key::ArrowDown | Key::Tab => selected = (selected + 1) % 3,
                         Key::ArrowUp | Key::BackTab => selected = (selected + 2) % 3,
                         Key::Enter => {
                             match selected {
-                                0 => ui.modal = Some(Modal::Edit(6, None, Vec::new(), 0)),
-                                1 => draft.set(6, "")?,
+                                0 => ui.modal = Some(Modal::Edit(index, None, Vec::new(), 0)),
+                                1 => draft.set(index, "")?,
                                 _ => {}
                             }
                             continue;
                         }
                         _ => {}
                     }
-                    ui.modal = Some(Modal::Secret(selected));
+                    ui.modal = Some(Modal::Secret(index, selected));
                 }
                 Modal::Provider(mut selected) => {
                     match key {
@@ -824,7 +837,7 @@ pub fn run(content: &str, path: &Path) -> anyhow::Result<Option<String>> {
                             )?;
                             draft.apply(candidate)?;
                         }
-                        Kind::Secret => ui.modal = Some(Modal::Secret(2)),
+                        Kind::Secret => ui.modal = Some(Modal::Secret(index, 2)),
                         Kind::Provider => {
                             let selected = match draft.value(field.key).as_str() {
                                 Some("local") => 0,
@@ -933,6 +946,10 @@ pub(super) fn test_session(scenario: &str) {
             assert_eq!(cfg.index.exclude, ["generated/"]);
         } else {
             assert_eq!(
+                cfg.database.password.as_deref(),
+                Some("replacement-db-password")
+            );
+            assert_eq!(
                 cfg.embeddings.api_key.as_deref(),
                 Some("replacement-private-key")
             );
@@ -965,14 +982,28 @@ mod tests {
         assert!(cfg.embeddings.api_key.is_none());
         assert!(cfg.embeddings.cache_dir.is_none());
         let text = config::toml_set(&text, "embeddings.api_key", "canary-private-key").unwrap();
+        let text = config::toml_set(&text, "database.password", "canary-db-password").unwrap();
         let draft = Draft::new(&text).unwrap();
         assert!(!rows(&draft, &Ui::default())
             .iter()
-            .any(|row| row.0.contains("canary-private-key")));
+            .any(
+                |row| row.0.contains("canary-private-key") || row.0.contains("canary-db-password")
+            ));
         assert_eq!(display(&draft, 6), "Configured (hidden)");
         let mut local = draft;
         local.provider("local").unwrap();
         assert_eq!(display(&local, 6), "Not required (Local)");
+        let password_index = SETTINGS
+            .iter()
+            .position(|s| s.key == "database.password")
+            .unwrap();
+        assert_eq!(display(&local, password_index), "Configured (hidden)");
+        assert_eq!(local.value("database.password"), "canary-db-password");
+        local.set(password_index, "").unwrap();
+        assert_eq!(
+            display(&local, password_index),
+            "Environment / password file"
+        );
     }
     #[test]
     fn edits_keep_comments_optional_settings_and_clear_key_on_provider_change() {

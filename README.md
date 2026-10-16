@@ -63,9 +63,8 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-These docs describe the **1.1.0 source tree**. Install matching binaries from
-[v1.1.0](https://github.com/kamysh/muninn/releases/tag/v1.1.0) after its release
-workflow completes, or build from this source tree.
+These docs describe the **1.2.0 source tree**. Install matching binaries from
+[v1.2.0](https://github.com/kamysh/muninn/releases/tag/v1.2.0) or build from this source tree.
 
 | Task | Guide |
 | --- | --- |

@@ -1,32 +1,38 @@
 #!/usr/bin/env bash
-# install.sh — build muninn as a static binary and register it with Claude Code.
-#
-# Builds the fully-static (musl) binaries via `nix build .#muninn-static` and
-# installs them to ~/.local/bin. The MCP server is registered at that path, and
-# the systemd user unit (muninn-index.service) execs %h/.local/bin/muninn-index.
-# Static binaries carry no /nix/store references, so they survive `nix store gc`
-# without the Nix profile having to be a GC root.
+# Build static binaries; optionally register the selected agent client.
 set -euo pipefail
-
+CLIENT=none
+while (($#)); do
+  case "$1" in
+    --client) [[ $# -ge 2 ]] || { echo "--client needs codex, claude, or none" >&2; exit 2; }; CLIENT=$2; shift 2 ;;
+    -h|--help) echo "Usage: ./install.sh [--client codex|claude|none] (default: none)"; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+case "$CLIENT" in codex|claude|none) ;; *) echo "Unknown client: $CLIENT" >&2; exit 2 ;; esac
+command -v nix >/dev/null || { echo "Nix is required for this source-build helper; use release downloads otherwise." >&2; exit 1; }
+if [[ "$CLIENT" != none ]]; then
+  command -v "$CLIENT" >/dev/null || { echo "Install $CLIENT before running --client $CLIENT." >&2; exit 1; }
+fi
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="${HOME}/.local/bin"
-mkdir -p "$BIN_DIR"
-
-echo "Building static muninn binaries (nix build .#muninn-static)..."
+BIN_DIR="$HOME/.local/bin"
+echo "Building static muninn binaries..."
 OUT="$(nix build "${PROJECT_DIR}#muninn-static" --no-link --print-out-paths)"
-
-echo "Installing binaries to ${BIN_DIR}..."
-install -m 755 "${OUT}/bin/muninn"       "${BIN_DIR}/muninn"
-install -m 755 "${OUT}/bin/muninn-mcp"   "${BIN_DIR}/muninn-mcp"
+mkdir -p "$BIN_DIR"
+install -m 755 "${OUT}/bin/muninn" "${BIN_DIR}/muninn"
+install -m 755 "${OUT}/bin/muninn-mcp" "${BIN_DIR}/muninn-mcp"
 install -m 755 "${OUT}/bin/muninn-index" "${BIN_DIR}/muninn-index"
 
-echo "Registering muninn-mcp with Claude Code..."
-claude mcp remove muninn --scope user 2>/dev/null || true
-claude mcp add --scope user muninn "${BIN_DIR}/muninn-mcp"
+if [[ "$CLIENT" != none ]]; then
+  if "$CLIENT" mcp get muninn >/dev/null 2>&1; then
+    echo "Existing muninn registration preserved. Check its executable path with: $CLIENT mcp get muninn"
+  elif [[ "$CLIENT" == codex ]]; then
+    codex mcp add muninn -- "$BIN_DIR/muninn-mcp"
+  else
+    claude mcp add --transport stdio --scope user muninn -- "$BIN_DIR/muninn-mcp"
+  fi
+fi
 
-echo ""
-echo "Done. Next steps:"
-echo "  1. Start the indexer:  systemctl --user enable --now muninn-index"
-echo "     (restart it if already running:  systemctl --user restart muninn-index)"
-echo "  2. Add a repo:    muninn add /path/to/repo"
-echo "  3. Restart Claude Code — muninn search tools are now available"
+echo "Binaries installed in $BIN_DIR."
+echo "Complete database setup and client guidance using: $PROJECT_DIR/docs/get-started.md"
+echo "Create and start the watcher using docs/get-started.md#5-run-the-watcher; this helper does not install a service."

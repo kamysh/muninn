@@ -53,15 +53,25 @@ For a **new** Muninn role, choose a password and add its entry to `~/.pgpass`:
 localhost:5432:muninn:muninn:YOUR_PASSWORD
 ```
 
-Use a generated hexadecimal password (`openssl rand -hex 32` can generate one)
-with the bundled setup helper: its SQL interpolation does not escape arbitrary
-quotes. Edit the file without overwriting entries for other databases, and run:
+Generate a fresh password with `openssl rand -hex 32`, or use an existing password:
+escape colons and backslashes in each `.pgpass` field; quotes and spaces are
+literal. The setup helper also accepts `PGPASSWORD` and `PGPASSFILE`.
+Edit the file without overwriting entries for other databases, and run:
 
 ```sh
 chmod 600 "$HOME/.pgpass"
 ```
 
-From the same source checkout as the binaries, run the helper after reviewing
+Download the matching setup files (no build is needed):
+
+```sh
+mkdir -p "$HOME/.local/share/muninn"
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.0.tar.gz \
+  | tar -xz -C "$HOME/.local/share/muninn"
+cd "$HOME/.local/share/muninn/muninn-1.2.0"
+```
+
+From this directory, run the helper after reviewing
 its arguments. It creates a missing role/database, sets the role password and
 grants AGE access; it does not install missing extensions:
 
@@ -85,27 +95,23 @@ for missing extensions, preload and privilege setup.
 
 ## 3. Install matching binaries
 
-These docs describe the 1.1.0 source. To build matching binaries, use a 1.1.0
-checkout and [Nix](https://nixos.org/download/), with flakes enabled:
+Install the published **1.2.0** binaries; Nix and a Rust compiler are not needed:
 
 ```sh
-# Run from the Muninn 1.1.0 source checkout.
-nix build .#muninn-static
 mkdir -p "$HOME/.local/bin"
-install -m 755 result/bin/muninn result/bin/muninn-index result/bin/muninn-mcp \
-  "$HOME/.local/bin/"
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)  TARBALL=muninn-linux-amd64.tar.gz ;;
+  Linux-aarch64) TARBALL=muninn-linux-arm64.tar.gz ;;
+  Darwin-arm64)  TARBALL=muninn-darwin-arm64.tar.gz ;;
+  *) echo "See the source-build instructions for this platform" >&2; exit 1 ;;
+esac
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.0/${TARBALL}" \
+  | tar -xz -C "$HOME/.local/bin"
+chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
 
-For an upgrade, stage the files and follow [Upgrading](upgrading.md) before
-replacing running binaries. The `muninn-static` derivation produces portable
-static Linux binaries; macOS still uses system frameworks. See
-[build details](development.md#building-and-testing).
-
-When using a published archive, select an explicit matching release and inspect
-its assets. CI builds `linux-amd64`, `linux-arm64` and `darwin-arm64`; use an Intel
-macOS archive only if that release actually provides one. Do not substitute a
-`releases/latest` URL without checking the version. Each archive must contain
-`muninn`, `muninn-index`, and `muninn-mcp`.
+To build instead, follow [Building and testing](development.md#building-and-testing).
+For an upgrade of a running installation, follow [Upgrading](upgrading.md).
 
 Put `~/.local/bin` on PATH in your shell startup file if necessary:
 
@@ -116,7 +122,7 @@ muninn-index --version
 muninn-mcp --version
 ```
 
-All three should report the intended version (1.1.0 for this tree).
+All three should report the intended version (1.2.0 for this tree).
 
 ## 4. Bootstrap the global configuration
 
@@ -142,7 +148,12 @@ subsequent embedding work can run offline when cached.
 
 ### Linux with systemd
 
-Create `~/.config/systemd/user/muninn-index.service`:
+Create the directory, then save the unit below as
+`~/.config/systemd/user/muninn-index.service`:
+
+```sh
+mkdir -p "$HOME/.config/systemd/user"
+```
 
 ```ini
 [Unit]
