@@ -1,7 +1,28 @@
 # Muninn
 
-Persistent code search and repository knowledge for AI coding agents, including
-Codex and Claude Code, through MCP.
+Code search and repository knowledge for AI coding agents through MCP.
+
+Muninn maintains a searchable code index for Codex, Claude Code and other
+compatible MCP clients. Ask where a behavior is implemented, retrieve relevant
+source ranges, and inspect the code before changing it.
+
+Git worktrees share unchanged content and embeddings while keeping separate
+searchable views. A search selects the checkout named by `repo` or `cwd`, so a
+feature branch and the primary checkout can return their own implementations.
+
+- Combine semantic and full-text retrieval with hybrid search.
+- Follow recorded structural relationships and verify them against source.
+- Reuse unchanged indexed content across linked Git worktrees.
+- Store and search curated repository notes.
+
+Muninn needs PostgreSQL with pgvector, Apache AGE and pgcrypto, an indexing
+watcher, and an MCP connection. Local and hosted embedding backends are
+available; hosted embeddings send selected source chunks to the provider.
+
+Start with [Getting started](docs/get-started.md). Agents performing installation
+use [AGENTS.md](AGENTS.md).
+
+**Article:** [Muninn code search across Git worktrees](docs/articles/worktree-code-search.md).
 
 ## Why Muninn exists
 
@@ -96,6 +117,16 @@ visible defaults and select the backend before registering. Saved settings do
 not follow later global edits. `status PATH`, `pause`, `resume` and `remove` still use the
 registered locator shown by `status`; they are not arbitrary-worktree commands.
 In particular, `remove` deletes an entire registered family's code index.
+
+## Related projects
+
+| Project | Purpose |
+| --- | --- |
+| [Kryzhen](https://github.com/kamysh/kryzhen) | Dependency-based PostgreSQL migrations as a Rust library and CLI |
+| [Mimir](https://github.com/kamysh/mimir) | Decisions, evidence and reasoning memory across agent sessions |
+
+Muninn and Mimir can run independently. Their documented setup can share one
+compatible PostgreSQL instance with separate roles and databases.
 
 ## License
 
