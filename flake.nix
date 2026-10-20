@@ -60,6 +60,12 @@
           # Tests need a Postgres + downloaded model; run them in the dev
           # shell via `cargo nextest` instead.
           doCheck = false;
+          meta = {
+            description = "Code search and repository knowledge for AI coding agents through MCP";
+            homepage = "https://github.com/kamysh/muninn";
+            license = pkgs.lib.licenses.asl20;
+            mainProgram = "muninn";
+          };
         };
 
         # Nix-managed install (may carry a few /nix/store refs, e.g. libiconv

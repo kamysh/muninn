@@ -24,6 +24,30 @@ use [AGENTS.md](AGENTS.md).
 
 **Article:** [Muninn code search across Git worktrees](docs/articles/worktree-code-search.md).
 
+## Install the binaries with Nix
+
+With Nix installed and its `nix-command` and `flakes` features enabled, build the
+CLI, watcher and MCP server without installing them:
+
+```sh
+nix build github:kamysh/muninn#muninn
+./result/bin/muninn --version
+./result/bin/muninn-index --version
+./result/bin/muninn-mcp --version
+```
+
+To add these programs to your user profile instead, use
+`nix profile add github:kamysh/muninn#muninn`.
+This installs binaries only. Follow [Getting started](docs/get-started.md) to
+prepare PostgreSQL and its extensions, configure embeddings, start the watcher
+and connect your MCP client. No database or service is created by this package.
+Use the installed absolute executable paths when configuring the watcher and
+MCP client; `command -v muninn-index` and `command -v muninn-mcp` show them after
+installation.
+
+The commands follow the repository's default branch. Append a commit to the
+repository address, as in `github:kamysh/muninn/COMMIT#muninn`, to pin a version.
+
 ## Why Muninn exists
 
 An agent repeatedly exploring a large codebase spends context and time finding
