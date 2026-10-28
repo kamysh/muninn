@@ -197,8 +197,20 @@ substituting your **absolute** binary path (launchd does not expand `~`):
   <key>ProgramArguments</key><array><string>/ABSOLUTE/HOME/.local/bin/muninn-index</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>RUST_LOG</key><string>info</string>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/muninn-index.log</string>
+  <key>StandardErrorPath</key><string>/tmp/muninn-index.log</string>
 </dict></plist>
 ```
+
+The watcher invokes Git. Confirm `command -v git` in your terminal and include
+its directory in the plist's `PATH`; launchd does not inherit your shell setup.
+For Nix/Home Manager, this can be `/etc/profiles/per-user/YOUR_USER/bin`.
+Use literal absolute paths in the plist. Keep existing global database,
+credentials, model-cache settings and repository policies.
 
 Create the parent directory first if needed, then:
 
@@ -215,6 +227,59 @@ bootstrap and future upgrades; do not assume the user-directory path applies.
 
 Without a service manager, `muninn-index` can run in a foreground terminal for
 manual use. Closing it stops automatic updates; foreground indexing can still run.
+
+### macOS access to Documents, Desktop and other protected locations
+
+A launchd process has its own macOS privacy permissions. Access granted to
+Terminal, Codex or Claude does not prove that `muninn-index` can read the same
+repository. This remains true when command sandboxing is disabled. After replacing
+the binary, recheck the watcher's access.
+
+If the daemon is running but logs `Git discovery timed out`, first compare a
+terminal Git check with the daemon's recent log. Set `REPO` to the actual checkout:
+
+```sh
+REPO=/absolute/path/to/repo
+git -C "$REPO" rev-parse --show-toplevel
+git -C "$REPO" worktree list --porcelain
+launchctl print "gui/$(id -u)/org.muninn.index"
+tail -n 30 /tmp/muninn-index.log
+/usr/bin/log show --last 5m --style compact \
+  --predicate 'process == "tccd" AND eventMessage CONTAINS "muninn-index"'
+```
+
+A timeout alone does not establish a privacy failure. If terminal Git succeeds
+but macOS privacy diagnostics identify `muninn-index` as the responsible process
+for blocked filesystem access, fix that access before changing repository policy
+or increasing timeouts:
+
+1. Open **System Settings → Privacy & Security → Files and Folders**. If
+   `muninn-index` is listed, enable the required folder access.
+2. If no applicable folder entry is available, use **Privacy & Security → Full
+   Disk Access**, add the actual installed `muninn-index` executable and enable
+   it. In the file picker, Command-Shift-G accepts its absolute path. This is a
+   broader permission; it must be granted through macOS by the user.
+3. Restart the loaded service to apply the permission:
+
+   ```sh
+   launchctl kickstart -k "gui/$(id -u)/org.muninn.index"
+   launchctl print "gui/$(id -u)/org.muninn.index"
+   tail -n 30 /tmp/muninn-index.log
+   ```
+
+Do not edit the TCC privacy database, disable system protection, move the user's
+repository, remove its registration or recreate its index to bypass this failure.
+If privacy access is not the cause, retain the actual error and report the
+unresolved problem; do not declare the watcher healthy merely because it has a PID.
+
+### Verify automatic updates
+
+A successful search can read an older completed index. Verify the watcher
+separately: make an authorized small edit in an already indexed file, observe a
+successful reconciliation in the service log, and search for the new text in
+that checkout. Restore a temporary verification edit and confirm reconciliation
+again. Use a disposable file only when creating one is within the agreed scope.
+Report any remaining errors or untested update checks explicitly.
 
 ## 6. Configure and start the first family
 

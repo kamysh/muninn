@@ -64,7 +64,10 @@ name or port conflict.
    uses a different interface. Do not expose API keys in generated instructions.
 5. **Daemon.** Install/enable the agreed systemd or launchd service using the
    [platform procedures](docs/get-started.md#5-run-the-watcher). Verify its actual
-   state and logs. Existing enabled registrations may index when it starts.
+   state, logs and automatic updates. On macOS, complete the documented
+   [protected-folder access checks](docs/get-started.md#macos-access-to-documents-desktop-and-other-protected-locations);
+   terminal or MCP access does not establish launchd access. Existing enabled
+   registrations may index when it starts.
 6. **First family.** Use the JSON sequence below. Registration/configuration alone
    does not authorize first indexing. New-family defaults snapshot the global
    provider, watcher and file-selection settings. Inspect the visible defaults
