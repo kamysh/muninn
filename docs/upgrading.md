@@ -80,6 +80,12 @@ Do not remove an existing service definition just to restart it. A CLI-only fix
 with no runtime/schema changes need not restart the indexer, but replacing files
 does not update already-running processes.
 
+After replacing the macOS binary, verify the daemon's access to protected
+repositories as well as its process state. See
+[macOS filesystem permissions](get-started.md#macos-access-to-documents-desktop-and-other-protected-locations)
+and [automatic-update verification](get-started.md#verify-automatic-updates).
+Terminal/MCP search success is not proof that the launchd watcher can read Documents.
+
 ## Failure and recovery
 
 On a migration/indexing failure, retain the logs and old/new version identities.
