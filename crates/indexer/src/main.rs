@@ -1,3 +1,4 @@
+mod logging;
 mod watcher;
 
 use clap::Parser;
@@ -30,7 +31,17 @@ struct Cli {}
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _cli = Cli::parse();
-    tracing_subscriber::fmt::init();
+    let repeated_events = logging::RepeatedEvents::default();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_ansi(false)
+        .event_format(repeated_events.clone())
+        .with_writer(std::io::stderr)
+        .init();
+    let summary_task = repeated_events.start_summaries();
 
     let cfg = GlobalConfig::load()?;
     let mut client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
@@ -69,18 +80,10 @@ async fn main() -> anyhow::Result<()> {
     // Initial scan
     scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
 
+    let mut notifications_open = true;
     loop {
-        // Wait for a NOTIFY or fall back to a 60 s poll for resilience.
         tokio::select! {
-            msg = notify_rx.recv() => {
-                match msg {
-                    Some(_) => tracing::debug!("received muninn_repos_changed notification"),
-                    None => tracing::warn!("LISTEN channel closed — continuing on poll"),
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                tracing::debug!("60 s poll tick");
-            }
+            _ = wait_for_dispatch(&mut notify_rx, &mut notifications_open) => {}
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("shutting down");
                 break;
@@ -89,7 +92,73 @@ async fn main() -> anyhow::Result<()> {
         scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
     }
 
+    summary_task.abort();
+    repeated_events.flush_stderr();
     Ok(())
+}
+
+/// A closed receiver stays ready forever; remove it from the select rather
+/// than repeatedly waking the dispatcher (and logging the same failure).
+async fn wait_for_dispatch<T>(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>,
+    notifications_open: &mut bool,
+) {
+    loop {
+        tokio::select! {
+            msg = rx.recv(), if *notifications_open => {
+                if msg.is_some() {
+                    tracing::debug!("received repository change notification");
+                    return;
+                }
+                *notifications_open = false;
+                tracing::warn!("LISTEN channel closed — continuing on poll");
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                tracing::debug!("60 s poll tick");
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn closed_notifications_wait_for_poll_instead_of_spinning() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        drop(tx);
+        let mut open = true;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(25),
+            wait_for_dispatch(&mut rx, &mut open),
+        )
+        .await
+        .is_err());
+        assert!(!open);
+        // Subsequent dispatcher iterations also wait instead of re-logging.
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(25),
+            wait_for_dispatch(&mut rx, &mut open),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn notifications_still_dispatch_promptly() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(()).unwrap();
+        let mut open = true;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            wait_for_dispatch(&mut rx, &mut open),
+        )
+        .await
+        .unwrap();
+        assert!(open);
+    }
 }
 
 /// Query the repos table and dispatch watcher / reindex tasks as needed.

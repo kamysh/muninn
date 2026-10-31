@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "muninn"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-core"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-index"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "muninn-mcp"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "clap",

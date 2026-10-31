@@ -165,7 +165,19 @@ policy is locked against stale-policy publication during reconciliation.
 The daemon reads registrations from the database, receives `muninn_repos_changed`
 notifications and has a 60-second fleet fallback. Family watchers additionally
 reconcile their Git inventory. Notifications improve responsiveness; they are not
-durable job records. Existing directory and legacy registrations use the pipeline
+durable job records. A closed notification channel is disabled so the daemon
+continues at the 60-second polling cadence rather than spinning.
+
+Daemon logs print the first distinct formatted event in full with an `event` ID.
+Identical events (same level, target, span context and fields) are suppressed;
+once per minute, compact summaries report additional occurrences by that ID.
+Pending counts are also flushed on graceful Ctrl-C shutdown. The in-memory
+fingerprint cache holds at most 1,024 events, evicting the least recently seen
+entry and reporting its pending count. An evicted event or a daemon restart can
+print the full message again. Different field values remain distinct diagnostics.
+This limits duplicate output, but does not bound logs containing unique events.
+
+Existing directory and legacy registrations use the pipeline
 appropriate to their registration state.
 
 Indexing exclusion uses advisory locks and cooperative preemption, not the old

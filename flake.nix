@@ -48,7 +48,7 @@
         # C/C++ dependency is `tokenizers → esaxx-rs` (libstdc++), which only
         # matters for the x86_64-linux static link (see muninn-static below).
         commonAttrs = {
-          version = "1.2.1";
+          version = "1.2.2";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
