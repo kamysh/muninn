@@ -312,6 +312,20 @@ result remain visible in the form. You can leave it unstarted and return with:
 muninn config /absolute/path/to/repo
 ```
 
+For a configured family, you can also start from the command line:
+
+```sh
+muninn start /absolute/path/to/repo
+```
+
+The command reports startup, a wait for another indexer when necessary, and
+processed file counts and paths on stderr as work proceeds. Counts are per pass;
+indexing can visit several worktrees or make another pass for relationships.
+A file count reaching its total does not mean the whole command has finished.
+The final result on stdout reports whether the pass completed and how many
+checkouts or files were skipped. `--json` keeps its single result document on
+stdout and emits no human progress messages.
+
 Agents use the [JSON workflow](claude-code-setup/skill/SKILL.md#configure-with-json)
 instead of driving the TUI. After first start, linked Git worktrees are discovered
 automatically and share the policy. Non-Git directories are independent families.
