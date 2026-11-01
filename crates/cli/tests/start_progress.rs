@@ -9,7 +9,9 @@ use tokio::{
 };
 
 fn cli() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_muninn"));
+    let executable =
+        std::env::var_os("MUNINN_TEST_CLI").unwrap_or_else(|| env!("CARGO_BIN_EXE_muninn").into());
+    let mut command = Command::new(executable);
     command.kill_on_drop(true);
     command
 }
