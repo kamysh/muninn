@@ -33,6 +33,7 @@ import Muninn.CatalogSources
 import Muninn.Dialogue
 import Muninn.RequestIdentity
 import Muninn.ReceiptLedger
+import Muninn.RequestAdmission
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

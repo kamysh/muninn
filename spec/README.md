@@ -165,8 +165,8 @@ this adds no special persistence for unidentified repositories.
 compare complete typed inputs, with record reconstruction proofs, exhaustive
 constructor coverage and transport-independent meaning. Ordered rules and all
 actual field values remain significant. See [the identity contract and adapter
-boundary](REQUEST-IDENTITY.md). Durable receipts and dialogue admission remain
-separate obligations; this adds no runtime or persistence behavior.
+boundary](REQUEST-IDENTITY.md). The receipt/admission integration is described
+below; these formal modules add no runtime persistence behavior.
 
 ## Durable request receipts
 
@@ -174,5 +174,14 @@ separate obligations; this adds no runtime or persistence behavior.
 existing owned world. Acceptance, checkpoint commits, replay and ID-only
 retention use the shared database semantics, with mandatory receipt-isolation
 proofs for business effects. See [the state machine and integration
-boundary](RECEIPTS.md). Operation outcomes, admission, physical adapters and
-worker progress remain separate obligations; no runtime persistence is added.
+boundary](RECEIPTS.md). Operation outcomes, physical adapters and worker
+progress remain separate obligations; no runtime persistence is added.
+
+## Identity-aware corrective admission
+
+`Muninn.IdentityDialogue` and `Muninn.RequestAdmission` bind context recovery,
+normalized identity and receipt-first replay to the generic dialogue model. The
+transaction-bound gate requires identity/prerequisite certificates and preserves
+accepted work while asking for clarification. Completion answers require both
+the independent outcome and a durable receipt. See [the integration contract and
+remaining adapter/dispatcher obligations](IDENTITY-ADMISSION.md).
