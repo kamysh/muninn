@@ -1,0 +1,277 @@
+{-# OPTIONS --safe #-}
+-- Logical decomposition of ALL owned state, independent of physical tables.
+-- Identifiers denote record incarnations, not a choice of UUID/SQL layout.
+module Muninn.OwnedState where
+
+open import Data.Nat using (ℕ; _≟_)
+open import Data.List using (List; []; _∷_; _++_; map)
+open import Data.List.Relation.Unary.All using (All; []; _∷_)
+open import Data.Maybe using (Maybe; just; nothing)
+open import Data.Maybe.Properties using (just-injective)
+open import Data.Product using (_×_; _,_; proj₁; proj₂)
+open import Data.String using (String)
+open import Data.Unit using (⊤; tt)
+open import Data.Empty using (⊥)
+open import Relation.Nullary using (yes; no; ¬_)
+open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; cong; trans; sym)
+import Muninn.Database
+import Muninn.Recovery
+
+data Owner : Set where
+  installation : Owner
+  family : ℕ → Owner
+
+data Kind : Set where
+  registrationK checkoutK creationIntentK defaultsK policyVersionK currentPolicyK : Kind
+  noteK notePostingK noteVectorK fileVersionK baseBindingK deltaBindingK basePointerK : Kind
+  chunkK postingK vectorK symbolK edgeK structuralSnapshotK legacyK stagingK : Kind
+  acceptedWorkK cleanupWorkK activeReaderK continuationK receiptK : Kind
+  migrationK usageK bootstrapK modelCacheK coordinationK schemaResourceK graphResourceK : Kind
+
+record Reference : Set where
+  constructor reference
+  field target : ℕ
+        expected : Kind
+open Reference public
+
+-- Bodies keep every independently reclaimable category visible. Strings retain
+-- uninterpreted metadata; later operation modules specify their interpretation.
+-- Strong references are derived below, never supplied as an operation goal.
+data Body : Set where
+  registration checkout creationIntent defaults : String → Body
+  policyVersion : ℕ → String → Body
+  currentPolicy : ℕ → Body
+  note : String → Body
+  notePosting noteVector : ℕ → String → Body
+  fileVersion : String → Body
+  baseBinding : ℕ → String → Body
+  deltaBinding : ℕ → Maybe ℕ → String → Body
+  basePointer : ℕ → Body
+  chunk posting vector symbol : ℕ → String → Body
+  edge : ℕ → ℕ → String → Body
+  structuralSnapshot : ℕ → List ℕ → List ℕ → String → Body
+  legacy : String → Body
+  staging : ℕ → String → Body
+  acceptedWork : List ℕ → String → Body
+  cleanupWork : List ℕ → String → Body
+  activeReader : List Reference → String → Body
+  continuation : List ℕ → String → Body
+  receipt migration usage bootstrap modelCache coordination schemaResource graphResource : String → Body
+
+kind : Body → Kind
+kind (registration _) = registrationK
+kind (checkout _) = checkoutK
+kind (creationIntent _) = creationIntentK
+kind (defaults _) = defaultsK
+kind (policyVersion _ _) = policyVersionK
+kind (currentPolicy _) = currentPolicyK
+kind (note _) = noteK
+kind (notePosting _ _) = notePostingK
+kind (noteVector _ _) = noteVectorK
+kind (fileVersion _) = fileVersionK
+kind (baseBinding _ _) = baseBindingK
+kind (deltaBinding _ _ _) = deltaBindingK
+kind (basePointer _) = basePointerK
+kind (chunk _ _) = chunkK
+kind (posting _ _) = postingK
+kind (vector _ _) = vectorK
+kind (symbol _ _) = symbolK
+kind (edge _ _ _) = edgeK
+kind (structuralSnapshot _ _ _ _) = structuralSnapshotK
+kind (legacy _) = legacyK
+kind (staging _ _) = stagingK
+kind (acceptedWork _ _) = acceptedWorkK
+kind (cleanupWork _ _) = cleanupWorkK
+kind (activeReader _ _) = activeReaderK
+kind (continuation _ _) = continuationK
+kind (receipt _) = receiptK
+kind (migration _) = migrationK
+kind (usage _) = usageK
+kind (bootstrap _) = bootstrapK
+kind (modelCache _) = modelCacheK
+kind (coordination _) = coordinationK
+kind (schemaResource _) = schemaResourceK
+kind (graphResource _) = graphResourceK
+
+references : Body → List Reference
+references (registration _) = []
+references (checkout _) = []
+references (creationIntent _) = []
+references (defaults _) = []
+references (policyVersion initial _) = reference initial defaultsK ∷ []
+references (currentPolicy revision) = reference revision policyVersionK ∷ []
+references (note _) = []
+references (notePosting source _) = reference source noteK ∷ []
+references (noteVector source _) = reference source noteK ∷ []
+references (fileVersion _) = []
+references (baseBinding version _) = reference version fileVersionK ∷ []
+references (deltaBinding selected nothing _) = reference selected checkoutK ∷ []
+references (deltaBinding selected (just version) _) = reference selected checkoutK ∷ reference version fileVersionK ∷ []
+references (basePointer selected) = reference selected checkoutK ∷ []
+references (chunk source _) = reference source fileVersionK ∷ []
+references (posting source _) = reference source chunkK ∷ []
+references (vector source _) = reference source chunkK ∷ []
+references (symbol source _) = reference source fileVersionK ∷ []
+references (edge source target _) = reference source symbolK ∷ reference target symbolK ∷ []
+references (structuralSnapshot selected nodes edges _) = reference selected checkoutK ∷
+  (map (λ v → reference v symbolK) nodes ++ map (λ v → reference v edgeK) edges)
+references (legacy _) = []
+references (staging source _) = reference source fileVersionK ∷ []
+references (acceptedWork versions _) = map (λ v → reference v fileVersionK) versions
+references (cleanupWork _ _) = []
+references (activeReader retained _) = retained
+references (continuation _ _) = []
+references (receipt _) = []
+references (migration _) = []
+references (usage _) = []
+references (bootstrap _) = []
+references (modelCache _) = []
+references (coordination _) = []
+references (schemaResource _) = []
+references (graphResource _) = []
+
+-- Cleanup captures and idle continuations contain weak incarnation identities:
+-- already-deleted records are valid checkpoints and must not be resurrected.
+-- Only accepted work and active readers keep their required records alive.
+record Record : Set where
+  constructor recordOf
+  field owner : Owner
+        body : Body
+open Record public
+
+module DB = Muninn.Database.Store ℕ Record _≟_
+module Execution = Muninn.Recovery.Protocol ℕ Record _≟_
+
+World : Set
+World = DB.Rows
+
+data LocalTo : Owner → Set where
+  local : ∀ {id} → LocalTo (family id)
+
+data SharedAt : Owner → Set where
+  shared : SharedAt installation
+
+-- Every persistent constructor has an explicit ownership clause. Adding a
+-- category cannot silently inherit the ownership policy of a catch-all case.
+Placed : Record → Set
+Placed (recordOf o (registration _)) = LocalTo o
+Placed (recordOf o (checkout _)) = LocalTo o
+Placed (recordOf o (creationIntent _)) = LocalTo o
+Placed (recordOf o (defaults _)) = LocalTo o
+Placed (recordOf o (policyVersion _ _)) = LocalTo o
+Placed (recordOf o (currentPolicy _)) = LocalTo o
+Placed (recordOf o (note _)) = LocalTo o
+Placed (recordOf o (notePosting _ _)) = LocalTo o
+Placed (recordOf o (noteVector _ _)) = LocalTo o
+Placed (recordOf o (fileVersion _)) = LocalTo o
+Placed (recordOf o (baseBinding _ _)) = LocalTo o
+Placed (recordOf o (deltaBinding _ _ _)) = LocalTo o
+Placed (recordOf o (basePointer _)) = LocalTo o
+Placed (recordOf o (chunk _ _)) = LocalTo o
+Placed (recordOf o (posting _ _)) = LocalTo o
+Placed (recordOf o (vector _ _)) = LocalTo o
+Placed (recordOf o (symbol _ _)) = LocalTo o
+Placed (recordOf o (edge _ _ _)) = LocalTo o
+Placed (recordOf o (structuralSnapshot _ _ _ _)) = LocalTo o
+Placed (recordOf o (legacy _)) = LocalTo o
+Placed (recordOf o (staging _ _)) = LocalTo o
+Placed (recordOf o (acceptedWork _ _)) = LocalTo o
+Placed (recordOf o (cleanupWork _ _)) = LocalTo o
+Placed (recordOf o (activeReader _ _)) = LocalTo o
+Placed (recordOf o (continuation _ _)) = LocalTo o
+Placed (recordOf o (receipt _)) = ⊤
+Placed (recordOf o (migration _)) = ⊤
+Placed (recordOf o (usage _)) = ⊤
+Placed (recordOf o (bootstrap _)) = SharedAt o
+Placed (recordOf o (modelCache _)) = SharedAt o
+Placed (recordOf o (coordination _)) = ⊤
+Placed (recordOf o (schemaResource _)) = LocalTo o
+Placed (recordOf o (graphResource _)) = LocalTo o
+
+data MayReference : Owner → Owner → Set where
+  own : ∀ {o} → MayReference o o
+  shared : ∀ {o} → MayReference o installation
+
+record Resolves (world : World) (source : Owner) (ref : Reference) : Set where
+  field value : Record
+        found : DB.lookup (target ref) world ≡ just value
+        rightKind : kind (body value) ≡ expected ref
+        rightOwner : MayReference source (owner value)
+
+Unique : World → Set
+Unique [] = ⊤
+Unique ((key , value) ∷ rest) = (DB.lookup key rest ≡ nothing) × Unique rest
+
+SoundReferences : World → ℕ × Record → Set
+SoundReferences world row = All (Resolves world (owner (proj₂ row))) (references (body (proj₂ row)))
+
+record Admissible (world : World) : Set where
+  field unique : Unique world
+        placed : All (λ row → Placed (proj₂ row)) world
+        sound : All (SoundReferences world) world
+
+-- Deleting one family record preserves every already-present record of a
+-- different owner, regardless of its category, checkout or payload.
+deletePreservesOtherOwner : ∀ key other before removed retained →
+  DB.lookup key before ≡ just removed → DB.lookup other before ≡ just retained →
+  owner removed ≢ owner retained → DB.lookup other (DB.delete key before) ≡ just retained
+deletePreservesOtherOwner key other before removed retained removedHere retainedHere distinct =
+  trans (DB.deletePreservesOther key other before differentKeys) retainedHere
+  where
+  differentKeys : key ≢ other
+  differentKeys refl = distinct (cong owner (just-injective (trans (sym removedHere) retainedHere)))
+
+referenceSurvivesOtherDeletion : ∀ before source ref key → target ref ≢ key →
+  Resolves before source ref → Resolves (DB.delete key before) source ref
+referenceSurvivesOtherDeletion before source ref key distinct valid = record
+  { value = Resolves.value valid
+  ; found = trans (DB.deletePreservesOther key (target ref) before
+      (λ equal → distinct (sym equal))) (Resolves.found valid)
+  ; rightKind = Resolves.rightKind valid
+  ; rightOwner = Resolves.rightOwner valid
+  }
+
+deleteAll : ∀ {P : ℕ × Record → Set} key rows → All P rows → All P (DB.delete key rows)
+deleteAll key [] [] = []
+deleteAll key ((other , value) ∷ rows) (proof ∷ rest) with key ≟ other
+... | yes _ = deleteAll key rows rest
+... | no _ = proof ∷ deleteAll key rows rest
+
+deleteKeepsAbsent : ∀ key other rows → DB.lookup other rows ≡ nothing →
+  DB.lookup other (DB.delete key rows) ≡ nothing
+deleteKeepsAbsent key other rows absent with key ≟ other
+... | yes refl = DB.deleteAbsent key rows
+... | no distinct = trans (DB.deletePreservesOther key other rows distinct) absent
+
+deleteUnique : ∀ key rows → Unique rows → Unique (DB.delete key rows)
+deleteUnique key [] unique = tt
+deleteUnique key ((other , value) ∷ rows) (absent , unique) with key ≟ other
+... | yes _ = deleteUnique key rows unique
+... | no _ = deleteKeepsAbsent key other rows absent , deleteUnique key rows unique
+
+NoIncomingTo : ℕ → ℕ × Record → Set
+NoIncomingTo key row = All (λ ref → target ref ≢ key) (references (body (proj₂ row)))
+
+shiftReferences : ∀ before source refs key → All (Resolves before source) refs →
+  All (λ ref → target ref ≢ key) refs → All (Resolves (DB.delete key before) source) refs
+shiftReferences before source [] key [] [] = []
+shiftReferences before source (ref ∷ refs) key (valid ∷ rest) (distinct ∷ others) =
+  referenceSurvivesOtherDeletion before source ref key distinct valid ∷
+  shiftReferences before source refs key rest others
+
+shiftSound : ∀ key before rows → All (SoundReferences before) rows →
+  All (NoIncomingTo key) rows → All (SoundReferences (DB.delete key before)) rows
+shiftSound key before [] [] [] = []
+shiftSound key before ((id , value) ∷ rows) (valid ∷ rest) (unreferenced ∷ others) =
+  shiftReferences before (owner value) (references (body value)) key valid unreferenced ∷
+  shiftSound key before rows rest others
+
+-- A record needed by any checkout, pending work or active reader cannot meet
+-- this guard. Removing an unreferenced record preserves the WHOLE state model.
+deleteUnreferencedPreservesAdmissibility : ∀ key world → Admissible world →
+  All (NoIncomingTo key) world → Admissible (DB.delete key world)
+deleteUnreferencedPreservesAdmissibility key world valid unreferenced = record
+  { unique = deleteUnique key world (Admissible.unique valid)
+  ; placed = deleteAll key world (Admissible.placed valid)
+  ; sound = deleteAll key world (shiftSound key world world (Admissible.sound valid) unreferenced)
+  }
