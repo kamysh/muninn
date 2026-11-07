@@ -28,6 +28,8 @@ import Muninn.Connection
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.OwnedState
+import Muninn.Catalog
+import Muninn.CatalogSources
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

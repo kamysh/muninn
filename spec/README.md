@@ -135,3 +135,16 @@ See [the source inventory and model boundary](OWNED-STATE.md) for every current
 storage category, agreed state still absent from Rust, weak-reference semantics
 and remaining operation-specific obligations. This is an ownership/reference
 foundation, not the completed product state machine or a runtime cleanup fix.
+
+## Closed operation and adapter catalog
+
+`Muninn.CatalogInputs`, `Muninn.Catalog` and `Muninn.CatalogSources` give shared
+semantic input types, separate finite background jobs, closed current MCP names,
+local UI/control inputs, exhaustive outcome ownership and source assignments.
+General laws establish wire-name round trips, exclusion of unknown names from
+the current tool set and transport-independent outcome ownership.
+
+See [the operation source inventory and coverage boundary](OPERATION-SOURCES.md).
+This catalog has no raw-script request constructor or execution dispatcher.
+Individual outcome/progress proofs, corrected input admission and Rust coverage
+remain required before the final proof-requiring dispatcher can be installed.
