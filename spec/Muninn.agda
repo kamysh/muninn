@@ -34,6 +34,7 @@ import Muninn.Dialogue
 import Muninn.RequestIdentity
 import Muninn.ReceiptLedger
 import Muninn.RequestAdmission
+import Muninn.ExclusionOutcomes
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

@@ -4,6 +4,7 @@
 module Muninn.OwnedState where
 
 open import Data.Nat using (ℕ; _≟_)
+open import Data.Bool using (Bool)
 open import Data.List using (List; []; _∷_; _++_; map)
 open import Data.List.Relation.Unary.All using (All; []; _∷_)
 open import Data.Maybe using (Maybe; just; nothing)
@@ -38,8 +39,20 @@ open Reference public
 -- Bodies keep every independently reclaimable category visible. Strings retain
 -- uninterpreted metadata; later operation modules specify their interpretation.
 -- Strong references are derived below, never supplied as an operation goal.
+record RegistrationInfo : Set where
+  constructor registrationInfo
+  field retired legacyReadable : Bool
+        metadata : String
+
+record CheckoutInfo : Set where
+  constructor checkoutInfo
+  field retired paused gitSuspended : Bool
+        metadata : String
+
 data Body : Set where
-  registration checkout creationIntent defaults : String → Body
+  registration : RegistrationInfo → Body
+  creationIntent defaults : String → Body
+  checkout : CheckoutInfo → Body
   policyVersion : ℕ → String → Body
   currentPolicy : ℕ → Body
   note : String → Body
@@ -48,17 +61,19 @@ data Body : Set where
   baseBinding : ℕ → String → Body
   deltaBinding : ℕ → Maybe ℕ → String → Body
   basePointer : ℕ → Body
-  chunk posting vector symbol : ℕ → String → Body
+  chunk posting vector : ℕ → String → Body
+  symbol : ℕ → String → String → Body -- version, source path, payload
   edge : ℕ → ℕ → String → Body
   structuralSnapshot : ℕ → List ℕ → List ℕ → String → Body
-  legacy : String → Body
+  legacy : String → String → Body -- path, remaining payload
   staging : ℕ → String → Body
   acceptedWork : List ℕ → String → Body
   cleanupWork : List ℕ → String → Body
   activeReader : List Reference → String → Body
   continuation : List ℕ → String → Body
   receipt : Receipt.Entry → Body
-  migration usage bootstrap modelCache coordination schemaResource graphResource logFile bootstrapStage : String → Body
+  graphResource : Maybe ℕ → Bool → String → Body -- selected checkout, current read use
+  migration usage bootstrap modelCache coordination schemaResource logFile bootstrapStage : String → Body
 
 kind : Body → Kind
 kind (registration _) = registrationK
@@ -77,10 +92,10 @@ kind (basePointer _) = basePointerK
 kind (chunk _ _) = chunkK
 kind (posting _ _) = postingK
 kind (vector _ _) = vectorK
-kind (symbol _ _) = symbolK
+kind (symbol _ _ _) = symbolK
 kind (edge _ _ _) = edgeK
 kind (structuralSnapshot _ _ _ _) = structuralSnapshotK
-kind (legacy _) = legacyK
+kind (legacy _ _) = legacyK
 kind (staging _ _) = stagingK
 kind (acceptedWork _ _) = acceptedWorkK
 kind (cleanupWork _ _) = cleanupWorkK
@@ -93,7 +108,7 @@ kind (bootstrap _) = bootstrapK
 kind (modelCache _) = modelCacheK
 kind (coordination _) = coordinationK
 kind (schemaResource _) = schemaResourceK
-kind (graphResource _) = graphResourceK
+kind (graphResource _ _ _) = graphResourceK
 kind (logFile _) = logFileK
 kind (bootstrapStage _) = bootstrapStageK
 
@@ -115,11 +130,11 @@ references (basePointer selected) = reference selected checkoutK ∷ []
 references (chunk source _) = reference source fileVersionK ∷ []
 references (posting source _) = reference source chunkK ∷ []
 references (vector source _) = reference source chunkK ∷ []
-references (symbol source _) = reference source fileVersionK ∷ []
+references (symbol source _ _) = reference source fileVersionK ∷ []
 references (edge source target _) = reference source symbolK ∷ reference target symbolK ∷ []
 references (structuralSnapshot selected nodes edges _) = reference selected checkoutK ∷
   (map (λ v → reference v symbolK) nodes ++ map (λ v → reference v edgeK) edges)
-references (legacy _) = []
+references (legacy _ _) = []
 references (staging source _) = reference source fileVersionK ∷ []
 references (acceptedWork versions _) = map (λ v → reference v fileVersionK) versions
 references (cleanupWork _ _) = []
@@ -135,7 +150,7 @@ references (bootstrap _) = []
 references (modelCache _) = []
 references (coordination _) = []
 references (schemaResource _) = []
-references (graphResource _) = []
+references (graphResource _ _ _) = []
 references (logFile _) = []
 references (bootstrapStage _) = []
 
@@ -179,10 +194,10 @@ Placed (recordOf o (basePointer _)) = LocalTo o
 Placed (recordOf o (chunk _ _)) = LocalTo o
 Placed (recordOf o (posting _ _)) = LocalTo o
 Placed (recordOf o (vector _ _)) = LocalTo o
-Placed (recordOf o (symbol _ _)) = LocalTo o
+Placed (recordOf o (symbol _ _ _)) = LocalTo o
 Placed (recordOf o (edge _ _ _)) = LocalTo o
 Placed (recordOf o (structuralSnapshot _ _ _ _)) = LocalTo o
-Placed (recordOf o (legacy _)) = LocalTo o
+Placed (recordOf o (legacy _ _)) = LocalTo o
 Placed (recordOf o (staging _ _)) = LocalTo o
 Placed (recordOf o (acceptedWork _ _)) = LocalTo o
 Placed (recordOf o (cleanupWork _ _)) = LocalTo o
@@ -197,7 +212,7 @@ Placed (recordOf o (bootstrap _)) = SharedAt o
 Placed (recordOf o (modelCache _)) = SharedAt o
 Placed (recordOf o (coordination _)) = ⊤
 Placed (recordOf o (schemaResource _)) = LocalTo o
-Placed (recordOf o (graphResource _)) = LocalTo o
+Placed (recordOf o (graphResource _ _ _)) = LocalTo o
 Placed (recordOf o (logFile _)) = SharedAt o
 Placed (recordOf o (bootstrapStage _)) = SharedAt o
 

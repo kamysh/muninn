@@ -185,3 +185,12 @@ transaction-bound gate requires identity/prerequisite certificates and preserves
 accepted work while asking for clarification. Completion answers require both
 the independent outcome and a durable receipt. See [the integration contract and
 remaining adapter/dispatcher obligations](IDENTITY-ADMISSION.md).
+
+## Independent exclusion outcomes
+
+`Muninn.ExclusionOutcomes` derives need and temporary protection from every
+owned record category and defines complete-world capture, safety and completion
+contracts. Mixed snapshots are projected without retaining excluded members;
+rootless components cannot justify their own retention. See [the outcome model
+and cleanup-core boundary](EXCLUSION-OUTCOMES.md). Cleanup convergence is #67;
+no runtime cleanup is implemented here.

@@ -110,3 +110,12 @@ External repository files, Git state, provider services, PostgreSQL extensions,
 database WAL/free space, credentials managed by the user and system journal files
 are environment resources, not records Muninn may silently delete. Contracts
 must describe observations and capabilities at those boundaries separately.
+
+## Exclusion-facing metadata refinement
+
+[The exclusion outcome model](EXCLUSION-OUTCOMES.md) refines opaque fields into
+registry retirement/legacy-read facts, checkout retirement/pause/Git state,
+legacy and symbol source paths, and graph-resource scope/current use. These
+logical facts must match actual published reads; cleanup cannot choose them as
+retention preferences. The source inventory above remains a physical boundary,
+not a claim that these are new SQL columns or that Rust already exports them.
