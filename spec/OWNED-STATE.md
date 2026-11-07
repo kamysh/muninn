@@ -24,6 +24,7 @@ It distinguishes current storage from agreed state that Rust does not yet keep.
 | `crates/core/src/store.rs:430-515`, `family_store/preparation.rs` | `coordination`; saved preemption/preparation metadata is represented; session advisory locks themselves are external live capabilities |
 | `crates/core/src/config.rs:254-256,347-363` | `bootstrap`; current installation configuration is a host file, not a family policy row |
 | `crates/core/src/embeddings.rs:111-149` | `modelCache`; a shared local-model resource, including its external-cache ownership boundary |
+| `crates/mcp/src/main.rs:277-366`: rolling file logger and retention task | `logFile`; installation-owned MCP log files are distinct from external system journal files |
 
 DDL indexes, sequences, generated columns and AGE catalogs belong to the resource
 footprint of the corresponding logical records. This model does not prescribe
@@ -84,6 +85,10 @@ one record at a time.
 - The current bootstrap file and shared Hugging Face cache are installation
   resources. This inventory neither authorizes deleting third-party cache
   users nor moves configuration into the database.
+- `crates/mcp/src/main.rs:337-365` currently prunes any old regular file in the
+  configured log directory without checking the Muninn filename. The formal
+  log-maintenance outcome must preserve files not owned by Muninn. This PR
+  records the discrepancy; it does not repair that runtime behavior.
 - Per-kind metadata is retained as uninterpreted payload here. Identity,
   selection, transitions, ranking and operation-specific validity are subsequent
   issues; this ownership/reference invariant is not the complete product spec.
