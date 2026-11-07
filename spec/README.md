@@ -202,3 +202,11 @@ contracts. Mixed snapshots are projected without retaining excluded members;
 rootless components cannot justify their own retention. See [the outcome model
 and cleanup-core boundary](EXCLUSION-OUTCOMES.md). Cleanup convergence is #67;
 no runtime cleanup is implemented here.
+
+## Finite exclusion classification
+
+`Muninn.FiniteClosure` and `Muninn.ExclusionClassifier` construct exact decisions
+for lasting need and temporary protection in the complete owned world. Their
+size decrease and saturation proofs handle cyclic dependencies without arbitrary
+cutoffs. See [the classifier and remaining cleanup boundary](EXCLUSION-CLASSIFICATION.md).
+No deletion effects or runtime cleanup are implemented by this slice.
