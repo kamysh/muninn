@@ -76,7 +76,8 @@ rows, not a status flag. Search hiding or saving a policy is insufficient.
 
 ## Remaining work
 
-#67 must implement and prove cleanup convergence against this fixed contract.
+#69 supplies exact finite need/protection classification; #70 must implement
+and prove cleanup convergence against this fixed contract under #67.
 #23 remains open for outcome/core integration. Policy acceptance/supersession
 and the evolving worker are #24/#25; they must compose permitted metadata
 transitions with the cleanup-core frame and release obsolete work protections.
