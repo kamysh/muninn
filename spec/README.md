@@ -87,3 +87,39 @@ Do not add a postulate, weaken a guard or substitute a concrete example simply
 to make a proof pass. A behavior or architecture change needs explicit agreement;
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
+
+## Shared database effect semantics
+
+`Muninn.Database` defines one finite-store meaning of reads, scans, writes,
+deletions, bounded predicate deletion, commit and rollback. Transaction reads
+observe tentative writes; abort discards the complete tentative state. Only a
+completed transaction publishes a new store.
+
+Its general laws establish deletion absence, preservation of other keys,
+visible writes, complete rollback, retention under selection and strict size
+decrease when a deletable record exists. The deletion bound counts deleted
+records rather than examined records, so a retained prefix cannot prevent
+progress.
+
+This is the common effect foundation for the authoritative specification. It
+is not yet connected to every product operation, and it is not a proof that
+Rust, SQL or AGE effects implement these semantics. Closed operation dispatch,
+complete persistent-state coverage and implementation correspondence remain
+explicit obligations of the specification series.
+
+## Shared recovery contracts
+
+`Muninn.Recovery` uses the fixed database transaction semantics to define scripts,
+all committed prefixes, interruption and completion. Its general laws characterize
+the first atomic boundary, unchanged worlds after returning a result, and prefix
+composition. Tentative statement effects are never published before commit.
+
+The `Recoverable` interface requires preservation at every committed prefix, interruption/retry convergence
+and constructive termination proofs. The outcome and preservation relation are
+interface parameters fixed by the caller; an operation cannot supply weaker ones
+as record fields. This is a specification interface, not a runtime change or the
+completed closed dispatcher. Catalog integration remains a separate obligation.
+
+These are local execution laws once a transaction can execute against the given
+world. Database outages and waiting for external input belong in the application
+protocol; this interface alone does not establish eventual service availability.
