@@ -1,9 +1,25 @@
 # Operation and adapter source inventory
 
-This records current entry points before choosing the semantic contract-sharing
-boundary. It is not a completed operation catalog or proof-requiring dispatcher.
-The pending decision is whether equivalent CLI, MCP and TUI intents share one
-contract, with resumable background jobs registered separately.
+The user approved one semantic contract for equivalent CLI, MCP and TUI intents,
+with resumable background jobs registered separately. `CatalogInputs` defines
+structural input types; `Catalog` maps closed adapters to their shared intents;
+`CatalogSources` assigns every request an independent outcome owner and an
+explicit current-source or missing-adapter record. No new wire names are added.
+
+This is the closed inventory, not the proof-requiring execution dispatcher.
+`sourceRecorded` means that a matching Rust declaration exists, not that its
+behavior already satisfies the independent outcome. `missing` names the current
+integration site and the issue owning the absent adapter. Semantic input
+validation, complete operation proofs and enforced dispatch remain #20, the
+individual outcome issues, and #51/#52. Unknown wire names produce no tool ID;
+the admission conversation must help the agent select an available operation.
+
+Inputs here use current domain types. Later contracts must refine native path
+encoding, complete policy settings (including the agreed size limits), numeric
+ranking validity and narrower note scope; this PR does not silently decide
+those remaining details or claim their validation is complete. Raw CLI/TUI
+settings are lowered to a complete typed replacement before the shared change
+request, preserving unspecified settings through the adapter contract.
 
 ## Current MCP surface
 
