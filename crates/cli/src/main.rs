@@ -405,7 +405,20 @@ async fn main() -> anyhow::Result<()> {
     // Family TUI/JSON routes MUST return before legacy migration/indexing startup.
     match &cli.command {
         Commands::Start { path, json, input } => {
-            let result = writes::start(path, input.is_some()).await;
+            if !*json {
+                eprintln!("Starting indexing for {}…", path.display());
+            }
+            let result = writes::start(path, input.is_some(), |event| {
+                if !*json {
+                    match event {
+                        writes::StartProgress::Phase(message) => eprintln!("{message}"),
+                        writes::StartProgress::File { done, total, path } => {
+                            eprintln!("  Processed [{done}/{total}] {}", path.display());
+                        }
+                    }
+                }
+            })
+            .await;
             if *json {
                 readonly::finish(result);
             }
