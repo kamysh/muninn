@@ -158,3 +158,12 @@ of the persistent world and rule out consecutive internal assessment steps.
 See [the dialogue contract and integration boundary](DIALOGUE.md). Missing context
 uses the same restatement dialogue regardless of why it became unavailable;
 this adds no special persistence for unidentified repositories.
+
+## Normalized mutation and job identity
+
+`Muninn.Canonical`, `Muninn.RequestCodecs` and `Muninn.RequestIdentity`
+compare complete typed inputs, with record reconstruction proofs, exhaustive
+constructor coverage and transport-independent meaning. Ordered rules and all
+actual field values remain significant. See [the identity contract and adapter
+boundary](REQUEST-IDENTITY.md). Durable receipts and dialogue admission remain
+separate obligations; this adds no runtime or persistence behavior.

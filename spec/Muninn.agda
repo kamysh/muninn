@@ -31,6 +31,7 @@ import Muninn.OwnedState
 import Muninn.Catalog
 import Muninn.CatalogSources
 import Muninn.Dialogue
+import Muninn.RequestIdentity
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public
