@@ -123,3 +123,11 @@ completed closed dispatcher. Catalog integration remains a separate obligation.
 These are local execution laws once a transaction can execute against the given
 world. Database outages and waiting for external input belong in the application
 protocol; this interface alone does not establish eventual service availability.
+
+## Fixed-workset progress
+
+`Muninn.Workset` supplies a finite-manifest cleanup kernel with proof-carrying
+scan decisions, non-starvation behind blocked records, strict productive progress
+and preservation of saved checkpoints outside the captured IDs.
+See [the workset contract and environment assumptions](WORKSETS.md). This does
+not yet implement the exclusion worker or prove Rust/SQL correspondence.
