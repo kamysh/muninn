@@ -39,8 +39,11 @@ its vector, text posting, graph records or storage resources were removed.
 ## Agreed state still missing from current persistence
 
 `staging`, `acceptedWork`, `cleanupWork`, `activeReader`, `continuation` and
-`receipt` are separate constructors. Existing pending embedding flags and
-registration intent cover only parts of the agreed durable workflow. There is
+`receipt` are separate constructors. Receipt state is now refined by
+[the durable receipt contract](RECEIPTS.md): active input/work, finished input/result
+and installation-owned ID-only markers. Active receipt work contributes its
+required file versions to the existing strong-reference invariant. Existing pending
+embedding flags and registration intent cover only parts of the agreed durable workflow. There is
 no complete durable cleanup/continuation/operation-receipt store today. Active
 readers instead describe live capabilities; the model does not require persisting
 a crashed reader or adding a reader table when PostgreSQL snapshot lifetimes

@@ -175,3 +175,12 @@ constructor coverage and transport-independent meaning. Ordered rules and all
 actual field values remain significant. See [the identity contract and adapter
 boundary](REQUEST-IDENTITY.md). Durable receipts and dialogue admission remain
 separate obligations; this adds no runtime or persistence behavior.
+
+## Durable request receipts
+
+`Muninn.ReceiptTypes` and `Muninn.ReceiptLedger` refine receipt state in the
+existing owned world. Acceptance, checkpoint commits, replay and ID-only
+retention use the shared database semantics, with mandatory receipt-isolation
+proofs for business effects. See [the state machine and integration
+boundary](RECEIPTS.md). Operation outcomes, admission, physical adapters and
+worker progress remain separate obligations; no runtime persistence is added.

@@ -16,6 +16,7 @@ open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; cong; trans; sym)
 import Muninn.Database
 import Muninn.Recovery
+import Muninn.ReceiptTypes as Receipt
 
 data Owner : Set where
   installation : Owner
@@ -56,7 +57,8 @@ data Body : Set where
   cleanupWork : List ℕ → String → Body
   activeReader : List Reference → String → Body
   continuation : List ℕ → String → Body
-  receipt migration usage bootstrap modelCache coordination schemaResource graphResource logFile bootstrapStage : String → Body
+  receipt : Receipt.Entry → Body
+  migration usage bootstrap modelCache coordination schemaResource graphResource logFile bootstrapStage : String → Body
 
 kind : Body → Kind
 kind (registration _) = registrationK
@@ -123,7 +125,10 @@ references (acceptedWork versions _) = map (λ v → reference v fileVersionK) v
 references (cleanupWork _ _) = []
 references (activeReader retained _) = retained
 references (continuation _ _) = []
-references (receipt _) = []
+references (receipt (Receipt.entry id (Receipt.active input names progress))) =
+  map (λ v → reference v fileVersionK) (Receipt.versions progress)
+references (receipt (Receipt.entry id (Receipt.finished input names result))) = []
+references (receipt (Receipt.entry id Receipt.used)) = []
 references (migration _) = []
 references (usage _) = []
 references (bootstrap _) = []
@@ -183,7 +188,9 @@ Placed (recordOf o (acceptedWork _ _)) = LocalTo o
 Placed (recordOf o (cleanupWork _ _)) = LocalTo o
 Placed (recordOf o (activeReader _ _)) = LocalTo o
 Placed (recordOf o (continuation _ _)) = LocalTo o
-Placed (recordOf o (receipt _)) = ⊤
+Placed (recordOf o (receipt (Receipt.entry id (Receipt.active input names progress)))) = ⊤
+Placed (recordOf o (receipt (Receipt.entry id (Receipt.finished input names result)))) = ⊤
+Placed (recordOf o (receipt (Receipt.entry id Receipt.used))) = SharedAt o
 Placed (recordOf o (migration _)) = ⊤
 Placed (recordOf o (usage _)) = ⊤
 Placed (recordOf o (bootstrap _)) = SharedAt o
