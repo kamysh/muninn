@@ -26,7 +26,7 @@ data Kind : Set where
   noteK notePostingK noteVectorK fileVersionK baseBindingK deltaBindingK basePointerK : Kind
   chunkK postingK vectorK symbolK edgeK structuralSnapshotK legacyK stagingK : Kind
   acceptedWorkK cleanupWorkK activeReaderK continuationK receiptK : Kind
-  migrationK usageK bootstrapK modelCacheK coordinationK schemaResourceK graphResourceK logFileK : Kind
+  migrationK usageK bootstrapK modelCacheK coordinationK schemaResourceK graphResourceK logFileK bootstrapStageK : Kind
 
 record Reference : Set where
   constructor reference
@@ -56,7 +56,7 @@ data Body : Set where
   cleanupWork : List ℕ → String → Body
   activeReader : List Reference → String → Body
   continuation : List ℕ → String → Body
-  receipt migration usage bootstrap modelCache coordination schemaResource graphResource logFile : String → Body
+  receipt migration usage bootstrap modelCache coordination schemaResource graphResource logFile bootstrapStage : String → Body
 
 kind : Body → Kind
 kind (registration _) = registrationK
@@ -93,6 +93,7 @@ kind (coordination _) = coordinationK
 kind (schemaResource _) = schemaResourceK
 kind (graphResource _) = graphResourceK
 kind (logFile _) = logFileK
+kind (bootstrapStage _) = bootstrapStageK
 
 references : Body → List Reference
 references (registration _) = []
@@ -131,6 +132,7 @@ references (coordination _) = []
 references (schemaResource _) = []
 references (graphResource _) = []
 references (logFile _) = []
+references (bootstrapStage _) = []
 
 -- Cleanup captures and idle continuations contain weak incarnation identities:
 -- already-deleted records are valid checkpoints and must not be resurrected.
@@ -190,6 +192,7 @@ Placed (recordOf o (coordination _)) = ⊤
 Placed (recordOf o (schemaResource _)) = LocalTo o
 Placed (recordOf o (graphResource _)) = LocalTo o
 Placed (recordOf o (logFile _)) = SharedAt o
+Placed (recordOf o (bootstrapStage _)) = SharedAt o
 
 data MayReference : Owner → Owner → Set where
   own : ∀ {o} → MayReference o o

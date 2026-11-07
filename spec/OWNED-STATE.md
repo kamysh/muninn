@@ -4,6 +4,9 @@
 This inventory was checked against all nine migration files and the storage
 paths below, at source commit `c076e99fc0f2bd5c54d1b80ff6391116d9cd736d`.
 It distinguishes current storage from agreed state that Rust does not yet keep.
+The audit also checked all current Rust filesystem write/delete sites: configuration
+creation/replacement, temporary configuration staging, MCP logs/retention, model
+cache delegation and output streams; test fixtures were excluded from ownership.
 
 ## Current storage and logical categories
 
@@ -25,6 +28,7 @@ It distinguishes current storage from agreed state that Rust does not yet keep.
 | `crates/core/src/config.rs:254-256,347-363` | `bootstrap`; current installation configuration is a host file, not a family policy row |
 | `crates/core/src/embeddings.rs:111-149` | `modelCache`; a shared local-model resource, including its external-cache ownership boundary |
 | `crates/mcp/src/main.rs:277-366`: rolling file logger and retention task | `logFile`; installation-owned MCP log files are distinct from external system journal files |
+| `crates/cli/src/main.rs:314-331`: owner-only temporary config before atomic replacement | `bootstrapStage`; includes a temporary file left by interruption before replacement/cleanup |
 
 DDL indexes, sequences, generated columns and AGE catalogs belong to the resource
 footprint of the corresponding logical records. This model does not prescribe
