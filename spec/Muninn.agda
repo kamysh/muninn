@@ -30,6 +30,7 @@ import Muninn.Recovery
 import Muninn.OwnedState
 import Muninn.Catalog
 import Muninn.CatalogSources
+import Muninn.Dialogue
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

@@ -148,3 +148,13 @@ See [the operation source inventory and coverage boundary](OPERATION-SOURCES.md)
 This catalog has no raw-script request constructor or execution dispatcher.
 Individual outcome/progress proofs, corrected input admission and Rust coverage
 remain required before the final proof-requiring dispatcher can be installed.
+
+## Generic corrective dialogue
+
+`Muninn.Dialogue` defines context reuse, batched corrections, actionable guidance,
+explicit alternatives and certified admission/completion around the closed
+catalog. General laws preserve known facts and work, keep dialogue effects out
+of the persistent world and rule out consecutive internal assessment steps.
+See [the dialogue contract and integration boundary](DIALOGUE.md). Missing context
+uses the same restatement dialogue regardless of why it became unavailable;
+this adds no special persistence for unidentified repositories.
