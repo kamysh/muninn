@@ -1,4 +1,4 @@
-# Get started with Muninn 1.2.2
+# Get started with Muninn 1.2.3
 
 This is the human procedure for a **new installation**. For an existing install,
 start with [Upgrading](upgrading.md); do not create a replacement database.
@@ -66,9 +66,9 @@ Download the matching setup files (no build is needed):
 
 ```sh
 mkdir -p "$HOME/.local/share/muninn"
-curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.2.tar.gz \
+curl -fL https://github.com/kamysh/muninn/archive/refs/tags/v1.2.3.tar.gz \
   | tar -xz -C "$HOME/.local/share/muninn"
-cd "$HOME/.local/share/muninn/muninn-1.2.2"
+cd "$HOME/.local/share/muninn/muninn-1.2.3"
 ```
 
 From this directory, run the helper after reviewing
@@ -95,7 +95,7 @@ for missing extensions, preload and privilege setup.
 
 ## 3. Install matching binaries
 
-Install the published **1.2.2** binaries; Nix and a Rust compiler are not needed:
+Install the published **1.2.3** binaries; Nix and a Rust compiler are not needed:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -105,7 +105,7 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARBALL=muninn-darwin-arm64.tar.gz ;;
   *) echo "See the source-build instructions for this platform" >&2; exit 1 ;;
 esac
-curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.2/${TARBALL}" \
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.3/${TARBALL}" \
   | tar -xz -C "$HOME/.local/bin"
 chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
@@ -122,7 +122,7 @@ muninn-index --version
 muninn-mcp --version
 ```
 
-All three should report the intended version (1.2.2 for this tree).
+All three should report the intended version (1.2.3 for this tree).
 
 ## 4. Bootstrap the global configuration
 
@@ -311,6 +311,20 @@ result remain visible in the form. You can leave it unstarted and return with:
 ```sh
 muninn config /absolute/path/to/repo
 ```
+
+For a configured family, you can also start from the command line:
+
+```sh
+muninn start /absolute/path/to/repo
+```
+
+The command reports startup, a wait for another indexer when necessary, and
+processed file counts and paths on stderr as work proceeds. Counts are per pass;
+indexing can visit several worktrees or make another pass for relationships.
+A file count reaching its total does not mean the whole command has finished.
+The final result on stdout reports whether the pass completed and how many
+checkouts or files were skipped. `--json` keeps its single result document on
+stdout and emits no human progress messages.
 
 Agents use the [JSON workflow](claude-code-setup/skill/SKILL.md#configure-with-json)
 instead of driving the TUI. After first start, linked Git worktrees are discovered
