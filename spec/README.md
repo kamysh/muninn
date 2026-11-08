@@ -210,3 +210,11 @@ reference/identity preservation and actual committed deletion/projection effects
 for current-snapshot cleanup. Their mutation bound is indexed by the database
 transaction itself. See [the transaction contract and convergence boundary](CLEANUP-EFFECTS.md).
 Progress and retry convergence remain #73 under #70; no runtime cleanup is added.
+
+## Finite active cleanup passes
+
+`Muninn.CleanupProgress` proves strict decrease of actual deletion/projection
+effects, bounded arbitrary mutating traces and a total current-world cleanup
+pass. Repeating a stopped pass without state changes performs no edits. See
+[the progress kernel and completion boundary](CLEANUP-PROGRESS.md). Dependency
+classification and external-wait recovery remain #76/#77 under #73.
