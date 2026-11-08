@@ -226,3 +226,11 @@ effects, bounded arbitrary mutating traces and a total current-world cleanup
 pass. Repeating a stopped pass without state changes performs no edits. See
 [the progress kernel and completion boundary](CLEANUP-PROGRESS.md). Dependency
 classification and external-wait recovery remain #76/#77 under #73.
+
+## Completion and dependency classification
+
+`Muninn.CleanupOrder` and `Muninn.CleanupCompletion` relate stopped passes to the
+existing state-level completion contract and derive reference-ordering progress.
+Valid-store waiting results require concrete protection or an incoming dependency
+outside the fixed capture. See [the completion and recovery boundary](CLEANUP-COMPLETION.md).
+Historical trace composition and external-wait convergence remain #77.
