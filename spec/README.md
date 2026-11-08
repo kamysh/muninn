@@ -272,3 +272,11 @@ existing holders, task IDs and receipts. Proposals that still touch pending
 data take the existing current-view replanning continuation without writing a reader. See
 [reader admission](CLEANUP-ADMISSION.md). View production and lifecycle/scheduling
 integration remain #84.
+
+## Reader resumption after cleanup
+
+`CleanupResumption` derives the admission guard from the completed fresh family
+cleanup pass, then executes the existing reader transaction for the original
+request. Its shared script has a constructive completion proof and preserves
+saved task worksets. See [reader resumption](CLEANUP-RESUMPTION.md). Canonical
+view production, holder lifecycle and scheduling remain under #84.
