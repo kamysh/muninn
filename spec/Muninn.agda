@@ -34,6 +34,7 @@ import Muninn.Dialogue
 import Muninn.RequestIdentity
 import Muninn.ReceiptLedger
 import Muninn.RequestAdmission
+import Muninn.CleanupEffects
 import Muninn.ExclusionClassifier
 import Muninn.ExclusionOutcomes
 
