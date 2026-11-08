@@ -245,3 +245,12 @@ rule out new visibility and permanent need introduced by cleanup. The executable
 pass and resumed-pass corollaries preserve the fixed captured identities.
 See [completion alignment](CLEANUP-ALIGNMENT.md) for the proof and external-recovery
 boundary. These are formal laws, not runtime cleanup implementation.
+
+## Executable cleanup completion
+
+`CleanupLoop.Run.finishes` proves that the executable deletion/projection pass
+reaches the existing full completion contract after pending use is released.
+`CleanupReleased` proves that actual edits preserve this condition. Bounded
+follow-up captures cover newer blocking records and preserve the original task
+record and captured IDs. See [executable cleanup completion](CLEANUP-LOOP.md).
+Admission and scheduling integration remain #84; this is not a runtime cleanup fix.
