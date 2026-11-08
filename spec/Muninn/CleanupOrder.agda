@@ -5,7 +5,6 @@ module Muninn.CleanupOrder where
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
 import Muninn.ReceiptTypes as Receipt
-import Muninn.ExclusionClassifier as C
 open import Data.Nat using (ℕ; zero; suc; _<_; _≤_; _≟_; _≤?_; z≤n; s≤s)
 open import Data.Nat.Properties using (≤-refl; ≤-trans; <-trans; <-irrefl; <⇒≤; ≰⇒>)
 open import Data.Bool using (true)
@@ -18,7 +17,6 @@ open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Maybe.Properties using (just-injective)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.Empty using (⊥-elim)
-open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; sym; trans; subst; subst₂)
 module DB = O.DB
@@ -168,37 +166,3 @@ maximum world first (second ∷ rest) with maximum world second rest
 ...   | yes firstBelow = chosen , there present , λ { other (here refl) → firstBelow; other (there later) → greatest other later }
 ...   | no firstAbove = first , here refl , λ { other (here refl) → ≤-refl
       ; other (there later) → ≤-trans (greatest other later) (<⇒≤ (≰⇒> firstAbove)) }
-
--- Observed cycles carry raw references, without pretending they already have
--- valid resolution proofs. Validation extracts the concrete bad reference.
-data RawLink (world : O.World) : ℕ → ℕ → Set where
-  raw : ∀ source value ref → DB.lookup source world ≡ just value → E.indexed value ≡ true →
-    ref ∈ O.references (O.body value) → RawLink world source (O.target ref)
-
-data BrokenReference (world : O.World) : Set where
-  broken : ∀ source value ref → DB.lookup source world ≡ just value → E.indexed value ≡ true →
-    ref ∈ O.references (O.body value) → ¬ O.Resolves world (O.owner value) ref → BrokenReference world
-
-validateLink : ∀ world {source target} → RawLink world source target → Down world source target ⊎ BrokenReference world
-validateLink world (raw source value ref found indexed included) with C.resolves? world (O.owner value) ref
-... | yes resolved = inj₁ (link source value ref found indexed included resolved)
-... | no invalid = inj₂ (broken source value ref found indexed included invalid)
-
-data RawChain (world : O.World) : ℕ → ℕ → Set where
-  single : ∀ {source target} → RawLink world source target → RawChain world source target
-  followed : ∀ {source middle target} → RawLink world source middle → RawChain world middle target → RawChain world source target
-
-validateChain : ∀ world {source target} → RawChain world source target → Chain world source target ⊎ BrokenReference world
-validateChain world (single edge) with validateLink world edge
-... | inj₁ valid = inj₁ (one valid)
-... | inj₂ invalid = inj₂ invalid
-validateChain world (followed edge rest) with validateLink world edge
-... | inj₂ invalid = inj₂ invalid
-... | inj₁ valid with validateChain world rest
-...   | inj₁ later = inj₁ (more valid later)
-...   | inj₂ invalid = inj₂ invalid
-
-cycleHasBrokenReference : ∀ world key → RawChain world key key → BrokenReference world
-cycleHasBrokenReference world key cycle with validateChain world cycle
-... | inj₂ invalid = invalid
-... | inj₁ valid = ⊥-elim (noIndexedReferenceCycle world key valid)
