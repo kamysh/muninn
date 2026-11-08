@@ -35,6 +35,7 @@ import Muninn.Dialogue
 import Muninn.RequestIdentity
 import Muninn.ReceiptLedger
 import Muninn.RequestAdmission
+import Muninn.CleanupAlignment
 import Muninn.CleanupHistory
 import Muninn.CleanupCompletion
 import Muninn.CleanupProgress

@@ -242,3 +242,13 @@ for actual cleanup traces and resumed passes from admissible stores. It proves
 need/protection persistence and composes projected snapshot content. See [the
 historical frame and external-recovery boundary](CLEANUP-HISTORY.md). External
 transitions and full eventual recovery remain #81 under #77.
+
+## Original-request cleanup completion
+
+`CleanupAlignment` derives the full existing `ExclusionOutcomes.Complete`
+contract for the original world from actual cleanup traces and the final
+observed completion certificate. `CleanupReverseViews` and `CleanupReverseNeed`
+rule out new visibility and permanent need introduced by cleanup. The executable
+pass and resumed-pass corollaries preserve the fixed captured identities.
+See [completion alignment](CLEANUP-ALIGNMENT.md) for the proof and external-recovery
+boundary. These are formal laws, not runtime cleanup implementation.
