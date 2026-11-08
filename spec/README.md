@@ -262,3 +262,13 @@ reaches the existing full completion contract after pending use is released.
 follow-up captures cover newer blocking records and preserve the original task
 record and captured IDs. See [executable cleanup completion](CLEANUP-LOOP.md).
 Admission and scheduling integration remain #84; this is not a runtime cleanup fix.
+
+## Reader admission during cleanup
+
+`CleanupAdmission` checks canonical roots and the proposed new reader's exact
+footprint against all saved cleanup worksets in one shared transaction. It
+prevents new direct or indirect holds on pending records while preserving
+existing holders, task IDs and receipts. Proposals that still touch pending
+data take the existing current-view replanning continuation without writing a reader. See
+[reader admission](CLEANUP-ADMISSION.md). View production and lifecycle/scheduling
+integration remain #84.
