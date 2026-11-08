@@ -62,10 +62,11 @@ earlier raw-state assessment and broken-reference evidence remain distinct.
 These are cleanup-only traces under one fixed rule and captured-ID set. An
 external reader release, publication, policy change or other operation is not
 silently treated as a cleanup edit. #81 must define the permitted external
-transitions and compose their obligations with recovery, current-state
-completion and eventual progress. In particular, historical safety plus a
-current-state completion check is not asserted to establish the full recovery
-outcome by itself.
+transitions and compose their obligations with recovery and eventual progress.
+[Completion alignment](CLEANUP-ALIGNMENT.md) now combines historical safety with
+proved reverse observations and need transport to derive the full cleanup-only
+outcome from a current-state completion check. This does not establish eventual
+completion across external waits or changes; that integration remains #84.
 
 The existing observation/root predicates in `ExclusionOutcomes` are exposed as
 named helpers for the proofs; their conditions and results are unchanged.
