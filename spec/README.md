@@ -216,16 +216,17 @@ Progress and retry convergence remain #73 under #70; no runtime cleanup is added
 `Muninn.CleanupProgress` proves strict decrease of actual deletion/projection
 effects, bounded arbitrary mutating traces and a total current-world cleanup
 pass. Repeating a stopped pass without state changes performs no edits. See
-[the progress kernel and completion boundary](CLEANUP-PROGRESS.md). Dependency
-classification and external-wait recovery remain #76/#77 under #73.
+[the progress kernel and completion boundary](CLEANUP-PROGRESS.md). Worker
+integration remains unfinished under #84.
 
-## Completion and dependency classification
+## Cleanup completion and constructive progress
 
-`Muninn.CleanupOrder` and `Muninn.CleanupCompletion` relate stopped passes to the
-existing state-level completion contract and derive reference-ordering progress.
-Valid-store waiting results require concrete protection or an incoming dependency
-outside the fixed capture. See [the completion and recovery boundary](CLEANUP-COMPLETION.md).
-Historical trace composition and external-wait convergence remain #77.
+`Muninn.CleanupCompletion` constructs the existing completion certificate when
+no requested cleanup remains. `CleanupOrder` and `closedComponentProgress` prove
+that a closed, nonempty group of unneeded, unprotected records contains an
+actual eligible deletion. Diagnostic-only stopped-state classifications have
+been removed. See [completion and constructive progress](CLEANUP-COMPLETION.md).
+The runtime worker and its integration remain unfinished under #84.
 
 ## Historical cleanup preservation
 

@@ -56,8 +56,8 @@ observed committed world.
 
 The initial `OwnedState.Admissible` premise is the established store invariant:
 unique IDs, valid placement and correctly resolved strong references. Cleanup
-preserves it. This theorem does not claim to repair a corrupted store; the
-earlier raw-state assessment and broken-reference evidence remain distinct.
+preserves it. The theorem establishes preservation of that invariant; it does
+not add a corrupted-store diagnostic protocol.
 
 These are cleanup-only traces under one fixed rule and captured-ID set. An
 external reader release, publication, policy change or other operation is not

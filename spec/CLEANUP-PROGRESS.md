@@ -46,11 +46,11 @@ edit. It carries no proof of `ExclusionOutcomes.Complete`, and must not be repor
 as cleanup-task completion. Captured records may still require temporary
 protection to be released or incoming dependencies to be resolved.
 
-#76 must classify those remaining dependencies and relate them to the independent
-completion goal. #77 retains recovery with external waiting, fairness and the
-protocol rule that waits for relevant state changes rather than repeatedly
-starting an idle pass. Repeated-pass idempotence alone does not establish that
-scheduling rule or eventual full task completion. Parent #73 remains open.
+The completion condition and original-request preservation are established in
+`CleanupCompletion` and `CleanupAlignment`. The remaining worker in #84 must
+execute productive bounded batches, arrange cleanup of newer blocking records,
+and continue until that condition holds. Repeated-pass idempotence alone does
+not establish full task completion. Parent #73 remains open.
 
 This is a logical active-pass kernel, not a deployed worker or a claim about
 Rust/SQL correspondence, scan cost or elapsed execution time. It adds no runtime,
