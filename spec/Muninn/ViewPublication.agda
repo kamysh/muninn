@@ -60,14 +60,14 @@ lookupDistinct : ∀ world key old other value → DB.lookup key world ≡ just 
 lookupDistinct world key old .key value oldFound found different refl =
   different (cong (λ row → O.kind (O.body row)) (just-injective (trans (sym oldFound) found)))
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Store = Storage.Model excluded
+module Model where
+  module M = E.Model
+  module Store = Storage.Model
 
   module Family (selection : E.Rule) where
     owner = E.targetOwner selection
-    module Prepare = Preparation.Model.Family excluded selection
-    module Replace = Replacement.Model.Family excluded selection
+    module Prepare = Preparation.Model.Family selection
+    module Replace = Replacement.Model.Family selection
 
     module Publication (pointer source selected : ℕ) (result continuation : String) where
       next : ℕ → DB.Transaction String
@@ -84,6 +84,9 @@ module Model (excluded : List String → String → Bool) where
               impossible ()
       ... | just value with Observations.snapshotView value
       ...   | Observations.plain nonSnapshot = impossible committed
+        where impossible : DB.aborted continuation ≡ DB.committed reply after → Ledger.ReceiptFrame before after
+              impossible ()
+      ...   | Observations.delta sourceOwner checkout version path answer = impossible committed
         where impossible : DB.aborted continuation ≡ DB.committed reply after → Ledger.ReceiptFrame before after
               impossible ()
       ...   | Observations.snapshot sourceOwner checkout nodes edges payload with E.ownerEqual sourceOwner owner
@@ -170,11 +173,11 @@ module Model (excluded : List String → String → Bool) where
         afterValid = Storage.writeAdmissible changed receiptSlot oldReceipt newReceipt Changed.afterValid
           receiptLocated refl refl tt (λ ref included → included)
 
-        module SelectorVisibility = Visibility.Model.Write excluded selection inserted pointer Switch.oldRecord Switch.newRecord
+        module SelectorVisibility = Visibility.Model.Write selection inserted pointer Switch.oldRecord Switch.newRecord
           (O.Admissible.unique Copy.afterValid) (Switch.pointerFound inserted (proj₁ ready))
           (Visibility.selector owner selected source) (Visibility.selector owner selected fresh)
 
-        module ReceiptVisibility = Visibility.Model.Write excluded selection changed receiptSlot oldReceipt newReceipt
+        module ReceiptVisibility = Visibility.Model.Write selection changed receiptSlot oldReceipt newReceipt
           (O.Admissible.unique Changed.afterValid) receiptLocated
           (Visibility.receipt owner (R.entry id (R.active input names progress)))
           (Visibility.receipt owner (R.entry id (R.active input names nextProgress)))

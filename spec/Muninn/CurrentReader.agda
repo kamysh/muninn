@@ -29,13 +29,13 @@ module DB = O.DB
 nothingNotJust : ∀ {A : Set} {value : A} → nothing ≡ just value → ⊥
 nothingNotJust ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Family (selection : E.Rule) (pointer selected : ℕ) where
     owner = E.targetOwner selection
-    module Gate = Admission.Model.Family excluded selection
-    module Fresh = Allocation.Model.Family excluded selection
+    module Gate = Admission.Model.Family selection
+    module Fresh = Allocation.Model.Family selection
 
     references : ℕ → List O.Reference
     references root = O.reference root O.structuralSnapshotK ∷ []
@@ -198,12 +198,12 @@ module Model (excluded : List String → String → Bool) where
         refl , O.own , Frame.canonicalPersists _ (canonical _ found) , refl) All.∷ All.[]
       where
       slot = Allocation.freshId world
-      module Frame = Visibility.Model.Insert excluded selection world slot (Gate.reader (references root) payload)
+      module Frame = Visibility.Model.Insert selection world slot (Gate.reader (references root) payload)
         (Allocation.fresh world) (Visibility.reader owner (references root) payload)
 
     module AfterCleanup (before : O.World) (valid : O.Admissible before) (viewsValid : Views.Valid before) where
-      module Prepared = Resumption.Model.Current excluded selection before valid
-      module ViewCleanup = Views.Model.Cleanup excluded selection before Prepared.intent
+      module Prepared = Resumption.Model.Current selection before valid
+      module ViewCleanup = Views.Model.Cleanup selection before Prepared.intent
       after = Prepared.after
 
       viewsAfter : Views.Valid after
@@ -211,7 +211,7 @@ module Model (excluded : List String → String → Bool) where
 
       needed : ∀ root → currentRoot after ≡ just root → M.Needed selection after root
       needed root observed with currentSound after root observed
-      ... | found , registered , live = Views.Model.currentSnapshotNeeded excluded selection after pointer selected root
+      ... | found , registered , live = Views.Model.currentSnapshotNeeded selection after pointer selected root
         Prepared.validAfter found registered live
 
       canonical : Prepared.Work.Use.Released before → ∀ root → currentRoot after ≡ just root →

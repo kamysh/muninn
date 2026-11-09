@@ -104,9 +104,9 @@ data Quiet : O.Record → Set where
   receipt : ∀ owner receiptData → Quiet (O.recordOf owner (O.receipt receiptData))
   reader : ∀ owner refs payload → Quiet (O.recordOf owner (O.activeReader refs payload))
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
 
   quietRegistered : ∀ selection value → Quiet value → M.registeredValue selection value ≡ false
   quietRegistered selection ._ (snapshot owner selected nodes edges payload) = refl
@@ -194,6 +194,9 @@ module Model (excluded : List String → String → Bool) where
       (filterCong (M.edgeVisible selection before owner selected) (M.edgeVisible selection after owner selected) edges
         (edgeSame owner selected))
 
+    projectSame value | Observations.delta owner selected version path answer =
+      Storage.Model.projectWorldIndependent selection before after value (λ ())
+
     canonicalPersists : ∀ value → M.project selection before value ≡ value → M.project selection after value ≡ value
     canonicalPersists value canonical = trans (sym (projectSame value)) canonical
 
@@ -217,7 +220,7 @@ module Model (excluded : List String → String → Bool) where
     bindingSame : ∀ owner selected path version value →
       M.bindingValue selection before owner selected path version value ≡ M.bindingValue selection after owner selected path version value
     bindingSame owner selected path version value =
-      cong (λ overridden → M.bindingWithDelta overridden owner selected path version value) (deltaSame owner selected path)
+      cong (λ overridden → M.bindingSelected selection value ∧ M.bindingWithDelta overridden owner selected path version value) (deltaSame owner selected path)
 
     bindingRowsSame : ∀ owner selected path version →
       E.anyRow (λ key value → M.bindingValue selection before owner selected path version value) before ≡
@@ -256,7 +259,7 @@ module Model (excluded : List String → String → Bool) where
     bindingSame : ∀ owner selected path version value →
       M.bindingValue selection before owner selected path version value ≡ M.bindingValue selection after owner selected path version value
     bindingSame owner selected path version value =
-      cong (λ overridden → M.bindingWithDelta overridden owner selected path version value) (deltaSame owner selected path)
+      cong (λ overridden → M.bindingSelected selection value ∧ M.bindingWithDelta overridden owner selected path version value) (deltaSame owner selected path)
 
     bindingRowsSame : ∀ owner selected path version →
       E.anyRow (λ key value → M.bindingValue selection before owner selected path version value) before ≡

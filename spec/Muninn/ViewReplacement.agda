@@ -53,9 +53,9 @@ snapshotCheckout? selected value with E.snapshotCheckout value
 snapshotKind : ∀ value selected → E.snapshotCheckout value ≡ just selected → O.kind (O.body value) ≡ O.structuralSnapshotK
 snapshotKind (O.recordOf owner (O.structuralSnapshot actual nodes edges payload)) selected same = refl
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Use = Released.Model excluded
+module Model where
+  module M = E.Model
+  module Use = Released.Model
 
   module Family (selection : E.Rule) where
     owner = E.targetOwner selection

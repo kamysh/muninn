@@ -34,8 +34,8 @@ open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; tra
 module DB = O.DB
 module Exec = O.Execution
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Family (selection : E.Rule) where
     owner = E.targetOwner selection
@@ -186,7 +186,7 @@ module Model (excluded : List String → String → Bool) where
       ... | inj₂ same = trans (sym (cong proj₂ (completedAtomic observed reply final completed)))
         (trans (cong (λ world → proj₂ (DB.execute transaction world)) same) (cong proj₂ retry))
 
-      module Worker = Loop.Model.Run excluded selection after intent
+      module Worker = Loop.Model.Run selection after intent
 
       cleanupComplete : Worker.Use.Released after → M.Complete selection after intent after (Worker.Pass.Result.after (Worker.Pass.run after))
       cleanupComplete = Worker.finishes afterValid

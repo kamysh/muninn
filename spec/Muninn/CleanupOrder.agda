@@ -109,9 +109,9 @@ indexedReferencesLower (O.recordOf owner (O.schemaResource _)) ()
 indexedReferencesLower (O.recordOf owner (O.logFile _)) ()
 indexedReferencesLower (O.recordOf owner (O.bootstrapStage _)) ()
 indexedReferencesLower (O.recordOf owner (O.fileVersion _)) proof = []
-indexedReferencesLower (O.recordOf owner (O.baseBinding _ _)) proof = s≤s z≤n ∷ []
-indexedReferencesLower (O.recordOf owner (O.deltaBinding _ nothing _)) proof = s≤s z≤n ∷ []
-indexedReferencesLower (O.recordOf owner (O.deltaBinding _ (just _) _)) proof = s≤s z≤n ∷ s≤s z≤n ∷ []
+indexedReferencesLower (O.recordOf owner (O.baseBinding _ _ _)) proof = s≤s z≤n ∷ []
+indexedReferencesLower (O.recordOf owner (O.deltaBinding _ nothing _ _)) proof = s≤s z≤n ∷ []
+indexedReferencesLower (O.recordOf owner (O.deltaBinding _ (just _) _ gitAnswer)) proof = s≤s z≤n ∷ s≤s z≤n ∷ []
 indexedReferencesLower (O.recordOf owner (O.basePointer _)) proof = s≤s z≤n ∷ []
 indexedReferencesLower (O.recordOf owner (O.chunk _ _)) proof = s≤s z≤n ∷ []
 indexedReferencesLower (O.recordOf owner (O.posting _ _)) proof = s≤s (s≤s z≤n) ∷ []
@@ -121,7 +121,7 @@ indexedReferencesLower (O.recordOf owner (O.edge _ _ _)) proof = s≤s (s≤s z�
 indexedReferencesLower (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) proof =
   s≤s z≤n ∷ join (constantLower nodes O.symbolK 3 (s≤s (s≤s z≤n)))
     (constantLower edges O.edgeK 3 (s≤s (s≤s (s≤s z≤n))))
-indexedReferencesLower (O.recordOf owner (O.legacy _ _)) proof = []
+indexedReferencesLower (O.recordOf owner (O.legacy _ _ _)) proof = []
 indexedReferencesLower (O.recordOf owner (O.staging _ _)) proof = s≤s z≤n ∷ []
 indexedReferencesLower (O.recordOf owner (O.graphResource _ _ _)) proof = []
 indexedReferencesLower (O.recordOf owner (O.publishedView _ _)) proof =

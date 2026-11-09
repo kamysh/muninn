@@ -25,7 +25,7 @@ open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; con
 module DB = O.DB
 
 weight : O.Record → ℕ
-weight value = suc (length (E.snapshotNodes value) + length (E.snapshotEdges value))
+weight value = suc (E.bindingPayload value + (length (E.snapshotNodes value) + length (E.snapshotEdges value)))
 
 mass : O.World → ℕ
 mass [] = zero
@@ -52,7 +52,7 @@ removedWeightCovered key ((other , stored) ∷ world) value found | no _
 
 deletionDecreases : ∀ key world value → DB.lookup key world ≡ just value → mass (DB.delete key world) < mass world
 deletionDecreases key world value found = ≤-trans
-  (s≤s (m≤n+m (mass (DB.delete key world)) (length (E.snapshotNodes value) + length (E.snapshotEdges value))))
+  (s≤s (m≤n+m (mass (DB.delete key world)) (E.bindingPayload value + (length (E.snapshotNodes value) + length (E.snapshotEdges value)))))
   (removedWeightCovered key world value found)
 
 replacementDecreases : ∀ key world old new → DB.lookup key world ≡ just old → weight new < weight old →
@@ -78,31 +78,39 @@ peel (s≤s proof) = proof
 noSuccessorBelowZero : ∀ {n} → ¬ (suc n ≤ zero)
 noSuccessorBelowZero ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Edits = Effects.Model excluded
-  module Store = Storage.Model excluded
+module Model where
+  module M = E.Model
+  module Edits = Effects.Model
+  module Store = Storage.Model
 
   projectionDecreasesWeight : ∀ selection world value →
-    (E.snapshotNodes (M.project selection world value) ≢ E.snapshotNodes value ⊎
-     E.snapshotEdges (M.project selection world value) ≢ E.snapshotEdges value) →
+    ((E.snapshotNodes (M.project selection world value) ≢ E.snapshotNodes value ⊎
+      E.snapshotEdges (M.project selection world value) ≢ E.snapshotEdges value) ⊎
+     E.bindingPayload (M.project selection world value) ≢ E.bindingPayload value) →
     weight (M.project selection world value) < weight value
   projectionDecreasesWeight selection world value changed with Store.shape selection world value
   ... | Store.plain equal with changed
-  ...   | inj₁ different = ⊥-elim (different (cong E.snapshotNodes equal))
-  ...   | inj₂ different = ⊥-elim (different (cong E.snapshotEdges equal))
+  ...   | inj₁ (inj₁ different) = ⊥-elim (different (cong E.snapshotNodes equal))
+  ...   | inj₁ (inj₂ different) = ⊥-elim (different (cong E.snapshotEdges equal))
+  ...   | inj₂ different = ⊥-elim (different (cong E.bindingPayload equal))
+  projectionDecreasesWeight selection world value changed | Store.hiddenDelta owner selected version path answer same =
+    subst (λ projected → weight projected < weight (O.recordOf owner (O.deltaBinding selected (just version) path answer)))
+      (sym same) ≤-refl
   projectionDecreasesWeight selection world value changed | Store.snapshot owner selected nodes edges payload
     with E.ownerEqual owner (E.targetOwner selection)
   ... | no _ with changed
-  ...   | inj₁ different = ⊥-elim (different refl)
+  ...   | inj₁ (inj₁ different) = ⊥-elim (different refl)
+  ...   | inj₁ (inj₂ different) = ⊥-elim (different refl)
   ...   | inj₂ different = ⊥-elim (different refl)
   projectionDecreasesWeight selection world value changed | Store.snapshot owner selected nodes edges payload | yes _ with changed
-  ... | inj₁ different = s≤s (+-mono-<-≤
+  ... | inj₁ (inj₁ different) = s≤s (+-mono-<-≤
       (filterStrict (M.symbolVisible selection world owner selected) nodes different)
       (filterBound (M.edgeVisible selection world owner selected) edges))
-  ... | inj₂ different = s≤s (+-mono-≤-<
+  ... | inj₁ (inj₂ different) = s≤s (+-mono-≤-<
       (filterBound (M.symbolVisible selection world owner selected) nodes)
       (filterStrict (M.edgeVisible selection world owner selected) edges different))
+
+  ... | inj₂ different = ⊥-elim (different refl)
 
   module Pass (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
     module Core = Edits.Core selection accepted intent

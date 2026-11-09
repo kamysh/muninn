@@ -4,6 +4,7 @@ module Muninn.CleanupStorage where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.GitIgnore as Git
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
@@ -15,6 +16,8 @@ import Data.List.Relation.Unary.All as All
 open All using (All; []; _∷_)
 open import Data.Maybe using (just; nothing)
 open import Data.Maybe.Properties using (just-injective)
+open import Data.Unit using (tt)
+open import Data.Empty using (⊥-elim)
 open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.Sum using (inj₁; inj₂)
 open import Relation.Nullary using (yes; no)
@@ -106,13 +109,53 @@ mapFilterSubset : ∀ {A : Set} (f : ℕ → A) keep keys value →
 mapFilterSubset f keep keys value present with ∈-map⁻ f present
 ... | key , included , refl = ∈-map⁺ f (filterSubset keep keys key included)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+dropVersionReference : ∀ selected version ref → ref ∈ (O.reference selected O.checkoutK ∷ []) →
+  ref ∈ (O.reference selected O.checkoutK ∷ O.reference version O.fileVersionK ∷ [])
+dropVersionReference selected version ref (here same) = here same
+dropVersionReference selected version ref (there ())
+
+PlainKind : O.Record → Set
+PlainKind value = O.kind (O.body value) ≢ O.structuralSnapshotK × O.kind (O.body value) ≢ O.deltaBindingK
+
+data DeltaHistory : O.Record → O.Record → Set where
+  deltaUnchanged : ∀ value → O.kind (O.body value) ≡ O.deltaBindingK → DeltaHistory value value
+  deltaErased : ∀ owner selected version path (answer : Git.Answer path) →
+    DeltaHistory (O.recordOf owner (O.deltaBinding selected (just version) path answer))
+      (O.recordOf owner (O.deltaBinding selected nothing path tt))
+
+deltaBeforeKind : ∀ {before after} → DeltaHistory before after → O.kind (O.body before) ≡ O.deltaBindingK
+deltaBeforeKind (deltaUnchanged value kind) = kind
+deltaBeforeKind (deltaErased owner selected version path answer) = refl
+
+deltaAfterKind : ∀ {before after} → DeltaHistory before after → O.kind (O.body after) ≡ O.deltaBindingK
+deltaAfterKind (deltaUnchanged value kind) = kind
+deltaAfterKind (deltaErased owner selected version path answer) = refl
+
+deltaTrans : ∀ {before middle after} → DeltaHistory before middle → DeltaHistory middle after → DeltaHistory before after
+deltaTrans (deltaUnchanged value kind) later = later
+deltaTrans (deltaErased owner selected version path answer) (deltaUnchanged ._ kind) = deltaErased owner selected version path answer
+
+snapshotNotDelta : O.structuralSnapshotK ≢ O.deltaBindingK
+snapshotNotDelta ()
+
+module Model where
+  module M = E.Model
 
   data Shape (selection : E.Rule) (world : O.World) : O.Record → Set where
     plain : ∀ {value} → M.project selection world value ≡ value → Shape selection world value
     snapshot : ∀ owner selected nodes edges payload → Shape selection world
       (O.recordOf owner (O.structuralSnapshot selected nodes edges payload))
+    hiddenDelta : ∀ owner selected version path (answer : Git.Answer path) →
+      M.project selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer)) ≡
+        O.recordOf owner (O.deltaBinding selected nothing path tt) →
+      Shape selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer))
+
+  deltaShape : ∀ selection world owner selected version path answer mode →
+    M.project selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer)) ≡
+      M.deltaProjection mode owner selected version path answer →
+    Shape selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer))
+  deltaShape selection world owner selected version path answer true same = plain same
+  deltaShape selection world owner selected version path answer false same = hiddenDelta owner selected version path answer same
 
   shape : ∀ selection world value → Shape selection world value
   shape selection world (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) = snapshot owner selected nodes edges payload
@@ -126,15 +169,18 @@ module Model (excluded : List String → String → Bool) where
   shape selection world value@(O.recordOf owner (O.notePosting _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.noteVector _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.fileVersion _)) = plain refl
-  shape selection world value@(O.recordOf owner (O.baseBinding _ _)) = plain refl
-  shape selection world value@(O.recordOf owner (O.deltaBinding _ _ _)) = plain refl
+  shape selection world value@(O.recordOf owner (O.baseBinding _ _ _)) = plain refl
+  shape selection world value@(O.recordOf owner (O.deltaBinding selected nothing path source)) = plain refl
+  shape selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer)) =
+    deltaShape selection world owner selected version path answer
+      (M.includedWithGit selection owner (Git.ignored answer) path) refl
   shape selection world value@(O.recordOf owner (O.basePointer _)) = plain refl
   shape selection world value@(O.recordOf owner (O.chunk _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.posting _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.vector _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.symbol _ _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.edge _ _ _)) = plain refl
-  shape selection world value@(O.recordOf owner (O.legacy _ _)) = plain refl
+  shape selection world value@(O.recordOf owner (O.legacy _ _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.staging _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.acceptedWork _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.cleanupWork _ _ _)) = plain refl
@@ -155,6 +201,7 @@ module Model (excluded : List String → String → Bool) where
   projectOwner : ∀ selection world value → O.owner (M.project selection world value) ≡ O.owner value
   projectOwner selection world value with shape selection world value
   ... | plain equal = cong O.owner equal
+  ... | hiddenDelta owner selected version path answer same = cong O.owner same
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes _ = refl
   ...   | no _ = refl
@@ -162,6 +209,7 @@ module Model (excluded : List String → String → Bool) where
   projectKind : ∀ selection world value → O.kind (O.body (M.project selection world value)) ≡ O.kind (O.body value)
   projectKind selection world value with shape selection world value
   ... | plain equal = cong (λ v → O.kind (O.body v)) equal
+  ... | hiddenDelta owner selected version path answer same = cong (λ v → O.kind (O.body v)) same
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes _ = refl
   ...   | no _ = refl
@@ -169,6 +217,7 @@ module Model (excluded : List String → String → Bool) where
   projectPlaced : ∀ selection world value → O.Placed value → O.Placed (M.project selection world value)
   projectPlaced selection world value placed with shape selection world value
   ... | plain equal = subst O.Placed (sym equal) placed
+  ... | hiddenDelta owner selected version path answer same = subst O.Placed (sym same) (proj₁ placed , tt)
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes _ = placed
   ...   | no _ = placed
@@ -177,6 +226,9 @@ module Model (excluded : List String → String → Bool) where
     ref ∈ O.references (O.body (M.project selection world value)) → ref ∈ O.references (O.body value)
   projectReferences selection world value ref present with shape selection world value
   ... | plain equal = subst (λ v → ref ∈ O.references (O.body v)) equal present
+  ... | hiddenDelta owner selected version path answer same =
+    dropVersionReference selected version ref
+      (subst (λ v → ref ∈ O.references (O.body v)) same present)
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | no _ = present
   ...   | yes _ with present
@@ -191,6 +243,7 @@ module Model (excluded : List String → String → Bool) where
     key ∈ E.snapshotNodes (M.project selection world value) → key ∈ E.snapshotNodes value
   projectNodesSubset selection world value key present with shape selection world value
   ... | plain equal = subst (λ v → key ∈ E.snapshotNodes v) equal present
+  ... | hiddenDelta owner selected version path answer same = subst (λ v → key ∈ E.snapshotNodes v) same present
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | no _ = present
   ...   | yes _ = filterSubset _ nodes key present
@@ -199,6 +252,7 @@ module Model (excluded : List String → String → Bool) where
     key ∈ E.snapshotEdges (M.project selection world value) → key ∈ E.snapshotEdges value
   projectEdgesSubset selection world value key present with shape selection world value
   ... | plain equal = subst (λ v → key ∈ E.snapshotEdges v) equal present
+  ... | hiddenDelta owner selected version path answer same = subst (λ v → key ∈ E.snapshotEdges v) same present
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | no _ = present
   ...   | yes _ = filterSubset _ edges key present
@@ -206,6 +260,7 @@ module Model (excluded : List String → String → Bool) where
   projectIdempotent : ∀ selection world value → M.project selection world (M.project selection world value) ≡ M.project selection world value
   projectIdempotent selection world value with shape selection world value
   ... | plain equal = cong (M.project selection world) equal
+  ... | hiddenDelta owner selected version path answer same = trans (cong (M.project selection world) same) (sym same)
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection) in decision
   ...   | no _ rewrite decision = refl
   ...   | yes _ rewrite decision | E.filterKeysIdempotent (M.symbolVisible selection world owner selected) nodes
@@ -223,6 +278,73 @@ module Model (excluded : List String → String → Bool) where
     E.snapshotCheckout (M.project selection world value) ≡ E.snapshotCheckout value
   projectCheckout selection world value with shape selection world value
   ... | plain same = cong E.snapshotCheckout same
+  ... | hiddenDelta owner selected version path answer same = cong E.snapshotCheckout same
   ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes same = refl
   ...   | no different = refl
+
+  projectPlain : ∀ selection world value → PlainKind value → M.project selection world value ≡ value
+  projectPlain selection world value facts with shape selection world value
+  ... | plain same = same
+  ... | snapshot owner selected nodes edges payload = ⊥-elim (proj₁ facts refl)
+  ... | hiddenDelta owner selected version path answer same = ⊥-elim (proj₂ facts refl)
+
+  injectivePlain : ∀ selection world value → PlainKind value → ∀ other →
+    M.project selection world other ≡ M.project selection world value → other ≡ value
+  injectivePlain selection world value facts other projected = trans (sym (projectPlain selection world other otherPlain))
+    (trans projected (projectPlain selection world value facts))
+    where
+    sameKind = trans (sym (projectKind selection world other))
+      (trans (cong (λ row → O.kind (O.body row)) projected) (projectKind selection world value))
+    otherPlain : PlainKind other
+    otherPlain = (λ same → proj₁ facts (trans (sym sameKind) same)) , (λ same → proj₂ facts (trans (sym sameKind) same))
+
+  deltaOrigin : ∀ selection world value → O.kind (O.body (M.project selection world value)) ≡ O.deltaBindingK →
+    DeltaHistory value (M.project selection world value)
+  deltaOrigin selection world value kind with shape selection world value
+  ... | plain same = subst (DeltaHistory value) (sym same)
+    (deltaUnchanged value (trans (sym (projectKind selection world value)) kind))
+  ... | snapshot owner selected nodes edges payload = ⊥-elim (snapshotNotDelta
+    (trans (sym (projectKind selection world value)) kind))
+  ... | hiddenDelta owner selected version path answer same = subst (DeltaHistory value) (sym same)
+    (deltaErased owner selected version path answer)
+
+  projectWorldIndependent : ∀ selection before after value → O.kind (O.body value) ≢ O.structuralSnapshotK →
+    M.project selection before value ≡ M.project selection after value
+  projectWorldIndependent selection before after (O.recordOf owner (O.registration x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.creationIntent x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.defaults x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.checkout x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.policyVersion x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.currentPolicy x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.note x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.notePosting x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.noteVector x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.fileVersion x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.baseBinding version path x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.deltaBinding selected (just version) path x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.deltaBinding selected nothing path x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.basePointer x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.chunk x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.posting x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.vector x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.symbol x x₁ x₂)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.edge x x₁ x₂)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.publishedView x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.structuralSnapshot x x₁ x₂ x₃)) nonSnapshot = ⊥-elim (nonSnapshot refl)
+  projectWorldIndependent selection before after (O.recordOf owner (O.legacy path x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.staging x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.acceptedWork x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.cleanupWork x x₁ x₂)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.activeReader x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.continuation x x₁)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.receipt x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.graphResource x x₁ x₂)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.migration x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.usage x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.bootstrap x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.modelCache x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.coordination x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.schemaResource x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.logFile x)) nonSnapshot = refl
+  projectWorldIndependent selection before after (O.recordOf owner (O.bootstrapStage x)) nonSnapshot = refl

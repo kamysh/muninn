@@ -20,6 +20,9 @@ import Muninn.Recovery
 import Muninn.ReceiptTypes as Receipt
 import Muninn.CatalogInputs as Input
 import Muninn.Config as Config
+import Muninn.PolicyRuleAdmission as Admission
+import Muninn.GitIgnore as Git
+import Data.String as String
 import Muninn.Worktree as Worktree
 import Data.List.Relation.Unary.All as All
 
@@ -59,25 +62,42 @@ record PolicyVersionInfo : Set where
         revision : ℕ
         contents : Input.PolicyDraft
 
+  field excludeValid : Admission.Entries
+          (map String.toList (Config.IndexConfig.exclude (Input.PolicyDraft.index contents)))
+        vendorValid : Admission.Entries
+          (map String.toList (Config.IndexConfig.vendor (Input.PolicyDraft.index contents)))
+
+SelectionFor : Maybe ℕ → String → Set
+SelectionFor nothing path = ⊤
+SelectionFor (just version) path = Git.Answer path
+
+record DefaultsInfo : Set where
+  constructor defaultsInfo
+  field value : Config.PolicyDefaults
+        excludeValid : Admission.Entries
+          (map String.toList (Config.IndexConfig.exclude (Config.PolicyDefaults.rules value)))
+        vendorValid : Admission.Entries
+          (map String.toList (Config.IndexConfig.vendor (Config.PolicyDefaults.rules value)))
+
 data Body : Set where
   registration : RegistrationInfo → Body
   creationIntent : String → Body
-  defaults : Config.PolicyDefaults → Body
+  defaults : DefaultsInfo → Body
   checkout : CheckoutInfo → Body
   policyVersion : ℕ → PolicyVersionInfo → Body
   currentPolicy : ℕ → Body
   note : String → Body
   notePosting noteVector : ℕ → String → Body
   fileVersion : String → Body
-  baseBinding : ℕ → String → Body
-  deltaBinding : ℕ → Maybe ℕ → String → Body
+  baseBinding : (version : ℕ) (path : String) → Git.Answer path → Body
+  deltaBinding : (selected : ℕ) (version : Maybe ℕ) (path : String) → SelectionFor version path → Body
   basePointer : ℕ → Body
   chunk posting vector : ℕ → String → Body
   symbol : ℕ → String → String → Body -- version, source path, payload
   edge : ℕ → ℕ → String → Body
   publishedView : ℕ → ℕ → Body
   structuralSnapshot : ℕ → List ℕ → List ℕ → String → Body
-  legacy : String → String → Body -- path, remaining payload
+  legacy : (path : String) → Git.Answer path → String → Body -- saved Git default, remaining payload
   staging : ℕ → String → Body
   acceptedWork : List ℕ → String → Body
   cleanupWork : Input.OperationId → List ℕ → String → Body
@@ -98,8 +118,8 @@ kind (note _) = noteK
 kind (notePosting _ _) = notePostingK
 kind (noteVector _ _) = noteVectorK
 kind (fileVersion _) = fileVersionK
-kind (baseBinding _ _) = baseBindingK
-kind (deltaBinding _ _ _) = deltaBindingK
+kind (baseBinding _ _ _) = baseBindingK
+kind (deltaBinding _ _ _ _) = deltaBindingK
 kind (basePointer _) = basePointerK
 kind (chunk _ _) = chunkK
 kind (posting _ _) = postingK
@@ -108,7 +128,7 @@ kind (symbol _ _ _) = symbolK
 kind (edge _ _ _) = edgeK
 kind (publishedView _ _) = publishedViewK
 kind (structuralSnapshot _ _ _ _) = structuralSnapshotK
-kind (legacy _ _) = legacyK
+kind (legacy _ _ _) = legacyK
 kind (staging _ _) = stagingK
 kind (acceptedWork _ _) = acceptedWorkK
 kind (cleanupWork _ _ _) = cleanupWorkK
@@ -136,9 +156,9 @@ references (note _) = []
 references (notePosting source _) = reference source noteK ∷ []
 references (noteVector source _) = reference source noteK ∷ []
 references (fileVersion _) = []
-references (baseBinding version _) = reference version fileVersionK ∷ []
-references (deltaBinding selected nothing _) = reference selected checkoutK ∷ []
-references (deltaBinding selected (just version) _) = reference selected checkoutK ∷ reference version fileVersionK ∷ []
+references (baseBinding version _ gitAnswer) = reference version fileVersionK ∷ []
+references (deltaBinding selected nothing _ _) = reference selected checkoutK ∷ []
+references (deltaBinding selected (just version) _ gitAnswer) = reference selected checkoutK ∷ reference version fileVersionK ∷ []
 references (basePointer selected) = reference selected checkoutK ∷ []
 references (chunk source _) = reference source fileVersionK ∷ []
 references (posting source _) = reference source chunkK ∷ []
@@ -148,7 +168,7 @@ references (edge source target _) = reference source symbolK ∷ reference targe
 references (publishedView selected snapshot) = reference selected checkoutK ∷ reference snapshot structuralSnapshotK ∷ []
 references (structuralSnapshot selected nodes edges _) = reference selected checkoutK ∷
   (map (λ v → reference v symbolK) nodes ++ map (λ v → reference v edgeK) edges)
-references (legacy _ _) = []
+references (legacy _ _ _) = []
 references (staging source _) = reference source fileVersionK ∷ []
 references (acceptedWork versions _) = map (λ v → reference v fileVersionK) versions
 references (cleanupWork _ _ _) = []
@@ -189,6 +209,15 @@ data LocalTo : Owner → Set where
 data SharedAt : Owner → Set where
   shared : SharedAt installation
 
+GitFamily : ∀ {path} → Owner → Git.Answer path → Set
+GitFamily installation answer = ⊥
+GitFamily (family id) answer = Git.Context.family (Git.at answer) ≡ id
+
+DeltaOrigin : ∀ owner selected version path → SelectionFor version path → Set
+DeltaOrigin owner selected nothing path source = ⊤
+DeltaOrigin owner selected (just version) path source = GitFamily owner source ×
+  (Git.Context.checkout (Git.at source) ≡ selected)
+
 -- Every persistent constructor has an explicit ownership clause. Adding a
 -- category cannot silently inherit the ownership policy of a catch-all case.
 Placed : Record → Set
@@ -202,8 +231,8 @@ Placed (recordOf o (note _)) = LocalTo o
 Placed (recordOf o (notePosting _ _)) = LocalTo o
 Placed (recordOf o (noteVector _ _)) = LocalTo o
 Placed (recordOf o (fileVersion _)) = LocalTo o
-Placed (recordOf o (baseBinding _ _)) = LocalTo o
-Placed (recordOf o (deltaBinding _ _ _)) = LocalTo o
+Placed (recordOf o (baseBinding version path source)) = LocalTo o × GitFamily o source
+Placed (recordOf o (deltaBinding selected version path source)) = LocalTo o × DeltaOrigin o selected version path source
 Placed (recordOf o (basePointer _)) = LocalTo o
 Placed (recordOf o (chunk _ _)) = LocalTo o
 Placed (recordOf o (posting _ _)) = LocalTo o
@@ -212,7 +241,7 @@ Placed (recordOf o (symbol _ _ _)) = LocalTo o
 Placed (recordOf o (edge _ _ _)) = LocalTo o
 Placed (recordOf o (publishedView _ _)) = LocalTo o
 Placed (recordOf o (structuralSnapshot _ _ _ _)) = LocalTo o
-Placed (recordOf o (legacy _ _)) = LocalTo o
+Placed (recordOf o (legacy path source payload)) = LocalTo o × GitFamily o source
 Placed (recordOf o (staging _ _)) = LocalTo o
 Placed (recordOf o (acceptedWork _ _)) = LocalTo o
 Placed (recordOf o (cleanupWork _ _ _)) = LocalTo o
@@ -290,6 +319,8 @@ executionBookkeeping bootstrapStageK = false
 -- Searches retain the selected snapshot, never its mutable current selector.
 privateTarget : Kind → Bool
 privateTarget publishedViewK = true
+privateTarget baseBindingK = true
+privateTarget deltaBindingK = true
 privateTarget kind = executionBookkeeping kind
 
 PublicReference : Reference → Set

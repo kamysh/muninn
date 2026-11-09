@@ -43,6 +43,10 @@ import Muninn.RuleScope
 import Muninn.OrderedSelection
 import Muninn.StrictGlob
 import Muninn.PolicyRuleAdmission
+import Muninn.GitIgnore
+import Muninn.GitDiscovery
+import Muninn.InclusionTraversal
+import Muninn.IndexSelection
 import Muninn.AdmittedSelection
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation

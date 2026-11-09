@@ -67,10 +67,10 @@ data MutationBound {A : Set} : ℕ → DB.Transaction A → Set where
 presentNotAbsent : ∀ {value : O.Record} → just value ≢ nothing
 presentNotAbsent ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Classifier = C.Model excluded
-  module Store = S.Model excluded
+module Model where
+  module M = E.Model
+  module Classifier = C.Model
+  module Store = S.Model
 
   eraseSafety : ∀ selection world key value → DB.lookup key world ≡ just value →
     O.owner value ≡ E.targetOwner selection → E.indexed value ≡ true →
@@ -137,17 +137,20 @@ module Model (excluded : List String → String → Bool) where
   module Core (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
     Changed : O.World → O.Record → Set
     Changed world value =
-      E.snapshotNodes (M.project selection world value) ≢ E.snapshotNodes value ⊎
-      E.snapshotEdges (M.project selection world value) ≢ E.snapshotEdges value
+      (E.snapshotNodes (M.project selection world value) ≢ E.snapshotNodes value ⊎
+       E.snapshotEdges (M.project selection world value) ≢ E.snapshotEdges value) ⊎
+      E.bindingPayload (M.project selection world value) ≢ E.bindingPayload value
 
     changed? : ∀ world value → Dec (Changed world value)
-    changed? world value = C.either
+    changed? world value = C.either (C.either
       (not? (listEqual (E.snapshotNodes (M.project selection world value)) (E.snapshotNodes value)))
-      (not? (listEqual (E.snapshotEdges (M.project selection world value)) (E.snapshotEdges value)))
+      (not? (listEqual (E.snapshotEdges (M.project selection world value)) (E.snapshotEdges value))))
+      (not? (E.bindingPayload (M.project selection world value) ≟ E.bindingPayload value))
 
     changedIsActual : ∀ world value → Changed world value → M.project selection world value ≢ value
-    changedIsActual world value (inj₁ different) same = different (cong E.snapshotNodes same)
-    changedIsActual world value (inj₂ different) same = different (cong E.snapshotEdges same)
+    changedIsActual world value (inj₁ (inj₁ different)) same = different (cong E.snapshotNodes same)
+    changedIsActual world value (inj₁ (inj₂ different)) same = different (cong E.snapshotEdges same)
+    changedIsActual world value (inj₂ different) same = different (cong E.bindingPayload same)
 
     Removal : ℕ → O.World → Set
     Removal key world = C.At world key (λ value → key ∈ M.Intent.keys intent ×
