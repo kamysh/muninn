@@ -476,3 +476,10 @@ described in [Git authority](SELECTION-INTEGRATION.md).
 `IndexFileLimits` schedules every ready selected file while preserving actionable
 size questions and explicit text-only coverage. Captured family defaults and
 normalized request identity include both caps. See [file limits](FILE-LIMITS.md).
+
+## Mandatory completed-work reuse
+
+`ArtifactIdentity`, `CanonicalChunks`, `CompletedWork` and `ArtifactReuse` bind
+exact versioned inputs and byte spans to certified immutable checkpoints.
+Completed hits cannot choose recomputation; explicit recreation isolates its
+requested family. See [artifact reuse](ARTIFACT-REUSE.md).

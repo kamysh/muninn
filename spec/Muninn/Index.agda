@@ -15,6 +15,8 @@ open import Muninn.Concurrency
 open import Muninn.IndexFsm public
 import Muninn.IndexSelection as Selection
 import Muninn.IndexFileLimits as FileLimits
+import Muninn.ArtifactReuse as Reuse
+import Muninn.Worktree as Worktree
 import Muninn.Config as Config
 open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool   using (Bool; true; false)
@@ -151,3 +153,7 @@ module FileSelection (family selected generation : ℕ) where
 -- After selection, this exact byte gate produces work plus corrective questions.
 module FileAnalysis (family selected generation : ℕ) (policy : Config.FamilyPolicy) where
   open FileLimits.Checkout family selected generation policy public
+
+-- Reconciliation/embedding use the mandatory saved-work decisions.
+module ReuseAnalysis (model : Reuse.AnalysisModel) (family : Worktree.FamilyId) = Reuse.Analyses model family
+module ReuseEmbedding (family : Worktree.FamilyId) = Reuse.Embeddings family

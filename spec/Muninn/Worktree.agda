@@ -15,7 +15,7 @@ open import Data.Fin using (Fin)
 open import Data.Nat using (ℕ)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Unit using (⊤)
-open import Data.Product using (Σ; _×_; _,_; proj₂)
+open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; trans; sym)
 open import Relation.Nullary using (¬_)
 open import Data.Empty using (⊥-elim)
@@ -36,18 +36,39 @@ record VersionRef : Set where
   field family : FamilyId
         version : VersionId
 
+-- Exact semantic input, separate from acceleration metadata.
+record AnalysisMeaning : Set where
+  field bytes : List (Fin 256)
+        parserVersion grammarVersion extractorVersion : String
+        chunkerVersion normalizationVersion analysisConfig language : String
+        maxChunkBytes : ℕ
+
 record AnalysisKey : Set where
-  field bytes : List (Fin 256) -- exact full bytes; hashes are lookup aids
-        contentHash : String
-        parserVersion chunkerVersion analysisConfig language : String
+  field meaning : AnalysisMeaning
+        contentHash : String -- lookup aid; never proof of byte equality
+
+analysisMeaning : AnalysisKey → AnalysisMeaning
+analysisMeaning = AnalysisKey.meaning
+
+withLookupHash : String → AnalysisKey → AnalysisKey
+withLookupHash hash key = record { meaning = AnalysisKey.meaning key; contentHash = hash }
+
+lookupHashDoesNotChangeMeaning : ∀ hash key → analysisMeaning (withLookupHash hash key) ≡ analysisMeaning key
+lookupHashDoesNotChangeMeaning hash key = refl
+
+record ByteSpan : Set where
+  constructor byteSpan
+  field start end : ℕ -- half-open source-byte positions [start, end)
 
 record EmbeddingKey : Set where
   field backend model configuration : String
+        profileRevision normalizationVersion task : String
         dimension : ℕ
 
 record AnalyzedChunk : Set where
-  field range : LineRange
-        content : String
+  field span : ByteSpan
+        range : LineRange -- display metadata; never the identity
+        content : String -- versioned normalized payload, not necessarily a raw slice
 
 record FileVersion : Set where
   field id : VersionId
@@ -57,7 +78,9 @@ record FileVersion : Set where
 
 record EmbeddingArtifact : Set where
   field version : VersionRef
+        span : ByteSpan
         key : EmbeddingKey
+        input : List (Fin 256) -- exact normalized bytes submitted to the provider
 
 record Checkout : Set where
   field id : CheckoutId
@@ -168,14 +191,14 @@ record CheckoutEdge (views : Views) (checkout : Checkout) : Set where
 AnalysisCompatible : FileVersion → FileVersion → Set
 AnalysisCompatible a b =
   FileVersion.family a ≡ FileVersion.family b ×
-  FileVersion.analysisKey a ≡ FileVersion.analysisKey b
+  analysisMeaning (FileVersion.analysisKey a) ≡ analysisMeaning (FileVersion.analysisKey b)
 
 EmbeddingCompatible : EmbeddingArtifact → EmbeddingArtifact → Set
 EmbeddingCompatible a b =
-  EmbeddingArtifact.version a ≡ EmbeddingArtifact.version b ×
-  EmbeddingArtifact.key a ≡ EmbeddingArtifact.key b
+  VersionRef.family (EmbeddingArtifact.version a) ≡ VersionRef.family (EmbeddingArtifact.version b) ×
+  (EmbeddingArtifact.input a ≡ EmbeddingArtifact.input b × EmbeddingArtifact.key a ≡ EmbeddingArtifact.key b)
 
 reuseKeepsBytes : ∀ a b → AnalysisCompatible a b →
-  AnalysisKey.bytes (FileVersion.analysisKey a) ≡
-  AnalysisKey.bytes (FileVersion.analysisKey b)
-reuseKeepsBytes a b same = cong AnalysisKey.bytes (proj₂ same)
+  AnalysisMeaning.bytes (analysisMeaning (FileVersion.analysisKey a)) ≡
+  AnalysisMeaning.bytes (analysisMeaning (FileVersion.analysisKey b))
+reuseKeepsBytes a b same = cong AnalysisMeaning.bytes (proj₂ same)
