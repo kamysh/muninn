@@ -459,3 +459,11 @@ laws establish matching-tail precedence, unmatched preservation, deterministic
 family decisions and vendor isolation. See [ordered selection](ORDERED-SELECTION.md).
 Entry/Git admission, traversal and final indexing/search/cleanup integration remain
 under #26.
+
+## Strict policy admission and family selection
+
+`StrictGlob` and `PolicyRuleAdmission` validate complete original-input policy
+entries and lists, preserving quoted literals and the strict class requirement.
+`AdmittedSelection` connects those certificates to normalized effective family
+rules and deterministic selection. See [policy admission](POLICY-RULE-ADMISSION.md).
+Git evaluation, traversal and final shared selection integration remain under #26.
