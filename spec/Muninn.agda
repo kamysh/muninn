@@ -37,6 +37,7 @@ import Muninn.GlobMatching
 import Muninn.GlobLexing
 import Muninn.GlobRanges
 import Muninn.GlobTokens
+import Muninn.GlobBody
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews

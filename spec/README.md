@@ -434,3 +434,11 @@ raw glob bodies and rule-selection integration remain under #26.
 recursive wildcards and compiled classes. Recognition, determinism, exact source
 consumption and strict suffix progress are proved. See [raw glob tokens](GLOB-TOKENS.md).
 Whole-body assembly, rule framing and selection integration remain under #26.
+
+## Complete raw glob-body parsing
+
+`GlobBody` supplies actual position/group context and assembles certified tokens
+into complete matcher trees. General laws prove full recognition, unique meaning,
+a source-length transition bound and raw-pattern match soundness/completeness.
+See [complete glob bodies](GLOB-BODY.md). Rule framing, policy precedence and
+selection integration remain under #26.
