@@ -442,3 +442,11 @@ into complete matcher trees. General laws prove full recognition, unique meaning
 a source-length transition bound and raw-pattern match soundness/completeness.
 See [complete glob bodies](GLOB-BODY.md). Rule framing, policy precedence and
 selection integration remain under #26.
+
+## Source-certified rule framing and scope
+
+`RulePatterns` compiles actual negation/root/directory framing around certified
+bodies; `RuleScope` decides scoped and ancestor matching through complete finite
+path splits. General laws prove recognition, unique compiled meaning and sound/
+complete matching. See [rule framing and scope](RULE-PATTERNS.md). Entry admission,
+Git/Muninn precedence, traversal and selection integration remain under #26.
