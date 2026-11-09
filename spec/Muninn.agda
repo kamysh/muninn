@@ -29,6 +29,7 @@ import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.PublicationVisibility
+import Muninn.ViewPublication
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews

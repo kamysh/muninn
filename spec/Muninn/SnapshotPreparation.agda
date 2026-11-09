@@ -55,11 +55,12 @@ module Model (excluded : List String → String → Bool) where
     -- No commit here: publication continues in this same transaction.
     prepareValue : ∀ {A : Set} → (ℕ → DB.Transaction A) → (O.World → DB.Transaction A) →
       O.World → Maybe O.Record → DB.Transaction A
-    prepareValue next replan world (just (O.recordOf sourceOwner (O.structuralSnapshot selected nodes edges payload)))
-      with E.ownerEqual sourceOwner owner
-    ... | yes same = DB.put (Allocation.freshId world) (M.project selection world (O.recordOf sourceOwner (O.structuralSnapshot selected nodes edges payload))) (next (Allocation.freshId world))
-    ... | no different = replan world
-    prepareValue next replan world value = replan world
+    prepareValue next replan world nothing = replan world
+    prepareValue next replan world (just value) with Observations.snapshotView value
+    ... | Observations.plain nonSnapshot = replan world
+    ... | Observations.snapshot sourceOwner selected nodes edges payload with E.ownerEqual sourceOwner owner
+    ...   | yes same = DB.put (Allocation.freshId world) (M.project selection world (O.recordOf sourceOwner (O.structuralSnapshot selected nodes edges payload))) (next (Allocation.freshId world))
+    ...   | no different = replan world
 
     prepare : ∀ {A : Set} → ℕ → (ℕ → DB.Transaction A) → (O.World → DB.Transaction A) → DB.Transaction A
     prepare source next replan = DB.scan (λ world → prepareValue next replan world (DB.lookup source world))

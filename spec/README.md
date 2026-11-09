@@ -368,3 +368,12 @@ from actual snapshot/selector/receipt writes and proves canonical filtering
 persists. The policy input stays fixed; the entrypoints still compute query
 facts from the actual world. See [publication filtering](PUBLICATION-VISIBILITY.md).
 Receipt-sealed publication composition and reader resumption remain under #84.
+
+## Atomic current-view publication
+
+`ViewPublication` commits the filtered snapshot, current selector and original
+request checkpoint together. It derives canonicality after the actual writes,
+preserves saved data/readers/worksets and proves interrupted retry convergence
+without repeating allocation. See [view publication](VIEW-PUBLICATION.md).
+Stored-policy selection, new-reader construction and full lifecycle assembly
+remain under #84.
