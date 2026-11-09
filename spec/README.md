@@ -385,3 +385,12 @@ reader in one transaction. It preserves old rows/readers/worksets and derives
 successful admission after the existing productive cleanup pass, including
 canonicality under the new reader insertion. See [current readers](CURRENT-READER.md).
 Query-specific footprints and full lifecycle assembly remain under #84.
+
+## Current stored policy selection
+
+`StoredPolicy` resolves typed policy-version contents and frozen defaults through
+the actual current pointer. It constructs the effective rule inside the shared
+transaction and redirects stale version/revision continuations to the current
+rule. Resolution completeness and deterministic policy selection are proved.
+See [stored policy](STORED-POLICY.md). Rule parsing, atomic policy acceptance,
+history/supersession and full lifecycle integration remain separate obligations.
