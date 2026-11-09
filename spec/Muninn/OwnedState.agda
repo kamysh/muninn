@@ -233,10 +233,15 @@ Unique ((key , value) ∷ rest) = (DB.lookup key rest ≡ nothing) × Unique res
 SoundReferences : World → ℕ × Record → Set
 SoundReferences world row = All (Resolves world (owner (proj₂ row))) (references (body (proj₂ row)))
 
+-- Reader rows are private bookkeeping. Strong references never target them.
+PrivateReaderReferences : Record → Set
+PrivateReaderReferences value = All (λ ref → expected ref ≢ activeReaderK) (references (body value))
+
 record Admissible (world : World) : Set where
   field unique : Unique world
         placed : All (λ row → Placed (proj₂ row)) world
         sound : All (SoundReferences world) world
+        privateReaders : All (λ row → PrivateReaderReferences (proj₂ row)) world
 
 -- Deleting one family record preserves every already-present record of a
 -- different owner, regardless of its category, checkout or payload.
@@ -302,4 +307,5 @@ deleteUnreferencedPreservesAdmissibility key world valid unreferenced = record
   { unique = deleteUnique key world (Admissible.unique valid)
   ; placed = deleteAll key world (Admissible.placed valid)
   ; sound = deleteAll key world (shiftSound key world world (Admissible.sound valid) unreferenced)
+  ; privateReaders = deleteAll key world (Admissible.privateReaders valid)
   }

@@ -57,7 +57,10 @@ writeAdmissible : ∀ world key old new → O.Admissible world → DB.lookup key
 writeAdmissible world key old new valid found sameOwner sameKind placed subset = record
   { unique = writeUnique key new world (O.Admissible.unique valid)
   ; placed = placed ∷ O.deleteAll key world (O.Admissible.placed valid)
-  ; sound = newSound ∷ O.deleteAll key world shifted }
+  ; sound = newSound ∷ O.deleteAll key world shifted
+  ; privateReaders = All.tabulate (λ {ref} present → All.lookup
+      (lookupAll world key old (O.Admissible.privateReaders valid) found) (subset ref present)) ∷
+      O.deleteAll key world (O.Admissible.privateReaders valid) }
   where
   oldSound : All (O.Resolves world (O.owner old)) (O.references (O.body old))
   oldSound = lookupAll world key old (O.Admissible.sound valid) found
