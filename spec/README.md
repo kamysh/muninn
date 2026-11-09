@@ -411,3 +411,11 @@ It keeps the original capture, derives productive progress and preserves receipt
 protected data, stored policy and current-view invariants. See
 [current-policy cleanup batches](POLICY-CLEANUP-BATCH.md). Complete acceptance,
 supersession reporting and lifecycle scheduling remain under #84/#25.
+
+## Total glob matching
+
+`GlobMatching` gives explicit syntax-tree languages and a total match decision
+through complete finite path splits. Its computed Boolean is sound and complete
+for the independent relation; ordinary wildcards/classes cannot consume path
+separators. See [glob matching](GLOB-MATCHING.md). Raw parsing, rule precedence,
+ignored-parent traversal and selection integration remain under #26.
