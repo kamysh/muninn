@@ -20,13 +20,15 @@ pass once pending use is released. It preserves the task's stored identity and
 workset through that pass. It does not replace productive cleanup with a
 caller-provided assertion that cleanup succeeded.
 
-## One task-removal and receipt-completion transaction
+## One task-removal and receipt-progress transaction
 
 The business effect rechecks readiness in its transaction snapshot. Only the
 verified task can be removed. `committedReady` proves that any committed removal
-was authorized by that check. The existing receipt update seals the removal
-together with its completed result, after checking request identity and work
-generation.
+was authorized by that check. The same transaction also checks whether any other task belongs to the original
+request. If one remains, the existing receipt advances to its next active
+checkpoint. Only removal of the last task completes the receipt. Request identity
+and work generation are checked by the existing receipt protocol; separate
+receipts are not required for internal cleanup tasks.
 
 If work or task context remains unresolved, `unresolvedKeepsWork` proves that
 the same receipt protocol returns its existing conversation continuation and
@@ -34,19 +36,22 @@ preserves the entire world. It cannot remove the task or report completion.
 
 `checkedOutcome` establishes the unchanged full cleanup contract at the
 verification boundary. The subsequent control step intentionally removes its
-own private task and finishes its receipt; it is not misrepresented as a core
+own private task and advances or finishes its receipt; it is not misrepresented as a core
 cleanup edit preserving every metadata row.
 
 General laws prove:
 
-- The actual transaction removes the task and saves the completed receipt.
+- The actual transaction removes the verified task and writes its receipt update.
+- A sibling task keeps the original request active; premature history reclamation
+  preserves that active work.
+- A completed request has no remaining owned cleanup task in the committed store.
 - Admissibility, all indexed rows, other task records and other receipts remain.
-- A completed-result retry preserves the observed world, including concurrent
-  unrelated updates.
+- Replaying an old step preserves the observed world, whether the request
+  advanced to another active checkpoint or saved its final result.
 - An interrupted attempt followed by a completed retry converges to the same
-  task removal and completed receipt.
-- Existing history reclamation keeps the compact used-ID marker and leaves the
-  task absent. It does not recreate a completed task.
+  task removal and receipt progress.
+- After the last task finishes, existing history reclamation keeps the compact
+  used-ID marker and leaves the task absent.
 
 The completion check runs again if indexing changes the store before the
 transaction. It does not substitute a changed capture or trust an earlier check.

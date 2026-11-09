@@ -326,8 +326,10 @@ the full lifecycle remain under #84.
 ## Verified cleanup-task completion
 
 `CleanupFinalization` checks the actual saved workset, then removes its private
-task and completes its existing receipt atomically. Productive cleanup constructs
-readiness; unresolved work keeps the whole store and continues the conversation.
-Retry, indexed-data preservation and compact-marker retention are proved.
+task and updates its existing receipt atomically. The original request stays
+active while sibling tasks remain and finishes only after its last task.
+Productive cleanup constructs readiness; unresolved work keeps the whole store
+and continues the conversation. Retry, indexed-data preservation and
+compact-marker retention are proved.
 See [task completion](CLEANUP-FINALIZATION.md). Policy selection, fresh-view
 production and full lifecycle scheduling remain under #84.

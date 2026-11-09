@@ -9,6 +9,7 @@ import Muninn.CleanupCompletion as Completion
 import Muninn.CleanupLoop as Loop
 import Muninn.CleanupEffects as Effects
 import Muninn.CleanupStorage as Storage
+import Muninn.CleanupObservations as Observations
 import Muninn.FiniteClosure as F
 import Muninn.ReceiptLedger as Ledger
 import Muninn.ReceiptTypes as R
@@ -58,6 +59,48 @@ module Model (excluded : List String → String → Bool) where
     module Final = Completion.Model.Contract excluded selection accepted intent
     owner = E.targetOwner selection
     captured = M.Intent.keys intent
+
+    OwnedTask : O.Record → Set
+    OwnedTask value = Σ (List ℕ) (λ keys → taskIdentity (O.body value) ≡ just (id , keys))
+
+    ownedTask? : ∀ value → Dec (OwnedTask value)
+    ownedTask? value with taskIdentity (O.body value)
+    ... | nothing = no (λ { (_ , ()) })
+    ... | just (requestId , keys) with Ledger.sameId requestId id
+    ...   | yes refl = yes (keys , refl)
+    ...   | no different = no (λ { (stored , same) → different (cong proj₁ (just-injective same)) })
+
+    OtherTask : O.World → Set
+    OtherTask world = Σ (ℕ × O.Record) (λ row →
+      row ∈ world × (proj₁ row ≢ slot × OwnedTask (proj₂ row)))
+
+    otherTask? : ∀ world → Dec (OtherTask world)
+    otherTask? world = F.choose (λ row → proj₁ row ≢ slot × OwnedTask (proj₂ row))
+      (λ row → C.both (Effects.not? (proj₁ row ≟ slot)) (ownedTask? (proj₂ row))) world
+
+    -- The original receipt remains active while ANY sibling task remains.
+    change : R.Work → O.World → Ledger.Update
+    change progress world with otherTask? world
+    ... | yes sibling = Ledger.checkpoint (R.versions progress)
+    ... | no lastTask = Ledger.complete
+
+    lastChange : ∀ progress world → ¬ OtherTask world → change progress world ≡ Ledger.complete
+    lastChange progress world lastTask with otherTask? world
+    ... | yes sibling = ⊥-elim (lastTask sibling)
+    ... | no same = refl
+
+    siblingChange : ∀ progress world → OtherTask world →
+      change progress world ≡ Ledger.checkpoint (R.versions progress)
+    siblingChange progress world sibling with otherTask? world
+    ... | yes same = refl
+    ... | no lastTask = ⊥-elim (lastTask sibling)
+
+    onlyLastCompletes : ∀ progress world → change progress world ≡ Ledger.complete → ¬ OtherTask world
+    onlyLastCompletes progress world complete with otherTask? world
+    ... | yes sibling = ⊥-elim (impossible complete)
+      where impossible : Ledger.checkpoint (R.versions progress) ≢ Ledger.complete
+            impossible ()
+    ... | no lastTask = lastTask
 
     -- The finite decision is complete because Pending already requires capture membership.
     noPending? : ∀ world → Dec (Final.NoPending world)
@@ -160,18 +203,18 @@ module Model (excluded : List String → String → Bool) where
         (Worker.Use.releasedTrace trail valid released)
         (Worker.Pass.Result.noEdit (Worker.Pass.run accepted))
 
-    unresolvedKeepsWork : ∀ before result continuation guidance input names receiptSlot progress →
+    unresolvedKeepsWork : ∀ choice before result continuation guidance input names receiptSlot progress →
       ¬ Ready before →
       Ledger.find id before ≡ just (Ledger.found receiptSlot owner (R.active input names progress)) →
-      DB.execute (Ledger.update id input (R.generation progress) Ledger.complete (effect result continuation guidance)) before ≡
+      DB.execute (Ledger.update id input (R.generation progress) choice (effect result continuation guidance)) before ≡
         (Ledger.continueDialogue receiptSlot progress (guidance continuation) , before)
-    unresolvedKeepsWork before result continuation guidance input names receiptSlot progress remaining foundHere
+    unresolvedKeepsWork choice before result continuation guidance input names receiptSlot progress remaining foundHere
       rewrite foundHere with Identity.sameRequest input input
     ... | no different = ⊥-elim (different refl)
     ... | yes same with R.generation progress ≟ R.generation progress
     ...   | no different = ⊥-elim (different refl)
     ...   | yes generation =
-      cong (λ outcome → DB.reply outcome , DB.publish before outcome) (Ledger.sealAborted receiptSlot (λ r → Ledger.recordAt {id = id} owner (R.finished input names r)) Ledger.saved (λ reason → Ledger.continueDialogue receiptSlot progress (guidance reason)) (finish result continuation) before continuation (continues before result continuation remaining))
+      cong (λ outcome → DB.reply outcome , DB.publish before outcome) (Ledger.sealAborted receiptSlot (λ r → Ledger.recordAt {id = id} owner (Ledger.updatedState choice input names progress r)) (Ledger.updatedReply choice receiptSlot progress) (λ reason → Ledger.continueDialogue receiptSlot progress (guidance reason)) (finish result continuation) before continuation (continues before result continuation remaining))
 
     module Current (before : O.World) (valid : O.Admissible before) (verified : Ready before)
       (result continuation : String) (guidance : String → D.Prompt)
@@ -181,14 +224,17 @@ module Model (excluded : List String → String → Bool) where
       (foundHere : Ledger.find id before ≡ just (Ledger.found receiptSlot owner (R.active input names progress))) where
 
       oldReceipt = Ledger.recordAt {id = id} owner (R.active input names progress)
-      newReceipt = Ledger.recordAt {id = id} owner (R.finished input names result)
+      choice = change progress before
+      nextState = Ledger.updatedState choice input names progress result
+      reply = Ledger.updatedReply choice receiptSlot progress result
+      newReceipt = Ledger.recordAt {id = id} owner nextState
       cleaned = DB.delete slot before
       after = DB.write receiptSlot newReceipt cleaned
       work = effect result continuation guidance
-      transaction = Ledger.update id input (R.generation progress) Ledger.complete work
+      transaction = DB.scan (λ world → Ledger.update id input (R.generation progress) (change progress world) work)
 
-      commits : DB.execute transaction before ≡ (Ledger.saved result , after)
-      commits = Ledger.committedUpdate id input names Ledger.complete work receiptSlot owner progress before result cleaned foundHere
+      commits : DB.execute transaction before ≡ (reply , after)
+      commits = Ledger.committedUpdate id input names choice work receiptSlot owner progress before result cleaned foundHere
         (performs before result continuation verified)
 
       -- The completion contract is proved from the current decidable store check.
@@ -201,16 +247,28 @@ module Model (excluded : List String → String → Bool) where
       cleanedValid : O.Admissible cleaned
       cleanedValid = deleteAdmissible before valid (proj₁ verified)
 
+      nextReferences : ∀ ref → ref ∈ O.references (O.body newReceipt) → ref ∈ O.references (O.body oldReceipt)
+      nextReferences ref included with otherTask? before
+      ... | yes sibling = included
+      ... | no lastTask = ⊥-elim (empty included)
+        where empty : ref ∈ [] → ⊥
+              empty ()
+
+      nextPlaced : O.Placed newReceipt
+      nextPlaced with otherTask? before
+      ... | yes sibling = tt
+      ... | no lastTask = tt
+
       afterValid : O.Admissible after
       afterValid = Storage.writeAdmissible cleaned receiptSlot oldReceipt newReceipt cleanedValid
         (otherRow before (proj₁ verified) receiptSlot oldReceipt located receiptDistinct)
-        refl refl tt (λ ref ())
+        refl refl nextPlaced nextReferences
 
       taskRemoved : DB.lookup slot after ≡ nothing
       taskRemoved = trans (DB.writePreservesOther receiptSlot slot newReceipt cleaned receiptDistinct) (DB.deleteAbsent slot before)
 
-      receiptFinished : Ledger.find id after ≡ just (Ledger.found receiptSlot owner (R.finished input names result))
-      receiptFinished = Ledger.writtenReceiptVisible id receiptSlot owner (R.finished input names result) cleaned
+      receiptWritten : Ledger.find id after ≡ just (Ledger.found receiptSlot owner nextState)
+      receiptWritten = Ledger.writtenReceiptVisible id receiptSlot owner nextState cleaned
 
       otherRecord : ∀ key value → key ≢ slot → key ≢ receiptSlot → DB.lookup key before ≡ just value → DB.lookup key after ≡ just value
       otherRecord key value notTask notReceipt found = trans
@@ -227,12 +285,26 @@ module Model (excluded : List String → String → Bool) where
         DB.lookup key after ≡ just (O.recordOf receiptOwner (O.receipt receiptData))
       otherReceipt key receiptOwner receiptData notReceipt found = otherRecord key _ (differentKind before (proj₁ verified) key _ found (λ ())) notReceipt found
 
-      retryObserved : ∀ observed → Ledger.find id observed ≡ just (Ledger.found receiptSlot owner (R.finished input names result)) →
-        DB.execute transaction observed ≡ (Ledger.saved result , observed)
-      retryObserved observed found = Ledger.finishedSkipsEffect id input names (R.generation progress) Ledger.complete work receiptSlot owner result observed found
+      retryObserved : ∀ observed → Ledger.find id observed ≡ just (Ledger.found receiptSlot owner nextState) →
+        DB.execute transaction observed ≡ (reply , observed)
+      retryObserved observed found with otherTask? before
+      ... | yes sibling = Ledger.staleStepSkipsEffect id input names (R.generation progress) (change progress observed) work
+        receiptSlot owner (R.nextWork progress (R.versions progress) result) observed found
+        (Ledger.nextGenerationDifferent (R.generation progress))
+      ... | no lastTask = Ledger.finishedSkipsEffect id input names (R.generation progress) (change progress observed) work
+        receiptSlot owner result observed found
 
-      retry : DB.execute transaction after ≡ (Ledger.saved result , after)
-      retry = retryObserved after receiptFinished
+      retry : DB.execute transaction after ≡ (reply , after)
+      retry = retryObserved after receiptWritten
+
+      siblingActive : OtherTask before →
+        Ledger.find id after ≡ just (Ledger.found receiptSlot owner (R.active input names (R.nextWork progress (R.versions progress) result)))
+      siblingActive sibling = trans receiptWritten (cong (λ c → just (Ledger.found receiptSlot owner (Ledger.updatedState c input names progress result)))
+        (siblingChange progress before sibling))
+
+      siblingReclaimKeepsWork : OtherTask before → proj₂ (DB.execute (Ledger.reclaim id) after) ≡ after
+      siblingReclaimKeepsWork sibling = Ledger.reclaimKeepsActiveWork id after receiptSlot owner input names
+        (R.nextWork progress (R.versions progress) result) (siblingActive sibling)
 
       atomicCompletion : ∀ observed → Exec.Interrupted (Exec.atomic transaction Exec.done) before observed →
         observed ≡ before ⊎ observed ≡ after
@@ -252,14 +324,34 @@ module Model (excluded : List String → String → Bool) where
       ... | inj₂ same = trans (sym (cong proj₂ (completedAtomic observed reply final completed)))
         (trans (cong (λ world → proj₂ (DB.execute transaction world)) same) (cong proj₂ retry))
 
-      retainsUsedId : Ledger.find id (proj₂ (DB.execute (Ledger.reclaim id) after)) ≡ just (Ledger.found receiptSlot O.installation R.used)
-      retainsUsedId = Ledger.reclaimRetainsId id after receiptSlot owner input names result receiptFinished
+      module Last (lastTask : ¬ OtherTask before) where
+        receiptFinished : Ledger.find id after ≡ just (Ledger.found receiptSlot owner (R.finished input names result))
+        receiptFinished = trans receiptWritten (cong (λ c → just (Ledger.found receiptSlot owner (Ledger.updatedState c input names progress result)))
+          (lastChange progress before lastTask))
 
+        noTasksRemain : ∀ key value → DB.lookup key after ≡ just value → ¬ OwnedTask value
+        noTasksRemain key value found owned with receiptSlot ≟ key
+        ... | yes refl = noOwnedReceipt (subst OwnedTask
+          (just-injective (trans (sym found) (DB.writeVisible receiptSlot newReceipt cleaned))) owned)
+          where noOwnedReceipt : ¬ OwnedTask newReceipt
+                noOwnedReceipt (_ , ())
+        ... | no notReceipt with slot ≟ key
+        ...   | yes refl = Effects.presentNotAbsent (trans (sym cleanedFound) (DB.deleteAbsent slot before))
+          where
+          cleanedFound = trans (sym (DB.writePreservesOther receiptSlot slot newReceipt cleaned notReceipt)) found
+        ...   | no notTask = lastTask ((key , value) , Observations.lookupMember before key value
+          (trans (sym (DB.deletePreservesOther slot key before notTask)) cleanedFound) ,
+          (λ same → notTask (sym same)) , owned)
+          where
+          cleanedFound = trans (sym (DB.writePreservesOther receiptSlot key newReceipt cleaned notReceipt)) found
 
-      reclaimCommits : DB.execute (Ledger.reclaim id) after ≡
-        (Ledger.explain Ledger.historyReclaimed , DB.write receiptSlot (Ledger.markerAt id) after)
-      reclaimCommits rewrite receiptFinished = refl
+        retainsUsedId : Ledger.find id (proj₂ (DB.execute (Ledger.reclaim id) after)) ≡ just (Ledger.found receiptSlot O.installation R.used)
+        retainsUsedId = Ledger.reclaimRetainsId id after receiptSlot owner input names result receiptFinished
 
-      taskAbsentAfterReclaim : DB.lookup slot (proj₂ (DB.execute (Ledger.reclaim id) after)) ≡ nothing
-      taskAbsentAfterReclaim = trans (cong (λ outcome → DB.lookup slot (proj₂ outcome)) reclaimCommits)
-        (trans (DB.writePreservesOther receiptSlot slot (Ledger.markerAt id) after receiptDistinct) taskRemoved)
+        reclaimCommits : DB.execute (Ledger.reclaim id) after ≡
+          (Ledger.explain Ledger.historyReclaimed , DB.write receiptSlot (Ledger.markerAt id) after)
+        reclaimCommits rewrite receiptFinished = refl
+
+        taskAbsentAfterReclaim : DB.lookup slot (proj₂ (DB.execute (Ledger.reclaim id) after)) ≡ nothing
+        taskAbsentAfterReclaim = trans (cong (λ outcome → DB.lookup slot (proj₂ outcome)) reclaimCommits)
+          (trans (DB.writePreservesOther receiptSlot slot (Ledger.markerAt id) after receiptDistinct) taskRemoved)
