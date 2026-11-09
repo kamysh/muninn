@@ -97,14 +97,16 @@ module Model (excluded : List String → String → Bool) where
             found : DB.lookup key before ≡ just original
             owner : O.owner value ≡ O.owner original
             role : E.classify (O.body value) ≡ E.classify (O.body original)
+            checkout : E.snapshotCheckout value ≡ E.snapshotCheckout original
 
     traceAncestor : ∀ {count before after} → Pass.Trace count before after → ∀ key value → DB.lookup key after ≡ just value → Ancestor before key value
-    traceAncestor (Pass.stop world) key value found = ancestor value found refl refl
+    traceAncestor (Pass.stop world) key value found = ancestor value found refl refl refl
     traceAncestor (Pass.edit chosen before ready later) key value found with traceAncestor later key value found
-    ... | ancestor middle present owner role with stepOrigin chosen before key middle present
+    ... | ancestor middle present owner role checkout with stepOrigin chosen before key middle present
     ... | BackNeed.origin original first same = ancestor original first
       (trans owner (Needs.projectionOwner selection before middle original same))
       (trans role (Needs.projectionClass selection before middle original same))
+      (trans checkout (Needs.projectionCheckout selection before middle original same))
 
     earlierCanonical : ∀ before after → Obs.Support selection before after → M.familyRegistered selection before ≡ true → ∀ value →
       M.project selection before (M.project selection after value) ≡ M.project selection after value
@@ -165,7 +167,7 @@ module Model (excluded : List String → String → Bool) where
       with DB.lookup key after in observed
     ... | nothing = refl
     ... | just retained with traceAncestor trail key retained observed
-    ...   | ancestor original first sameOwner sameRole with just-injective (trans (sym found) first)
+    ...   | ancestor original first sameOwner sameRole sameCheckout with just-injective (trans (sym found) first)
     ...     | refl = trans (sym observed) (M.Complete.reclaimed completed key retained captured observed
         (trans sameOwner owned) (trans (cong E.indexedRole sameRole) indexed)
         (unneededPersists trail valid key retained observed (trans sameOwner owned) (trans (cong E.indexedRole sameRole) indexed) unneeded))

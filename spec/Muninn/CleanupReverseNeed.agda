@@ -156,6 +156,7 @@ module Model (excluded : List String → String → Bool) where
     parentBackward (O.recordOf owner (O.coordination _)) ref ()
     parentBackward (O.recordOf owner (O.schemaResource _)) ref ()
     parentBackward (O.recordOf owner (O.graphResource _ _ _)) ref ()
+    parentBackward (O.recordOf owner (O.publishedView _ _)) ref ()
     parentBackward (O.recordOf owner (O.logFile _)) ref ()
     parentBackward (O.recordOf owner (O.bootstrapStage _)) ref ()
     parentBackward (O.recordOf owner (O.chunk version payload)) ref parent = parent
@@ -167,6 +168,14 @@ module Model (excluded : List String → String → Bool) where
     ... | false with parent
     ...   | ()
 
+    resolveBackward : ∀ source ref → O.Resolves after source ref → O.Resolves before source ref
+    resolveBackward source ref resolved with origins (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved)
+    ... | origin original present same = record
+      { value = original; found = present
+      ; rightKind = trans (sym (Needs.projectionKind selection before (O.Resolves.value resolved) original same)) (O.Resolves.rightKind resolved)
+      ; rightOwner = subst (O.MayReference source)
+          (Needs.projectionOwner selection before (O.Resolves.value resolved) original same) (O.Resolves.rightOwner resolved) }
+
     neededBackward : ∀ key → M.Needed selection after key → M.Needed selection before key
     neededBackward key (M.root .key value found rooted) with origins key value found
     ... | origin original present same = M.root key original present (trans
@@ -176,16 +185,9 @@ module Model (excluded : List String → String → Bool) where
       with origins source value found
     ... | origin original present same = M.required (neededBackward source previous)
       (M.reference source original ref present (refsBackward original value ref same included)
-        record
-          { value = O.Resolves.value resolved
-          ; found = Obs.Support.backwardPlain support (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved) nonSnapshot
-          ; rightKind = O.Resolves.rightKind resolved
-          ; rightOwner = subst (λ owner → O.MayReference owner (O.owner (O.Resolves.value resolved)))
-              (Needs.projectionOwner selection before value original same) (O.Resolves.rightOwner resolved) })
-      where
-      nonSnapshot : O.kind (O.body (O.Resolves.value resolved)) ≢ O.structuralSnapshotK
-      nonSnapshot isSnapshot = All.lookup (Targets.permanentTargets selection after value) included
-        (trans (sym (O.Resolves.rightKind resolved)) isSnapshot)
+        (subst (λ sourceOwner → O.Resolves before sourceOwner ref)
+          (Needs.projectionOwner selection before value original same)
+          (resolveBackward (O.owner value) ref resolved)))
     neededBackward key (M.required previous (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
       M.required (neededBackward parent previous)
         (M.attachment parent parentValue child childValue

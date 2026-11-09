@@ -43,6 +43,7 @@ kindIndexed O.vectorK = true
 kindIndexed O.symbolK = true
 kindIndexed O.edgeK = true
 kindIndexed O.structuralSnapshotK = true
+kindIndexed O.publishedViewK = true
 kindIndexed O.legacyK = true
 kindIndexed O.stagingK = true
 kindIndexed O.acceptedWorkK = false
@@ -96,6 +97,7 @@ bodyIndexed (O.recordOf owner (O.modelCache _)) = refl
 bodyIndexed (O.recordOf owner (O.coordination _)) = refl
 bodyIndexed (O.recordOf owner (O.schemaResource _)) = refl
 bodyIndexed (O.recordOf owner (O.graphResource _ _ _)) = refl
+bodyIndexed (O.recordOf owner (O.publishedView _ _)) = refl
 bodyIndexed (O.recordOf owner (O.logFile _)) = refl
 bodyIndexed (O.recordOf owner (O.bootstrapStage _)) = refl
 
@@ -148,6 +150,7 @@ module Model (excluded : List String → String → Bool) where
   unindexedTargets selection world (O.recordOf owner (O.coordination _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.schemaResource _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.graphResource _ _ _)) ()
+  unindexedTargets selection world (O.recordOf owner (O.publishedView _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.logFile _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.bootstrapStage _)) proof = []
 
@@ -196,6 +199,7 @@ module Model (excluded : List String → String → Bool) where
   parentIndexed selection world (O.recordOf owner (O.coordination _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.schemaResource _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.graphResource _ _ _)) ref ()
+  parentIndexed selection world (O.recordOf owner (O.publishedView _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.logFile _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.bootstrapStage _)) ref ()
 
@@ -268,13 +272,14 @@ module Model (excluded : List String → String → Bool) where
     noRoots key value (stored , present , owned , indexed) found rooted with just-injective (trans (sym present) found)
     ... | refl = Effects.trueIsNotFalse (trans (sym (ownedRootRegistration selection world value owned indexed rooted)) registered)
 
-  constantNotSnapshot : ∀ keys kind → kind ≢ O.structuralSnapshotK →
-    All (λ ref → O.expected ref ≢ O.structuralSnapshotK) (Data.List.map (λ key → O.reference key kind) keys)
-  constantNotSnapshot Data.List.[] kind distinct = []
-  constantNotSnapshot (key Data.List.∷ keys) kind distinct = distinct ∷ constantNotSnapshot keys kind distinct
+  constantOtherTarget : ∀ {A : Set} keys kind → kind ≢ O.structuralSnapshotK →
+    All (λ ref → O.expected ref ≡ O.structuralSnapshotK → A) (Data.List.map (λ key → O.reference key kind) keys)
+  constantOtherTarget Data.List.[] kind distinct = []
+  constantOtherTarget (key Data.List.∷ keys) kind distinct =
+    (λ same → ⊥-elim (distinct same)) ∷ constantOtherTarget keys kind distinct
 
   permanentTargets : ∀ selection world value →
-    All (λ ref → O.expected ref ≢ O.structuralSnapshotK) (M.referencesFor M.permanent selection world value)
+    All (λ ref → O.expected ref ≡ O.structuralSnapshotK → O.kind (O.body value) ≡ O.publishedViewK) (M.referencesFor M.permanent selection world value)
 
   permanentTargets selection world (O.recordOf owner (O.registration _)) = []
   permanentTargets selection world (O.recordOf owner (O.checkout _)) = []
@@ -297,9 +302,9 @@ module Model (excluded : List String → String → Bool) where
   permanentTargets selection world (O.recordOf owner (O.edge _ _ _)) = (λ ()) ∷ (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) with E.ownerEqual owner (E.targetOwner selection)
   ... | yes same = (λ ()) ∷ Order.join
-    (constantNotSnapshot (E.filterKeys (M.symbolVisible selection world owner selected) nodes) O.symbolK (λ ()))
-    (constantNotSnapshot (E.filterKeys (M.edgeVisible selection world owner selected) edges) O.edgeK (λ ()))
-  ... | no different = (λ ()) ∷ Order.join (constantNotSnapshot nodes O.symbolK (λ ())) (constantNotSnapshot edges O.edgeK (λ ()))
+    (constantOtherTarget (E.filterKeys (M.symbolVisible selection world owner selected) nodes) O.symbolK (λ ()))
+    (constantOtherTarget (E.filterKeys (M.edgeVisible selection world owner selected) edges) O.edgeK (λ ()))
+  ... | no different = (λ ()) ∷ Order.join (constantOtherTarget nodes O.symbolK (λ ())) (constantOtherTarget edges O.edgeK (λ ()))
   permanentTargets selection world (O.recordOf owner (O.legacy _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.staging _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.acceptedWork _ _)) = []
@@ -316,6 +321,7 @@ module Model (excluded : List String → String → Bool) where
   permanentTargets selection world (O.recordOf owner (O.coordination _)) = []
   permanentTargets selection world (O.recordOf owner (O.schemaResource _)) = []
   permanentTargets selection world (O.recordOf owner (O.graphResource _ _ _)) = []
+  permanentTargets selection world (O.recordOf owner (O.publishedView _ _)) = (λ ()) ∷ (λ same → refl) ∷ []
   permanentTargets selection world (O.recordOf owner (O.logFile _)) = []
   permanentTargets selection world (O.recordOf owner (O.bootstrapStage _)) = []
 
@@ -363,5 +369,6 @@ module Model (excluded : List String → String → Bool) where
   parentNotSnapshot selection world (O.recordOf owner (O.coordination _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.schemaResource _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.graphResource _ _ _)) ref ()
+  parentNotSnapshot selection world (O.recordOf owner (O.publishedView _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.logFile _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.bootstrapStage _)) ref ()

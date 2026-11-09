@@ -105,13 +105,13 @@ module Model (excluded : List String → String → Bool) where
     absorbProjection : ∀ before middle source selected nodes edges payload value → O.Admissible before → Obs.Support selection before middle →
       DB.lookup source before ≡ just (O.recordOf (E.targetOwner selection) (O.structuralSnapshot selected nodes edges payload)) →
       M.Needed selection before source → O.owner value ≡ E.targetOwner selection →
-      O.kind (O.body value) ≡ O.structuralSnapshotK → E.classify (O.body value) ≡ E.snapshot selected →
+      O.kind (O.body value) ≡ O.structuralSnapshotK → E.snapshotCheckout value ≡ just selected →
       (∀ key → key ∈ E.snapshotNodes value → key ∈ nodes) → (∀ key → key ∈ E.snapshotEdges value → key ∈ edges) →
       M.project selection before (M.project selection middle value) ≡ M.project selection before value
-    absorbProjection before middle source selected nodes edges payload value valid support found needed owner kind role nodeSubset edgeSubset
+    absorbProjection before middle source selected nodes edges payload value valid support found needed owner kind checkout nodeSubset edgeSubset
       with Observations.snapshotView value
     ... | Observations.plain nonSnapshot = ⊥-elim (nonSnapshot kind)
-    ... | Observations.snapshot storedOwner storedSelected ns es text with owner | role
+    ... | Observations.snapshot storedOwner storedSelected ns es text with owner | checkout
     ...   | refl | refl = trans (cong (M.project selection before) (targetProjection middle selected ns es text))
         (trans (targetProjection before selected (E.filterKeys (M.symbolVisible selection middle (E.targetOwner selection) selected) ns)
           (E.filterKeys (M.edgeVisible selection middle (E.targetOwner selection) selected) es) text)
@@ -181,20 +181,20 @@ module Model (excluded : List String → String → Bool) where
       middleOwner = Needs.projectionOwner selection before middleValue original firstProjection
       middleKind : O.kind (O.body middleValue) ≡ O.structuralSnapshotK
       middleKind = Needs.projectionKind selection before middleValue original firstProjection
-      middleClass : E.classify (O.body middleValue) ≡ E.snapshot selected
-      middleClass = Needs.projectionClass selection before middleValue original firstProjection
+      middleCheckout : E.snapshotCheckout middleValue ≡ just selected
+      middleCheckout = Needs.projectionCheckout selection before middleValue original firstProjection
       finalOwner : O.owner finalValue ≡ E.targetOwner selection
       finalOwner = trans (Needs.projectionOwner selection middle finalValue middleValue laterProjection) middleOwner
       finalKind : O.kind (O.body finalValue) ≡ O.structuralSnapshotK
       finalKind = trans (Needs.projectionKind selection middle finalValue middleValue laterProjection) middleKind
-      finalClass : E.classify (O.body finalValue) ≡ E.snapshot selected
-      finalClass = trans (Needs.projectionClass selection middle finalValue middleValue laterProjection) middleClass
+      finalCheckout : E.snapshotCheckout finalValue ≡ just selected
+      finalCheckout = trans (Needs.projectionCheckout selection middle finalValue middleValue laterProjection) middleCheckout
       firstAbsorption : M.project selection before (M.project selection middle middleValue) ≡ M.project selection before middleValue
       firstAbsorption = absorbProjection before middle key selected nodes edges payload middleValue valid supported found needed
-        middleOwner middleKind middleClass firstNodes firstEdges
+        middleOwner middleKind middleCheckout firstNodes firstEdges
       finalAbsorption : M.project selection before (M.project selection middle finalValue) ≡ M.project selection before finalValue
       finalAbsorption = absorbProjection before middle key selected nodes edges payload finalValue valid supported found needed
-        finalOwner finalKind finalClass
+        finalOwner finalKind finalCheckout
         (λ member present → firstNodes member (laterNodes member present))
         (λ member present → firstEdges member (laterEdges member present))
 

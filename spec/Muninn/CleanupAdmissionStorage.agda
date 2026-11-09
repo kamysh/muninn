@@ -60,6 +60,7 @@ weakIds (O.modelCache _) = []
 weakIds (O.coordination _) = []
 weakIds (O.schemaResource _) = []
 weakIds (O.graphResource _ _ _) = []
+weakIds (O.publishedView _ _) = []
 weakIds (O.logFile _) = []
 weakIds (O.bootstrapStage _) = []
 

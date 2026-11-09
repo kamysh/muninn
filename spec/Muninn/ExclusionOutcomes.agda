@@ -81,7 +81,8 @@ classify (O.posting chunk _) = attached (O.reference chunk O.chunkK) content
 classify (O.vector chunk _) = attached (O.reference chunk O.chunkK) content
 classify (O.symbol version path _) = attached (O.reference version O.fileVersionK) (sourcePath version path)
 classify (O.edge _ _ _) = artifact
-classify (O.structuralSnapshot selected _ _ _) = snapshot selected
+classify (O.structuralSnapshot _ _ _ _) = artifact
+classify (O.publishedView selected _) = snapshot selected
 classify (O.legacy path _) = legacyFile path
 classify (O.staging version _) = attached (O.reference version O.fileVersionK) transient
 classify (O.acceptedWork _ _) = holder
@@ -100,6 +101,10 @@ classify (O.schemaResource _) = administrative
 classify (O.graphResource selected inUse _) = graphContainer selected inUse
 classify (O.logFile _) = administrative
 classify (O.bootstrapStage _) = administrative
+
+snapshotCheckout : O.Record → Maybe ℕ
+snapshotCheckout (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) = just selected
+snapshotCheckout _ = nothing
 
 indexedRole : Role → Bool
 indexedRole administrative = false

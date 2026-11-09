@@ -54,6 +54,7 @@ rank O.vectorK = 2
 rank O.symbolK = 1
 rank O.edgeK = 2
 rank O.structuralSnapshotK = 3
+rank O.publishedViewK = 4
 rank O.legacyK = 0
 rank O.stagingK = 1
 rank O.acceptedWorkK = 0
@@ -123,6 +124,8 @@ indexedReferencesLower (O.recordOf owner (O.structuralSnapshot selected nodes ed
 indexedReferencesLower (O.recordOf owner (O.legacy _ _)) proof = []
 indexedReferencesLower (O.recordOf owner (O.staging _ _)) proof = s≤s z≤n ∷ []
 indexedReferencesLower (O.recordOf owner (O.graphResource _ _ _)) proof = []
+indexedReferencesLower (O.recordOf owner (O.publishedView _ _)) proof =
+  s≤s z≤n ∷ s≤s (s≤s (s≤s (s≤s z≤n))) ∷ []
 
 rankMaybe : Maybe O.Record → ℕ
 rankMaybe nothing = zero

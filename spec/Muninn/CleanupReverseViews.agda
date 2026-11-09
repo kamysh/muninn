@@ -97,6 +97,7 @@ module Model (excluded : List String → String → Bool) where
     deltaRoot owner selected path (O.recordOf storedOwner (O.coordination _)) registered live included ()
     deltaRoot owner selected path (O.recordOf storedOwner (O.schemaResource _)) registered live included ()
     deltaRoot owner selected path (O.recordOf storedOwner (O.graphResource _ _ _)) registered live included ()
+    deltaRoot owner selected path (O.recordOf storedOwner (O.publishedView _ _)) registered live included ()
     deltaRoot owner selected path (O.recordOf storedOwner (O.logFile _)) registered live included ()
     deltaRoot owner selected path (O.recordOf storedOwner (O.bootstrapStage _)) registered live included ()
     deltaRoot owner selected path (O.recordOf storedOwner (O.deltaBinding checkout version storedPath)) registered live included positive
@@ -164,6 +165,7 @@ module Model (excluded : List String → String → Bool) where
     bindingBackward owner selected path version (O.recordOf storedOwner (O.coordination _)) registered live included ()
     bindingBackward owner selected path version (O.recordOf storedOwner (O.schemaResource _)) registered live included ()
     bindingBackward owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) registered live included ()
+    bindingBackward owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) registered live included ()
     bindingBackward owner selected path version (O.recordOf storedOwner (O.logFile _)) registered live included ()
     bindingBackward owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) registered live included ()
     bindingBackward owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) registered live included positive
@@ -225,6 +227,7 @@ module Model (excluded : List String → String → Bool) where
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.coordination _)) registered ()
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.schemaResource _)) registered ()
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.graphResource _ _ _)) registered ()
+    checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.publishedView _ _)) registered ()
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.logFile _)) registered ()
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.bootstrapStage _)) registered ()
     checkoutVersionBackward owner path version key (O.recordOf storedOwner (O.checkout info)) registered positive
@@ -280,6 +283,7 @@ module Model (excluded : List String → String → Bool) where
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.coordination _)) registered ()
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.schemaResource _)) registered ()
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.graphResource _ _ _)) registered ()
+    symbolObservationBackward owner selected (O.recordOf storedOwner (O.publishedView _ _)) registered ()
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.logFile _)) registered ()
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.bootstrapStage _)) registered ()
     symbolObservationBackward owner selected (O.recordOf storedOwner (O.symbol version path payload)) registered positive
@@ -334,6 +338,7 @@ module Model (excluded : List String → String → Bool) where
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.coordination _)) registered ()
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.schemaResource _)) registered ()
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.graphResource _ _ _)) registered ()
+    edgeObservationBackward owner selected (O.recordOf storedOwner (O.publishedView _ _)) registered ()
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.logFile _)) registered ()
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.bootstrapStage _)) registered ()
     edgeObservationBackward owner selected (O.recordOf storedOwner (O.edge source target payload)) registered positive

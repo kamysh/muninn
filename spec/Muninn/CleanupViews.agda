@@ -79,6 +79,7 @@ module Model (excluded : List String → String → Bool) where
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.coordination _)) ()
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.schemaResource _)) ()
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) ()
+    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) ()
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.logFile _)) ()
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) ()
     bindingIdentity world owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) positive =
@@ -122,6 +123,7 @@ module Model (excluded : List String → String → Bool) where
     bindingRoot world selected path version (O.recordOf storedOwner (O.coordination _)) registered live included ()
     bindingRoot world selected path version (O.recordOf storedOwner (O.schemaResource _)) registered live included ()
     bindingRoot world selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) registered live included ()
+    bindingRoot world selected path version (O.recordOf storedOwner (O.publishedView _ _)) registered live included ()
     bindingRoot world selected path version (O.recordOf storedOwner (O.logFile _)) registered live included ()
     bindingRoot world selected path version (O.recordOf storedOwner (O.bootstrapStage _)) registered live included ()
     bindingRoot world selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) registered live included positive
@@ -171,6 +173,7 @@ module Model (excluded : List String → String → Bool) where
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.coordination _)) support ()
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.schemaResource _)) support ()
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) support ()
+    bindingForward before after owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) support ()
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.logFile _)) support ()
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) support ()
     bindingForward before after owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) support positive =
@@ -242,6 +245,7 @@ module Model (excluded : List String → String → Bool) where
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.coordination _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.schemaResource _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.graphResource _ _ _)) ()
+    publishedMetadata world owner path version key (O.recordOf storedOwner (O.publishedView _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.logFile _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.bootstrapStage _)) ()
 
@@ -283,6 +287,7 @@ module Model (excluded : List String → String → Bool) where
     publishedForward before after owner path version key (O.recordOf storedOwner (O.coordination _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.schemaResource _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.graphResource _ _ _)) support registered ()
+    publishedForward before after owner path version key (O.recordOf storedOwner (O.publishedView _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.logFile _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.bootstrapStage _)) support registered ()
 
@@ -346,6 +351,7 @@ module Model (excluded : List String → String → Bool) where
     symbolForward before after selected key (O.recordOf storedOwner (O.coordination _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.schemaResource _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.graphResource _ _ _)) support found needed ()
+    symbolForward before after selected key (O.recordOf storedOwner (O.publishedView _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.logFile _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.bootstrapStage _)) support found needed ()
 
@@ -412,6 +418,7 @@ module Model (excluded : List String → String → Bool) where
     edgeForward before after selected key (O.recordOf storedOwner (O.coordination _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.schemaResource _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.graphResource _ _ _)) valid support found needed ()
+    edgeForward before after selected key (O.recordOf storedOwner (O.publishedView _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.logFile _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.bootstrapStage _)) valid support found needed ()
 
@@ -471,5 +478,6 @@ module Model (excluded : List String → String → Bool) where
     parentPositive before after key (O.recordOf owner (O.coordination _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.schemaResource _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.graphResource _ _ _)) ref support found needed ()
+    parentPositive before after key (O.recordOf owner (O.publishedView _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.logFile _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.bootstrapStage _)) ref support found needed ()

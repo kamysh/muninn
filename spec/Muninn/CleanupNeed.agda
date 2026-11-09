@@ -45,6 +45,12 @@ module Model (excluded : List String → String → Bool) where
   projectionKind selection world retained original same = trans (sym (Store.projectKind selection world retained))
     (trans (cong (λ v → O.kind (O.body v)) same) (Store.projectKind selection world original))
 
+  projectionCheckout : ∀ selection world retained original →
+    M.project selection world retained ≡ M.project selection world original →
+    E.snapshotCheckout retained ≡ E.snapshotCheckout original
+  projectionCheckout selection world retained original same = trans (sym (Store.projectCheckout selection world retained))
+    (trans (cong E.snapshotCheckout same) (Store.projectCheckout selection world original))
+
   projectionClass : ∀ selection world retained original → M.project selection world retained ≡ M.project selection world original → E.classify (O.body retained) ≡ E.classify (O.body original)
   projectionClass selection world retained original same = trans (sym (projectClass selection world retained))
     (trans (cong (λ v → E.classify (O.body v)) same) (projectClass selection world original))
@@ -142,6 +148,17 @@ module Model (excluded : List String → String → Bool) where
   ... | Observations.snapshot owner selected nodes edges payload with parent
   ...   | ()
 
+  neededResolves : ∀ selection before after source ref →
+    M.Safety selection before after → M.Needed selection before (O.target ref) →
+    O.Resolves before source ref → O.Resolves after source ref
+  neededResolves selection before after source ref safe needed resolved
+    with M.Safety.needed safe (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved) needed
+  ... | retained , present , same , nodes , edges = record
+    { value = retained; found = present
+    ; rightKind = trans (projectionKind selection before retained (O.Resolves.value resolved) same) (O.Resolves.rightKind resolved)
+    ; rightOwner = subst (O.MayReference source)
+        (sym (projectionOwner selection before retained (O.Resolves.value resolved) same)) (O.Resolves.rightOwner resolved) }
+
   neededSurvives : ∀ selection before after key → O.Admissible before → Obs.Support selection before after →
     M.Needed selection before key → M.Needed selection after key
   neededSurvives selection before after key valid support needed@(M.root .key value found rooted)
@@ -153,17 +170,9 @@ module Model (excluded : List String → String → Bool) where
     with M.Safety.needed (Obs.Support.safe support) source value found previous
   ... | retained , present , same , nodes , edges = M.required (neededSurvives selection before after source valid support previous)
       (M.reference source retained ref present (referencePersist selection before after value retained ref valid support needed same included)
-        record
-          { value = O.Resolves.value resolved
-          ; found = Obs.neededSame selection before after (O.target ref) (O.Resolves.value resolved) (Obs.Support.safe support)
-              (O.Resolves.found resolved) needed targetNonSnapshot
-          ; rightKind = O.Resolves.rightKind resolved
-          ; rightOwner = subst (λ owner → O.MayReference owner (O.owner (O.Resolves.value resolved)))
-              (sym (projectionOwner selection before retained value same)) (O.Resolves.rightOwner resolved) })
-    where
-    targetNonSnapshot : O.kind (O.body (O.Resolves.value resolved)) ≢ O.structuralSnapshotK
-    targetNonSnapshot isSnapshot = All.lookup (Target.permanentTargets selection before value) included
-      (trans (sym (O.Resolves.rightKind resolved)) isSnapshot)
+        (subst (λ sourceOwner → O.Resolves after sourceOwner ref)
+          (sym (projectionOwner selection before retained value same))
+          (neededResolves selection before after (O.owner value) ref (Obs.Support.safe support) needed resolved)))
   neededSurvives selection before after key valid support needed@(M.required previous
     (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
     M.required (neededSurvives selection before after parent valid support previous)

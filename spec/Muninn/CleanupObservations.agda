@@ -84,6 +84,7 @@ snapshotView (O.recordOf owner (O.modelCache _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.coordination _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.schemaResource _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.graphResource _ _ _)) = plain (λ ())
+snapshotView (O.recordOf owner (O.publishedView _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.logFile _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.bootstrapStage _)) = plain (λ ())
 
@@ -129,6 +130,7 @@ module Model (excluded : List String → String → Bool) where
   indexedIgnoresControls selection (O.recordOf owner (O.coordination _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.schemaResource _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.graphResource _ _ _)) indexed = refl , refl , refl
+  indexedIgnoresControls selection (O.recordOf owner (O.publishedView _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.logFile _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.bootstrapStage _)) ()
 

@@ -46,7 +46,7 @@ module Model (excluded : List String → String → Bool) where
 
     coveredTrace : ∀ {count before after} → Pass.Trace count before after → Covered before → Covered after
     coveredTrace trail covered key value found owned with Aligned.traceAncestor trail key value found
-    ... | Aligned.ancestor original first owner role = covered key original first (trans (sym owner) owned)
+    ... | Aligned.ancestor original first owner role checkout = covered key original first (trans (sym owner) owned)
 
     controlRooted : ∀ world role → E.indexedRole role ≡ false → M.rootedRole selection world role ≡ true
     controlRooted world E.administrative proof = refl

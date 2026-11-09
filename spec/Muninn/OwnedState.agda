@@ -28,7 +28,7 @@ data Owner : Set where
 data Kind : Set where
   registrationK checkoutK creationIntentK defaultsK policyVersionK currentPolicyK : Kind
   noteK notePostingK noteVectorK fileVersionK baseBindingK deltaBindingK basePointerK : Kind
-  chunkK postingK vectorK symbolK edgeK structuralSnapshotK legacyK stagingK : Kind
+  chunkK postingK vectorK symbolK edgeK structuralSnapshotK publishedViewK legacyK stagingK : Kind
   acceptedWorkK cleanupWorkK activeReaderK continuationK receiptK : Kind
   migrationK usageK bootstrapK modelCacheK coordinationK schemaResourceK graphResourceK logFileK bootstrapStageK : Kind
 
@@ -66,6 +66,7 @@ data Body : Set where
   chunk posting vector : ℕ → String → Body
   symbol : ℕ → String → String → Body -- version, source path, payload
   edge : ℕ → ℕ → String → Body
+  publishedView : ℕ → ℕ → Body
   structuralSnapshot : ℕ → List ℕ → List ℕ → String → Body
   legacy : String → String → Body -- path, remaining payload
   staging : ℕ → String → Body
@@ -96,6 +97,7 @@ kind (posting _ _) = postingK
 kind (vector _ _) = vectorK
 kind (symbol _ _ _) = symbolK
 kind (edge _ _ _) = edgeK
+kind (publishedView _ _) = publishedViewK
 kind (structuralSnapshot _ _ _ _) = structuralSnapshotK
 kind (legacy _ _) = legacyK
 kind (staging _ _) = stagingK
@@ -134,6 +136,7 @@ references (posting source _) = reference source chunkK ∷ []
 references (vector source _) = reference source chunkK ∷ []
 references (symbol source _ _) = reference source fileVersionK ∷ []
 references (edge source target _) = reference source symbolK ∷ reference target symbolK ∷ []
+references (publishedView selected snapshot) = reference selected checkoutK ∷ reference snapshot structuralSnapshotK ∷ []
 references (structuralSnapshot selected nodes edges _) = reference selected checkoutK ∷
   (map (λ v → reference v symbolK) nodes ++ map (λ v → reference v edgeK) edges)
 references (legacy _ _) = []
@@ -198,6 +201,7 @@ Placed (recordOf o (posting _ _)) = LocalTo o
 Placed (recordOf o (vector _ _)) = LocalTo o
 Placed (recordOf o (symbol _ _ _)) = LocalTo o
 Placed (recordOf o (edge _ _ _)) = LocalTo o
+Placed (recordOf o (publishedView _ _)) = LocalTo o
 Placed (recordOf o (structuralSnapshot _ _ _ _)) = LocalTo o
 Placed (recordOf o (legacy _ _)) = LocalTo o
 Placed (recordOf o (staging _ _)) = LocalTo o
@@ -256,6 +260,7 @@ executionBookkeeping vectorK = false
 executionBookkeeping symbolK = false
 executionBookkeeping edgeK = false
 executionBookkeeping structuralSnapshotK = false
+executionBookkeeping publishedViewK = false
 executionBookkeeping legacyK = false
 executionBookkeeping stagingK = false
 executionBookkeeping acceptedWorkK = true
