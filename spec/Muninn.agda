@@ -31,6 +31,7 @@ import Muninn.Recovery
 import Muninn.Workset
 import Muninn.PublicationVisibility
 import Muninn.ViewPublication
+import Muninn.CurrentReader
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
