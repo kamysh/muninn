@@ -40,6 +40,7 @@ import Muninn.GlobTokens
 import Muninn.GlobBody
 import Muninn.RulePatterns
 import Muninn.RuleScope
+import Muninn.OrderedSelection
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews

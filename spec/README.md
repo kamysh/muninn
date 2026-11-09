@@ -450,3 +450,12 @@ bodies; `RuleScope` decides scoped and ancestor matching through complete finite
 path splits. General laws prove recognition, unique compiled meaning and sound/
 complete matching. See [rule framing and scope](RULE-PATTERNS.md). Entry admission,
 Git/Muninn precedence, traversal and selection integration remain under #26.
+
+## Ordered selection from compiled rules
+
+`OrderedSelection` compiles complete ordered lists and resolves actual certified
+matches from the Git default through frozen-default and family overrides. General
+laws establish matching-tail precedence, unmatched preservation, deterministic
+family decisions and vendor isolation. See [ordered selection](ORDERED-SELECTION.md).
+Entry/Git admission, traversal and final indexing/search/cleanup integration remain
+under #26.

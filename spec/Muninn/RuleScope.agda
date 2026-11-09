@@ -15,7 +15,7 @@ open import Data.Unit using (tt)
 open import Data.Empty using (⊥-elim)
 open import Relation.Nullary using (Dec; yes; no)
 open import Relation.Nullary.Decidable using (map′; _×-dec_; does; toWitness; isYes≗does; dec-true)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; subst)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; subst; cong)
 
 scopedGlob : ∀ {input} → R.Compiled input → G.Glob
 scopedGlob rule with R.rooted rule
@@ -97,3 +97,36 @@ matchSound rule word directory accepted = toWitness {a? = pathMatches? rule word
 matchComplete : ∀ {input} (rule : R.Compiled input) word directory →
   PathMatches rule word directory → matches rule word directory ≡ true
 matchComplete rule word directory matched = dec-true (pathMatches? rule word directory) matched
+
+
+scopeTransfer : ∀ {firstInput secondInput word} {first : R.Compiled firstInput} {second : R.Compiled secondInput} →
+  R.semantic first ≡ R.semantic second → ScopeMatches first word → ScopeMatches second word
+scopeTransfer same (atRoot root matched) = atRoot
+  (trans (sym (cong (λ meaning → proj₁ (proj₂ meaning)) same)) root)
+  (subst (λ glob → G.Matches glob _) (cong (λ meaning → proj₂ (proj₂ (proj₂ meaning))) same) matched)
+scopeTransfer same (atDepth root prefix suffix joined directories matched) = atDepth
+  (trans (sym (cong (λ meaning → proj₁ (proj₂ meaning)) same)) root) prefix suffix joined directories
+  (subst (λ glob → G.Matches glob _) (cong (λ meaning → proj₂ (proj₂ (proj₂ meaning))) same) matched)
+
+directTransfer : ∀ {firstInput secondInput word directory} {first : R.Compiled firstInput} {second : R.Compiled secondInput} →
+  R.semantic first ≡ R.semantic second → Direct first word directory → Direct second word directory
+directTransfer same (allowed , matched) =
+  subst (λ restriction → DirectoryOK restriction _) (cong (λ meaning → proj₁ (proj₂ (proj₂ meaning))) same) allowed ,
+  scopeTransfer same matched
+
+pathTransfer : ∀ {firstInput secondInput word directory} {first : R.Compiled firstInput} {second : R.Compiled secondInput} →
+  R.semantic first ≡ R.semantic second → PathMatches first word directory → PathMatches second word directory
+pathTransfer same (current matched) = current (directTransfer same matched)
+pathTransfer same (ancestor prefix rest joined matched) = ancestor prefix rest joined (directTransfer same matched)
+
+sameDecision : ∀ {P Q : Set} (first : Dec P) (second : Dec Q) → (P → Q) → (Q → P) → does first ≡ does second
+sameDecision (yes first) (yes second) forward backward = refl
+sameDecision (yes first) (no absent) forward backward = ⊥-elim (absent (forward first))
+sameDecision (no absent) (yes second) forward backward = ⊥-elim (absent (backward second))
+sameDecision (no first) (no second) forward backward = refl
+
+matchesStable : ∀ {firstInput secondInput} (first : R.Compiled firstInput) (second : R.Compiled secondInput) word directory →
+  R.semantic first ≡ R.semantic second → matches first word directory ≡ matches second word directory
+matchesStable first second word directory same = sameDecision
+  (pathMatches? first word directory) (pathMatches? second word directory)
+  (pathTransfer same) (pathTransfer (sym same))
