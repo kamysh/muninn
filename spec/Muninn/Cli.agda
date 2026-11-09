@@ -34,10 +34,6 @@ BootstrapExists (just _) = ⊤
 RegisteredFamily : Registry → FilePath → Set
 RegisteredFamily registry path = Σ FamilyId (λ family → registry path ≡ just family)
 
--- These are semantic intents, not a decision about concrete CLI flag spelling.
-data RemovalScope : Set where
-  CheckoutOnly EntireFamily : RemovalScope
-
 -- Preflight is a cheap filesystem inventory: it does not parse or embed.
 record DirectoryCost : Set where
   field path : FilePath
@@ -78,7 +74,7 @@ data Command : Set where
   CmdReindex : FilePath → Command
   CmdPause : FilePath → Command
   CmdResume : FilePath → Command
-  CmdRemove : RemovalScope → FilePath → Command
+  CmdRemove : FilePath → Command
   CmdStatus : Maybe FilePath → Command
 
 IsBootstrap : Command → Set
@@ -108,10 +104,6 @@ ApplyPre : FamilyId → ℕ → FamilyPolicy → Set
 ApplyPre expectedFamily expected current =
   (expectedFamily ≡ FamilyPolicy.family current) × (expected ≡ FamilyPolicy.revision current)
 
--- Directory removal affects its mapping. Explicit family removal affects all
--- mappings; Storage additionally requires reference safety before schema drop.
-RemoveCheckoutPost : Registry → FilePath → Set
-RemoveCheckoutPost registry path = registry path ≡ nothing
-
+-- Existing remove unregisters the entire family. Reindex remains a rebuild.
 RemoveFamilyPost : Registry → FamilyId → Set
 RemoveFamilyPost registry family = ∀ path → ¬ (registry path ≡ just family)

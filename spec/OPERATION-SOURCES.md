@@ -61,7 +61,7 @@ the agreed corrective conversation is still missing (#20, #48).
 | `start PATH [--json] [--input -]` | `writes.rs`: guarded explicit first-start authorization and indexing (#35, #49) |
 | `reindex PATH`, `reindex --all`, `reindex PATH --detach` | Foreground work, fleet iteration or handoff to daemon; compatible work reuse (#29, #35) |
 | `pause PATH`, `resume PATH` | Saved indexing authorization/control (#35) |
-| `remove PATH [--yes]` | `removal.rs`, `store::delete_repo`: confirmation and removal scope (#34) |
+| `remove PATH [--yes]` | `removal.rs`, `store::delete_repo`: existing family unregistration and code-index deletion (#34) |
 | `status`, `status PATH` | Fleet/detail status and truthful progress (#47) |
 | `usage [--days N]` | Saved MCP usage query (#47) |
 | Help/version for all three binaries | Clap-owned metadata output; no index or configuration mutation (#49, #50) |
@@ -116,7 +116,7 @@ that the whole daemon exits. Scheduling/environment assumptions remain explicit.
 
 The user approved full administration through MCP: configuration inspection,
 checking and application; registration/discovery; start/reindex/pause/resume/
-cancel; status; remove-index versus forget-all; and derived-index recreation for
+cancel; status; unregistration versus forget-all; and derived-index recreation for
 an embedding profile change while retaining notes/settings. The current eight
 tools do not expose this scope. No new wire names are selected by this inventory.
 Exact adapters and mechanical coverage remain #48 and #52.

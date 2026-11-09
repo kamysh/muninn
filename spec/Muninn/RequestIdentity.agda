@@ -14,7 +14,7 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong)
 import Relation.Nullary
 
 data MutationKind : Set where
-  kReplaceGlobal kApplyPolicy kRegister kStart kReindex kPause kResume kCancel kRemoveIndex kForget kRecreateIndex kConvertDirectory kWriteNote kDeleteNote : MutationKind
+  kReplaceGlobal kApplyPolicy kRegister kStart kReindex kPause kResume kCancel kUnregister kForget kRecreateIndex kConvertDirectory kWriteNote kDeleteNote : MutationKind
 
 intent : MutationKind → Intent
 intent kReplaceGlobal = replaceGlobal
@@ -25,7 +25,7 @@ intent kReindex = reindex
 intent kPause = pause
 intent kResume = resume
 intent kCancel = cancel
-intent kRemoveIndex = removeIndex
+intent kUnregister = unregister
 intent kForget = forget
 intent kRecreateIndex = recreateIndex
 intent kConvertDirectory = convertDirectory
@@ -50,7 +50,7 @@ userMeaning reindex input = just (mutation kReindex input)
 userMeaning pause input = just (mutation kPause input)
 userMeaning resume input = just (mutation kResume input)
 userMeaning cancel input = just (mutation kCancel input)
-userMeaning removeIndex input = just (mutation kRemoveIndex input)
+userMeaning unregister input = just (mutation kUnregister input)
 userMeaning forget input = just (mutation kForget input)
 userMeaning recreateIndex input = just (mutation kRecreateIndex input)
 userMeaning convertDirectory input = just (mutation kConvertDirectory input)
@@ -83,7 +83,7 @@ classifiedWithoutLoss kReindex input = refl
 classifiedWithoutLoss kPause input = refl
 classifiedWithoutLoss kResume input = refl
 classifiedWithoutLoss kCancel input = refl
-classifiedWithoutLoss kRemoveIndex input = refl
+classifiedWithoutLoss kUnregister input = refl
 classifiedWithoutLoss kForget input = refl
 classifiedWithoutLoss kRecreateIndex input = refl
 classifiedWithoutLoss kConvertDirectory input = refl
@@ -115,7 +115,7 @@ encode meaning (mutation kReindex x0) = sequence (text "mutation kReindex" ∷ e
 encode meaning (mutation kPause x0) = sequence (text "mutation kPause" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kResume x0) = sequence (text "mutation kResume" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kCancel x0) = sequence (text "mutation kCancel" ∷ encode (mutationInput (pair familyTarget operationId)) x0 ∷ [])
-encode meaning (mutation kRemoveIndex x0) = sequence (text "mutation kRemoveIndex" ∷ encode (mutationInput removalTarget) x0 ∷ [])
+encode meaning (mutation kUnregister x0) = sequence (text "mutation kUnregister" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kForget x0) = sequence (text "mutation kForget" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kRecreateIndex x0) = sequence (text "mutation kRecreateIndex" ∷ encode (mutationInput (pair familyTarget embedding)) x0 ∷ [])
 encode meaning (mutation kConvertDirectory x0) = sequence (text "mutation kConvertDirectory" ∷ encode (mutationInput familyTarget) x0 ∷ [])
@@ -150,7 +150,7 @@ decode meaning (sequence (text "mutation kReindex" ∷ v0 ∷ [])) = Maybe.map (
 decode meaning (sequence (text "mutation kPause" ∷ v0 ∷ [])) = Maybe.map (mutation kPause) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kResume" ∷ v0 ∷ [])) = Maybe.map (mutation kResume) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kCancel" ∷ v0 ∷ [])) = Maybe.map (mutation kCancel) (decode (mutationInput (pair familyTarget operationId)) v0)
-decode meaning (sequence (text "mutation kRemoveIndex" ∷ v0 ∷ [])) = Maybe.map (mutation kRemoveIndex) (decode (mutationInput removalTarget) v0)
+decode meaning (sequence (text "mutation kUnregister" ∷ v0 ∷ [])) = Maybe.map (mutation kUnregister) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kForget" ∷ v0 ∷ [])) = Maybe.map (mutation kForget) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kRecreateIndex" ∷ v0 ∷ [])) = Maybe.map (mutation kRecreateIndex) (decode (mutationInput (pair familyTarget embedding)) v0)
 decode meaning (sequence (text "mutation kConvertDirectory" ∷ v0 ∷ [])) = Maybe.map (mutation kConvertDirectory) (decode (mutationInput familyTarget) v0)
@@ -186,7 +186,7 @@ roundTrip meaning (mutation kReindex x0) rewrite roundTrip (mutationInput reinde
 roundTrip meaning (mutation kPause x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kResume x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kCancel x0) rewrite roundTrip (mutationInput (pair familyTarget operationId)) x0 = refl
-roundTrip meaning (mutation kRemoveIndex x0) rewrite roundTrip (mutationInput removalTarget) x0 = refl
+roundTrip meaning (mutation kUnregister x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kForget x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kRecreateIndex x0) rewrite roundTrip (mutationInput (pair familyTarget embedding)) x0 = refl
 roundTrip meaning (mutation kConvertDirectory x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl

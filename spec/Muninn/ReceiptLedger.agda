@@ -60,6 +60,7 @@ data Reply : Set where
   saved : String → Reply
   explain : Advice → Reply
   allocateSlot : Reply -- internal allocator continuation, never a wire error
+  ask : Dialogue.Prompt → Reply -- clarification before accepting work
   continueDialogue : ℕ → R.Work → Dialogue.Prompt → Reply
 
 existing : ∀ {id} → Meaning → Found id → Reply

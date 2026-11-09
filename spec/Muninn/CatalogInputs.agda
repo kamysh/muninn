@@ -90,10 +90,6 @@ data ReindexTarget : Set where
   foregroundIndex detachedIndex : FamilyTarget → ReindexTarget
   allRegistered : ReindexTarget
 
-data RemovalTarget : Set where
-  familyIndex : FamilyTarget → RemovalTarget
-  checkoutIndex : FamilyTarget → CheckoutId → RemovalTarget
-
 data Editor : Set where
   globalEditor familyEditor : Editor
 
@@ -102,7 +98,7 @@ data Binary : Set where
 
 data Intent : Set where
   inspectGlobal replaceGlobal inspectPolicy checkPolicy applyPolicy preflight register : Intent
-  start reindex pause resume cancel removeIndex forget recreateIndex convertDirectory status usage : Intent
+  start reindex pause resume cancel unregister forget recreateIndex convertDirectory status usage : Intent
   searchCode : SearchMode → Intent
   searchStructure writeNote searchNotes deleteNote listNotes continueRequest : Intent
 
@@ -119,7 +115,7 @@ IntentInput reindex = Mutation ReindexTarget
 IntentInput pause = Mutation FamilyTarget
 IntentInput resume = Mutation FamilyTarget
 IntentInput cancel = Mutation (FamilyTarget × OperationId)
-IntentInput removeIndex = Mutation RemovalTarget
+IntentInput unregister = Mutation FamilyTarget
 IntentInput forget = Mutation FamilyTarget
 IntentInput recreateIndex = Mutation (FamilyTarget × EmbeddingSelection)
 IntentInput convertDirectory = Mutation FamilyTarget

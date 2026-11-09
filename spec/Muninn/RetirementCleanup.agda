@@ -24,7 +24,7 @@ module M = E.Model
 -- already-running reader. Pausing/Git suspension retain a view; retirement
 -- removes availability and its permanent roots.
 available : E.Rule → O.World → ℕ → Bool
-available selection world checkout = M.familyRegistered selection world ∧ M.checkoutLive selection world checkout
+available selection world checkout = (M.familyRegistered selection world ∧ M.checkoutLive selection world checkout) ∧ Data.Bool.not (E.pendingRemovalFor (E.targetOwner selection) world)
 
 retiredFamilyUnavailable : ∀ selection world checkout → M.familyRegistered selection world ≡ false → available selection world checkout ≡ false
 retiredFamilyUnavailable selection world checkout retired rewrite retired = refl

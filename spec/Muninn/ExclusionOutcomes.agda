@@ -4,6 +4,7 @@ module Muninn.ExclusionOutcomes where
 
 import Muninn.OwnedState as O
 import Muninn.ReceiptTypes as Receipt
+import Muninn.RequestIdentity as Request
 import Muninn.Config as Config
 import Muninn.PolicyRuleAdmission as Admission
 import Muninn.AdmittedSelection as Admitted
@@ -182,6 +183,35 @@ pauseAndGitDoNotChangeAvailability : ∀ id incarnation identity retired pause g
   checkoutAvailable (O.checkoutInfo id incarnation identity retired pause git since metadata) ≡
     checkoutAvailable (O.checkoutInfo id′ incarnation′ identity′ retired pause′ git′ since′ metadata′)
 pauseAndGitDoNotChangeAvailability id incarnation identity retired pause git since metadata id′ incarnation′ identity′ pause′ git′ since′ metadata′ = refl
+
+-- Only active, accepted removal requests close request admission.
+removalKind : Request.MutationKind → Bool
+removalKind Request.kReplaceGlobal = false
+removalKind Request.kApplyPolicy = false
+removalKind Request.kRegister = false
+removalKind Request.kStart = false
+removalKind Request.kReindex = false
+removalKind Request.kPause = false
+removalKind Request.kResume = false
+removalKind Request.kCancel = false
+removalKind Request.kUnregister = true
+removalKind Request.kForget = true
+removalKind Request.kRecreateIndex = false
+removalKind Request.kConvertDirectory = false
+removalKind Request.kWriteNote = false
+removalKind Request.kDeleteNote = false
+
+removalInput : Request.Meaning → Bool
+removalInput (Request.mutation kind input) = removalKind kind
+removalInput (Request.durableJob job input) = false
+
+pendingRemovalValue : O.Owner → O.Record → Bool
+pendingRemovalValue target (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names progress)))) =
+  sameOwner owner target ∧ removalInput input
+pendingRemovalValue target value = false
+
+pendingRemovalFor : O.Owner → O.World → Bool
+pendingRemovalFor target = anyRow (λ key value → pendingRemovalValue target value)
 
 -- The policy matcher is fixed once by the shared selection semantics (#26).
 -- It is not a field supplied by a cleanup operation. No raw rule parsing here.

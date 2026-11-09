@@ -69,25 +69,33 @@ module Model where
     ...     | refl = cong (O.recordOf owner) (Replacement.publishedBody body selected storedRoot info)
 
     currentRoot : O.World → Maybe ℕ
-    currentRoot world with M.familyRegistered selection world | M.checkoutLive selection world selected
-    ... | true | true with DB.lookup pointer world
+    currentRoot world with E.pendingRemovalFor owner world | M.familyRegistered selection world | M.checkoutLive selection world selected
+    ... | false | true | true with DB.lookup pointer world
     ...   | nothing = nothing
     ...   | just value = recordRoot value
-    currentRoot world | _ | _ = nothing
+    currentRoot world | _ | _ | _ = nothing
 
-    currentKnown : ∀ world root → M.familyRegistered selection world ≡ true → M.checkoutLive selection world selected ≡ true →
+    currentKnown : ∀ world root → E.pendingRemovalFor owner world ≡ false → M.familyRegistered selection world ≡ true → M.checkoutLive selection world selected ≡ true →
       DB.lookup pointer world ≡ just (O.recordOf owner (O.publishedView selected root)) → currentRoot world ≡ just root
-    currentKnown world root registered live found rewrite registered | live | found = recordKnown root
+    currentKnown world root notRemoving registered live found rewrite notRemoving | registered | live | found = recordKnown root
 
     currentSound : ∀ world root → currentRoot world ≡ just root →
       DB.lookup pointer world ≡ just (O.recordOf owner (O.publishedView selected root)) ×
         (M.familyRegistered selection world ≡ true × M.checkoutLive selection world selected ≡ true)
-    currentSound world root seen with M.familyRegistered selection world in registered | M.checkoutLive selection world selected in live
-    ... | false | _ = ⊥-elim (nothingNotJust seen)
-    ... | true | false = ⊥-elim (nothingNotJust seen)
-    ... | true | true with DB.lookup pointer world in found
+    currentSound world root seen with E.pendingRemovalFor owner world | M.familyRegistered selection world in registered | M.checkoutLive selection world selected in live
+    ... | true | _ | _ = ⊥-elim (nothingNotJust seen)
+    ... | false | false | _ = ⊥-elim (nothingNotJust seen)
+    ... | false | true | false = ⊥-elim (nothingNotJust seen)
+    ... | false | true | true with DB.lookup pointer world in found
     ...   | nothing = ⊥-elim (nothingNotJust seen)
     ...   | just value = cong just (recordSound value root seen) , refl , refl
+
+    removalBlocksCurrent : ∀ world → E.pendingRemovalFor owner world ≡ true → currentRoot world ≡ nothing
+    removalBlocksCurrent world removing rewrite removing with M.familyRegistered selection world | M.checkoutLive selection world selected
+    ... | true | true = refl
+    ... | true | false = refl
+    ... | false | true = refl
+    ... | false | false = refl
 
     admitSnapshot : ∀ {A : Set} → String → (ℕ → ℕ → A) → (O.World → A) → O.World → DB.Transaction A
     admitSnapshot payload ready replan world with currentRoot world

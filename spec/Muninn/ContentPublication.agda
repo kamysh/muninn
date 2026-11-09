@@ -140,14 +140,16 @@ policyBody (O.currentPolicy actual) expected same with just-injective same
 
 module PolicyGuard (owner : O.Owner) (pointer expected : ℕ) where
   At : O.World → Set
-  At world = Classify.At world pointer (λ value → O.owner value ≡ owner × policyVersion (O.body value) ≡ just expected)
+  At world = Classify.At world pointer (λ value → O.owner value ≡ owner × policyVersion (O.body value) ≡ just expected) ×
+    E.pendingRemovalFor owner world ≡ false
 
   at? : ∀ world → Dec (At world)
-  at? world = Classify.at? world pointer _ (λ value → Classify.both
-    (E.ownerEqual (O.owner value) owner) (policyVersion? expected (O.body value)))
+  at? world = Classify.both (Classify.at? world pointer _ (λ value → Classify.both
+    (E.ownerEqual (O.owner value) owner) (policyVersion? expected (O.body value))))
+    (E.pendingRemovalFor owner world Bool.≟ false)
 
   foundAt : ∀ world → At world → DB.lookup pointer world ≡ just (O.recordOf owner (O.currentPolicy expected))
-  foundAt world (O.recordOf actualOwner body , found , owned , version)
+  foundAt world ((O.recordOf actualOwner body , found , owned , version) , noRemoval)
     rewrite owned | policyBody body expected version = found
 
   choose : ∀ {A : Set} → DB.Transaction A → A → O.World → DB.Transaction A
@@ -160,10 +162,10 @@ module PolicyGuard (owner : O.Owner) (pointer expected : ℕ) where
 
   ready : ∀ {A : Set} (next : DB.Transaction A) wait world →
     DB.lookup pointer world ≡ just (O.recordOf owner (O.currentPolicy expected)) →
-    DB.evaluate (transaction next wait) world ≡ DB.evaluate next world
-  ready next wait world found with at? world
+    E.pendingRemovalFor owner world ≡ false → DB.evaluate (transaction next wait) world ≡ DB.evaluate next world
+  ready next wait world found noRemoval with at? world
   ... | yes verified = refl
-  ... | no different = ⊥-elim (different (O.recordOf owner (O.currentPolicy expected) , found , refl , refl))
+  ... | no different = ⊥-elim (different ((O.recordOf owner (O.currentPolicy expected) , found , refl , refl) , noRemoval))
 
   committed : ∀ {A : Set} (next : DB.Transaction A) wait world result after →
     DB.evaluate (transaction next wait) world ≡ DB.committed result after →
@@ -173,6 +175,14 @@ module PolicyGuard (owner : O.Owner) (pointer expected : ℕ) where
   ... | yes verified = foundAt world verified , done
   ... | no changed with done
   ...   | ()
+
+  removalBlocksPublication : ∀ {A : Set} (next : DB.Transaction A) wait world → E.pendingRemovalFor owner world ≡ true →
+    DB.evaluate (transaction next wait) world ≡ DB.aborted wait
+  removalBlocksPublication next wait world removing with at? world
+  ... | no changed = refl
+  ... | yes (located , notRemoving) = ⊥-elim (impossible (trans (sym removing) notRemoving))
+    where impossible : true ≢ false
+          impossible ()
 
   effect : Ledger.Effect → String → Ledger.Effect
   effect body wait = record
@@ -193,6 +203,7 @@ module Family (family policyPointer : ℕ) where
     (nodes edges : List ℕ) (payload : String)
     (id : I.OperationId) (input : Identity.Meaning) (names : R.Names id input)
     (receiptSlot : ℕ) (progress : R.Work)
+    (notRemoving : E.pendingRemovalFor owner before ≡ false)
     (found : Ledger.find id before ≡ just (Ledger.found receiptSlot owner (R.active input names progress))) where
     selection = Stored.rule current
     module P = Plan selection before selected advanceBase desired
@@ -253,7 +264,7 @@ module Family (family policyPointer : ℕ) where
       request = Ledger.update id input (R.generation progress) change work
 
       guardedPerforms : DB.evaluate (Ledger.Effect.transaction work) before ≡ DB.committed result changed
-      guardedPerforms = trans (Guard.ready (Ledger.Effect.transaction body) continuation before (Stored.Saved.pointerAt current)) performs
+      guardedPerforms = trans (Guard.ready (Ledger.Effect.transaction body) continuation before (Stored.Saved.pointerAt current) notRemoving) performs
 
       commits : DB.execute request before ≡ (Ledger.resume receiptSlot nextProgress , after)
       commits = Ledger.committedUpdate id input names change work receiptSlot owner progress before result changed found guardedPerforms

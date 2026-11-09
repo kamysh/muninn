@@ -192,17 +192,6 @@ roundTrip reindexTarget (foregroundIndex x0) rewrite roundTrip familyTarget x0 =
 roundTrip reindexTarget (detachedIndex x0) rewrite roundTrip familyTarget x0 = refl
 roundTrip reindexTarget (allRegistered) = refl
 
-removalTarget : Codec RemovalTarget
-encode removalTarget (familyIndex x0) = sequence (natural 0 ∷ encode familyTarget x0 ∷ [])
-encode removalTarget (checkoutIndex x0 x1) = sequence (natural 1 ∷ encode familyTarget x0 ∷ encode checkoutId x1 ∷ [])
-decode removalTarget (sequence (natural 0 ∷ v0 ∷ [])) = Maybe.map (familyIndex) (decode familyTarget v0)
-decode removalTarget (sequence (natural 1 ∷ v0 ∷ v1 ∷ [])) with decode familyTarget v0 | decode checkoutId v1
-... | just x0 | just x1 = just (checkoutIndex x0 x1)
-... | _ | _ = nothing
-decode removalTarget _ = nothing
-roundTrip removalTarget (familyIndex x0) rewrite roundTrip familyTarget x0 = refl
-roundTrip removalTarget (checkoutIndex x0 x1) rewrite roundTrip familyTarget x0 | roundTrip checkoutId x1 = refl
-
 familyJob : Codec (FamilyJob)
 familyJob = transport
   (λ r → (FamilyJob.operationId r , FamilyJob.family r))

@@ -68,7 +68,7 @@ cliIntent reindexAll = reindex
 cliIntent reindexDetached = reindex
 cliIntent pausePath = pause
 cliIntent resumePath = resume
-cliIntent removeConfirmed = removeIndex
+cliIntent removeConfirmed = unregister
 cliIntent statusFleet = status
 cliIntent statusPath = status
 cliIntent usageDays = usage
@@ -89,7 +89,7 @@ tuiIntent saveGlobalSettings = replaceGlobal
 -- Approved administration scope, with NO new wire names assigned here.
 data McpAdministration : Set where
   inspect check apply inventory registerFamily startFamily reindexFamily pauseFamily : McpAdministration
-  resumeFamily cancelWork inspectStatus removeDerived forgetRepository recreateDerived convert : McpAdministration
+  resumeFamily cancelWork inspectStatus unregisterFamily forgetRepository recreateDerived convert : McpAdministration
 
 adminIntent : McpAdministration → Intent
 adminIntent inspect = inspectPolicy
@@ -103,7 +103,7 @@ adminIntent pauseFamily = pause
 adminIntent resumeFamily = resume
 adminIntent cancelWork = cancel
 adminIntent inspectStatus = status
-adminIntent removeDerived = removeIndex
+adminIntent unregisterFamily = unregister
 adminIntent forgetRepository = forget
 adminIntent recreateDerived = recreateIndex
 adminIntent convert = convertDirectory
@@ -146,7 +146,7 @@ intentOwner reindex = indexing
 intentOwner pause = indexing
 intentOwner resume = indexing
 intentOwner cancel = indexing
-intentOwner removeIndex = removal
+intentOwner unregister = removal
 intentOwner forget = removal
 intentOwner recreateIndex = artifacts
 intentOwner convertDirectory = registration

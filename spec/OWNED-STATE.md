@@ -92,8 +92,8 @@ one record at a time.
 - Notes currently use exact `repo_path` strings (`knowledge.rs:13-22,41-94`);
   the agreed owner is a family. This PR does not migrate them.
 - `store.rs:172-200` removes index schemas, graphs and registration, while
-  public notes remain. Distinct remove-index and forget-all outcomes still
-  need their own contracts and implementation.
+  public notes remain. [Unregistration and forget-all](REPOSITORY-REMOVAL.md) now have complete-world
+  contracts; their Rust implementation and correspondence remain outstanding.
 - `worktrees/mod.rs:896-898` reclaims file versions using base/delta references.
   It does not implement the agreed durable cleanup worksets or reader/accepted
   work roots represented here.

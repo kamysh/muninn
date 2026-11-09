@@ -11,13 +11,15 @@ import Muninn.OwnedState as O
 import Muninn.ReceiptTypes as R
 import Muninn.ReceiptLedger as L
 import Muninn.RequestIdentity as N
+import Muninn.ExclusionOutcomes as E
 open import Data.Nat using (ℕ)
+open import Data.Bool using (true)
 open import Data.List using (List; [])
 open import Data.String using (String)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.Empty using (⊥)
-import Data.Sum
+open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Relation.Nullary using (¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; trans)
 
@@ -55,19 +57,34 @@ executionMapping f transaction world rewrite evaluationMapping f transaction wor
 ... | DB.committed a after = refl
 ... | DB.aborted a = refl
 
+-- An immediate removal response carries the actual accepted-run witness,
+-- because its detailed receipt is deliberately erased in that same commit.
+-- A used-ID marker alone cannot certify what request was completed.
+record RemovalCommit (id : I.OperationId) (subject : N.Meaning) (slot : ℕ)
+  (owner : O.Owner) (names : R.Names id subject) (result : String) (world : O.World) : Set where
+  field before : O.World
+        progress : R.Work
+        transaction : DB.Transaction L.Reply
+        removal : E.removalInput subject ≡ true
+        accepted : L.find id before ≡ just (L.found slot owner (R.active subject names progress))
+        committed : DB.execute transaction before ≡ (L.saved result , world)
+        marker : L.find id world ≡ just (L.found slot O.installation R.used)
+
 record Completed (id : I.OperationId) (subject : N.Meaning) (world : O.World) : Set where
   field slot : ℕ
         owner : O.Owner
         names : R.Names id subject
         result : String
-        located : L.find id world ≡ just (L.found slot owner (R.finished subject names result))
+        terminal : (L.find id world ≡ just (L.found slot owner (R.finished subject names result))) ⊎
+          RemovalCommit id subject slot owner names result world
 
 justNotNothing : ∀ {A : Set} {a : A} → ¬ (just a ≡ nothing)
 justNotNothing ()
 
 completionRequiresReceipt : ∀ {id subject world} → Completed id subject world → ¬ (L.find id world ≡ nothing)
-completionRequiresReceipt completed absent =
-  justNotNothing (trans (Relation.Binary.PropositionalEquality.sym (Completed.located completed)) absent)
+completionRequiresReceipt completed absent with Completed.terminal completed
+... | inj₁ located = justNotNothing (trans (Relation.Binary.PropositionalEquality.sym located) absent)
+... | inj₂ erased = justNotNothing (trans (Relation.Binary.PropositionalEquality.sym (RemovalCommit.marker erased)) absent)
 
 module Protocol
   (Environment : Set)
@@ -90,6 +107,7 @@ module Protocol
   ledgerReply ctx subject (L.accepted slot) = acceptedWork (D.Context.id ctx) slot
   ledgerReply ctx subject (L.resume slot work) = knownWork (D.Context.id ctx) subject slot work
   ledgerReply ctx subject (L.saved result) = historicalResult (D.Context.id ctx) result
+  ledgerReply ctx subject (L.ask guidance) = ask (just ctx) guidance
   ledgerReply ctx subject (L.explain advice) = ask (just ctx) (Identity.advicePrompt advice)
   ledgerReply ctx subject L.allocateSlot = allocateSlot (D.Context.id ctx)
   ledgerReply ctx subject (L.continueDialogue slot work guidance) = ask (just ctx) guidance

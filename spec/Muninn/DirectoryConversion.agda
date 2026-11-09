@@ -6,6 +6,7 @@ module Muninn.DirectoryConversion where
 import Muninn.RepositoryIdentity as Identity
 import Muninn.RepositoryDiscovery as Discovery
 import Muninn.OwnedState as O
+import Muninn.ExclusionOutcomes as E
 import Muninn.ContentViews as Content
 import Muninn.ContentPublication as Publication
 import Muninn.PublishedViews as Views
@@ -61,7 +62,8 @@ module Family (family familySlot checkoutSlot policyPointer generation : ℕ)
           fresh : ∀ path entry found → Git.at (answer path entry found) ≡ gitContext
 
   record Admission : Set where
-    field explicit : Discovery.ConversionPermit request saved
+    field noRemoval : E.pendingRemovalFor owner before ≡ false
+          explicit : Discovery.ConversionPermit request saved
           gitObserved : Identity.Observation.gitInfo source ≡ just git
           requested : I.FamilyTarget.location (I.Mutation.input request) ≡ Identity.Observation.requested source
           familyLocated : DB.lookup familySlot before ≡ just (O.recordOf owner (O.registration registration))
@@ -167,7 +169,7 @@ module Family (family familySlot checkoutSlot policyPointer generation : ℕ)
           guidance value = D.prompt (D.text 'C' "onverting the directory registration; the saved directory view remains available until the Git view is ready.") (D.text 'C' "ontinue this request to check progress.") Data.List.[]
         effect = Guard.effect raw continuation
         performsFinal : DB.evaluate (Ledger.Effect.transaction effect) before ≡ DB.committed result (changed middle)
-        performsFinal = trans (Guard.ready (Ledger.Effect.transaction raw) continuation before (Stored.Saved.pointerAt current))
+        performsFinal = trans (Guard.ready (Ledger.Effect.transaction raw) continuation before (Stored.Saved.pointerAt current) (Admission.noRemoval admitted))
           (Sequence.committed body finish before result middle performs)
         module Seal = Checkpoint.Run id input refl owner receiptSlot progress result effect before (changed middle) changedValid found located performsFinal
         open Seal public

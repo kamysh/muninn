@@ -51,7 +51,7 @@ model or silently change the application during a documentation edit:
 | Graph ownership | `Storage.SchemaAssignment` maps a family to a `SchemaPair`; `sameFamilySameSchemaPair` covers both roles | Application schema is family-owned; Git checkout graphs are separate AGE namespaces |
 | Curated knowledge | `Knowledge` models family-scoped notes | `public.knowledge` and MCP knowledge tools use exact repository-path strings |
 | Freshness | `Search` models response freshness/suspension | MCP code-search responses contain result lists without that metadata |
-| Removal | `Cli` distinguishes abstract directory/family intents | Legacy `remove PATH` resolves a registered locator and deletes the family's code index; Git discovery handles checkout retirement |
+| Removal | `RepositoryRemoval` specifies actual family unregistration and the approved forget-all intent; reindex remains rebuilding | `remove PATH` deletes code data/registration and family-local settings; public notes remain. Complete durable removal/forget dialogue and receipts are not implemented |
 
 Other abstract fields/constructors should be traced to their concrete runtime
 representation before asserting equivalence. Passing a type check does not close
@@ -540,3 +540,19 @@ other-family preservation and interrupted-run/completed-retry convergence.
 Git-reclassified view and updated metadata can publish together. Its publication
 adapter owes fixed content, structural, retention and cleanup outcomes; this is
 a mandatory refinement interface, not a completed Rust/SQL implementation.
+
+## Unregistration and forget-all
+
+`RemovalStore` defines an exhaustive policy over every owned category and
+compiles it to ordinary DB removes/puts in one shared transaction. It proves
+actual lookup results, complete scope cleanup, metadata preservation, other-family
+isolation and store admissibility. `RepositoryRemoval` supplies receipt-first
+admission, draining of earlier readers, actual completion and interruption/retry
+convergence. See [removal semantics](REPOSITORY-REMOVAL.md).
+
+The canonical removal intent is now `unregister`, matching existing `remove`.
+It targets the whole family. The draft standalone clear-index intention and
+checkout-only payload have been removed; reindex remains rebuilding. An active
+removal receipt gates current-reader admission and content publication without
+inventing a new registration state. A generic question before acceptance does
+not pretend that work has already been saved.
