@@ -104,3 +104,7 @@ open import Muninn.Knowledge    public
 open import Muninn.Concurrency  public
 
 import Muninn.CheckoutReconciliation
+
+import Muninn.Retirement
+import Muninn.RetirementControl
+import Muninn.RetirementCleanup

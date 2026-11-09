@@ -50,11 +50,13 @@ open Reference public
 record RegistrationInfo : Set where
   constructor registrationInfo
   field retired legacyReadable : Bool
+        missingSince : Maybe ℕ
         metadata : String
 
 record CheckoutInfo : Set where
   constructor checkoutInfo
   field retired paused gitSuspended : Bool
+        missingSince : Maybe ℕ
         metadata : String
 
 record PolicyVersionInfo : Set where

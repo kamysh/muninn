@@ -12,8 +12,8 @@ cache delegation and output streams; test fixtures were excluded from ownership.
 
 | Storage or code | Logical records in `OwnedState` |
 | --- | --- |
-| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, `creationIntent`; identity, preparation, authorization, pause, retirement and missing observations remain in their payloads |
-| `migrations/repo/checkouts.sql`, `missing_checkouts.sql`: `checkouts` | `checkout`; includes incarnation, availability, Git observations and publication metadata |
+| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, `creationIntent`; retirement, legacy readability and the absence-start timestamp are explicit fields; identity, preparation, authorization and pause remain in metadata |
+| `migrations/repo/checkouts.sql`, `missing_checkouts.sql`: `checkouts` | `checkout`; retirement, pause, Git suspension and the absence-start timestamp are explicit fields; incarnation and publication metadata remain separate obligations |
 | `migrations/repo/configuration.sql`: `policy_defaults`, `policy_versions`, `family_policy` | `defaults`, `policyVersion`, `currentPolicy`; pointers require the corresponding immutable version/default record |
 | `migrations/public/001_init.sql`: `knowledge` | `note`, `notePosting`, `noteVector`; the generated text and optional vector are independently visible to outcomes |
 | `migrations/repo/worktrees.sql`: `file_versions` | `fileVersion` |

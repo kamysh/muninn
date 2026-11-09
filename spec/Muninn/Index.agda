@@ -14,6 +14,8 @@ open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
 import Muninn.CheckoutReconciliation as Reconciliation
+import Muninn.RetirementControl as RetirementControl
+import Muninn.RetirementCleanup as RetirementCleanup
 import Muninn.IndexSelection as Selection
 import Muninn.IndexFileLimits as FileLimits
 import Muninn.ArtifactReuse as Reuse
@@ -161,3 +163,7 @@ module ReuseEmbedding (family : Worktree.FamilyId) = Reuse.Embeddings family
 
 -- Mandatory per-file publication semantics after the existing admission gates.
 module FileReconciliation = Reconciliation
+
+-- Lifecycle changes and retirement availability share the owned-world model.
+module RepositoryLifecycle = RetirementControl
+module RepositoryReclamation = RetirementCleanup

@@ -510,3 +510,13 @@ absent. See [the transition laws and adapter boundary](CHECKOUT-RECONCILIATION.m
 The public `Index.FileReconciliation` module exposes this contract alongside
 existing authorization, schema and dispatch gates. This is specification work,
 not a claim that Rust currently implements the new per-file behavior.
+
+## Retirement and prompt reclamation
+
+`Retirement` defines confirmed-absence grace, inconclusive inspections and
+verified return, with exact persistence in owned control records.
+`RetirementControl` performs the actual control update and conditional existing
+cleanup capture inside a receipt-sealed shared transaction, preserving store
+admissibility, metadata and other families. `RetirementCleanup` connects retired
+availability to the existing reclamation contract without a retention TTL.
+See [the lifecycle and implementation boundary](RETIREMENT.md).
