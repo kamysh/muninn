@@ -278,11 +278,16 @@ executionBookkeeping graphResourceK = false
 executionBookkeeping logFileK = false
 executionBookkeeping bootstrapStageK = false
 
+-- Searches retain the selected snapshot, never its mutable current selector.
+privateTarget : Kind → Bool
+privateTarget publishedViewK = true
+privateTarget kind = executionBookkeeping kind
+
 PublicReference : Reference → Set
-PublicReference ref = executionBookkeeping (expected ref) ≡ false
+PublicReference ref = privateTarget (expected ref) ≡ false
 
 publicReference? : ∀ ref → Dec (PublicReference ref)
-publicReference? ref with executionBookkeeping (expected ref)
+publicReference? ref with privateTarget (expected ref)
 ... | true = no (λ ())
 ... | false = yes refl
 
@@ -292,9 +297,9 @@ PrivateBookkeepingReferences value = All PublicReference (references (body value
 PrivateReaderReferences : Record → Set
 PrivateReaderReferences value = All (λ ref → expected ref ≢ activeReaderK) (references (body value))
 
-privateReferenceImpossible : ∀ internal → executionBookkeeping internal ≡ true → ∀ ref → PublicReference ref → expected ref ≢ internal
+privateReferenceImpossible : ∀ internal → privateTarget internal ≡ true → ∀ ref → PublicReference ref → expected ref ≢ internal
 privateReferenceImpossible internal hidden ref visible same = impossible
-  (trans (sym hidden) (trans (cong executionBookkeeping (sym same)) visible))
+  (trans (sym hidden) (trans (cong privateTarget (sym same)) visible))
   where impossible : true ≢ false
         impossible ()
 
@@ -378,7 +383,7 @@ deleteUnreferencedPreservesAdmissibility key world valid unreferenced = record
 
 -- Privacy and reference soundness derive the deletion guard for bookkeeping.
 privateUnreferenced : ∀ key world value → Admissible world → DB.lookup key world ≡ just value →
-  executionBookkeeping (kind (body value)) ≡ true → All (NoIncomingTo key) world
+  privateTarget (kind (body value)) ≡ true → All (NoIncomingTo key) world
 privateUnreferenced key world value valid found hidden =
   All.tabulate (λ {row} present → All.tabulate (λ {ref} included equal →
     privateReferenceImpossible (kind (body value)) hidden ref (All.lookup (All.lookup (Admissible.privateBookkeeping valid) present) included) (sym (trans (cong (λ stored → kind (body stored)) (just-injective (trans (sym found) (trans (cong (λ id → DB.lookup id world) (sym equal)) (Resolves.found (All.lookup (All.lookup (Admissible.sound valid) present) included)))))) (Resolves.rightKind (All.lookup (All.lookup (Admissible.sound valid) present) included))))))

@@ -74,6 +74,25 @@ writeAdmissible world key old new valid found sameOwner sameKind placed subset =
     (λ {ref} → writeResolves world key old new (O.owner (proj₂ row)) ref found sameOwner sameKind) refs)
     (O.Admissible.sound valid)
 
+-- Replacing a control record may change its outgoing references. Every new
+-- reference is resolved and private-safe; incoming references keep kind/owner.
+writeResolvedAdmissible : ∀ world key old new → O.Admissible world →
+  DB.lookup key world ≡ just old → O.owner new ≡ O.owner old →
+  O.kind (O.body new) ≡ O.kind (O.body old) → O.Placed new →
+  All (O.Resolves world (O.owner new)) (O.references (O.body new)) →
+  O.PrivateBookkeepingReferences new → O.Admissible (DB.write key new world)
+writeResolvedAdmissible world key old new valid found sameOwner sameKind placed resolved privateRefs = record
+  { unique = writeUnique key new world (O.Admissible.unique valid)
+  ; placed = placed ∷ O.deleteAll key world (O.Admissible.placed valid)
+  ; sound = All.map (λ {ref} proof → writeResolves world key old new (O.owner new) ref found sameOwner sameKind proof) resolved ∷
+      O.deleteAll key world shifted
+  ; privateBookkeeping = privateRefs ∷ O.deleteAll key world (O.Admissible.privateBookkeeping valid) }
+  where
+  shifted : All (O.SoundReferences (DB.write key new world)) world
+  shifted = All.map (λ {row} refs → All.map
+    (λ {ref} proof → writeResolves world key old new (O.owner (proj₂ row)) ref found sameOwner sameKind proof) refs)
+    (O.Admissible.sound valid)
+
 filterSubset : ∀ keep keys key → key ∈ E.filterKeys keep keys → key ∈ keys
 filterSubset keep [] key ()
 filterSubset keep (first ∷ rest) key present with keep first

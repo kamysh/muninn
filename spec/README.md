@@ -351,3 +351,12 @@ invoking the publication continuation. The copy is canonical in the resulting
 store; original records, receipts and current-view invariants are preserved.
 See [snapshot preparation](SNAPSHOT-PREPARATION.md). Association replacement,
 receipt sealing and full lifecycle assembly remain under #84.
+
+## Current-view selector replacement
+
+`ViewReplacement` guards the actual current association and target checkout,
+then replaces only that private selector. Shared admission prevents selector
+holds; existing snapshot data, receipts and current-view invariants survive.
+Unresolved contexts roll back through the existing continuation.
+See [selector replacement](VIEW-REPLACEMENT.md). Complete publication
+composition, canonicality and receipt replay remain under #84.
