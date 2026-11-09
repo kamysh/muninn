@@ -289,3 +289,11 @@ checkpoint atomically. It preserves original tasks, derives the worker intent
 from the persisted IDs, and proves old-checkpoint retries do not recapture.
 See [durable follow-up capture](CLEANUP-SCHEDULING.md). Full lifecycle scheduling,
 current-view production and policy integration remain under #84.
+
+## Fresh tracked record incarnations
+
+`RecordAllocation` constructs an incarnation outside the complete row/weak-ID
+reservation set and uses it inside the shared reader and task transactions.
+The existing admission guards, durable captures and receipt retry guarantees
+remain. See [record allocation](RECORD-ALLOCATION.md). Current-view production
+and lifecycle integration remain under #84.

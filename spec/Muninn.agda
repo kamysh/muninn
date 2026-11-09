@@ -40,6 +40,7 @@ import Muninn.ReaderRelease
 import Muninn.ReaderReleaseCleanup
 import Muninn.CleanupLoop
 import Muninn.CleanupScheduling
+import Muninn.RecordAllocation
 import Muninn.CleanupAlignment
 import Muninn.CleanupHistory
 import Muninn.CleanupCompletion
