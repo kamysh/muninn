@@ -419,3 +419,11 @@ evidence. Recognition completeness, deterministic meaning, source reconstruction
 and strict suffix progress are proved for arbitrary input. See
 [glob class scanning](GLOB-LEXING.md). Range interpretation, complete raw parsing
 and selection integration remain under #26.
+
+## Certified class-range interpretation
+
+`GlobRanges` turns actual scanned class units into ordered singleton/range
+meaning and constructs the matching atom from both source certificates.
+Recognition completeness, deterministic atom/suffix meaning and inherited
+source progress are proved. See [class ranges](GLOB-RANGES.md). Complete
+raw glob bodies and rule-selection integration remain under #26.
