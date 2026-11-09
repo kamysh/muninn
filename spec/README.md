@@ -435,3 +435,10 @@ meaning and constructs the matching atom from both source certificates.
 Recognition completeness, deterministic atom/suffix meaning and inherited
 source progress are proved. See [class ranges](GLOB-RANGES.md). Complete
 raw glob bodies and rule-selection integration remain under #26.
+
+## Certified raw glob tokens
+
+`GlobTokens` assigns source-certified token meanings, including position-sensitive
+recursive wildcards and compiled classes. Recognition, determinism, exact source
+consumption and strict suffix progress are proved. See [raw glob tokens](GLOB-TOKENS.md).
+Whole-body assembly, rule framing and selection integration remain under #26.

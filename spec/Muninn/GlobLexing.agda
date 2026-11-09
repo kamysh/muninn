@@ -15,7 +15,7 @@ open import Data.Nat using (_<_)
 open import Data.Nat.Properties using (≤-refl; m≤n⇒m≤1+n)
 open import Data.Unit using (⊤; tt)
 open import Data.Empty using (⊥-elim)
-open import Relation.Nullary using (yes; no)
+open import Relation.Nullary using (Dec; yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong)
 
 Word = List Char
@@ -229,3 +229,19 @@ classSuffixSmaller : ∀ {input negated units suffix} → Class input negated un
 classSuffixSmaller (positive input units suffix allowed source) = m≤n⇒m≤1+n (suffixSmaller source)
 classSuffixSmaller (bang input units suffix source) = m≤n⇒m≤1+n (m≤n⇒m≤1+n (suffixSmaller source))
 classSuffixSmaller (caret input units suffix source) = m≤n⇒m≤1+n (m≤n⇒m≤1+n (suffixSmaller source))
+
+Claim : Word → Set
+Claim input = Σ Bool (λ negated → Σ (List Unit) (λ units → Σ Word (λ suffix → Class input negated units suffix)))
+
+classAbsent : ∀ input → classValue input ≡ nothing → ¬ Claim input
+classAbsent input missing (negated , units , suffix , source) = impossible
+  (trans (sym (cong (map (λ result → Parsed.negated result , Parsed.units result , Parsed.suffix result)) missing))
+    (classRecognized source))
+  where
+  impossible : nothing ≡ just (negated , units , suffix) → Data.Empty.⊥
+  impossible ()
+
+class? : ∀ input → Dec (Claim input)
+class? input with classValue input in observed
+... | nothing = no (classAbsent input observed)
+... | just (parsed negated units suffix source) = yes (negated , units , suffix , source)
