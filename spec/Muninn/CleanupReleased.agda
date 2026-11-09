@@ -72,6 +72,10 @@ module Model (excluded : List String → String → Bool) where
   ... | Observations.snapshot owner selected nodes edges payload with attached
   ...   | ()
 
+  holdingChildPlain : ∀ flag selection world value ref → M.parentOf (M.temporaryFor flag) selection world value ≡ just ref → O.kind (O.body value) ≢ O.structuralSnapshotK
+  holdingChildPlain true selection world value ref ()
+  holdingChildPlain false selection world value ref attached = temporaryChildPlain selection world value ref attached
+
   module Loop (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
     module Pass = Progress.Model.Pass excluded selection accepted intent
     module Core = Effects.Model.Core excluded selection accepted intent
@@ -91,24 +95,35 @@ module Model (excluded : List String → String → Bool) where
     ... | BackNeed.origin original present same = trans present (cong just (just-injective (trans
       (sym (M.Safety.protected (Core.transactionSafety chosen before) key original present protected)) found)))
 
-    protectedBackward : ∀ chosen before → O.Admissible before → ∀ key → M.Protected selection (Pass.next chosen before) key → M.Protected selection before key
-    protectedBackward chosen before valid key (M.held source value ref found included resolved) =
-      M.held source value ref earlier included
-        (All.lookup (Storage.lookupAll before source value (O.Admissible.sound valid) earlier) (heldRaw value ref included))
-      where earlier = metadataEarlier chosen before source value found (Pins.holderIsMetadata value ref included)
-    protectedBackward chosen before valid key (M.required previous (M.reference source value ref found included resolved)) =
-      M.required (protectedBackward chosen before valid source previous)
-        (M.reference source value ref earlier included
-          (All.lookup (Storage.lookupAll before source value (O.Admissible.sound valid) earlier) included))
-      where earlier = protectedEarlier chosen before source value found (protectedBackward chosen before valid source previous)
-    protectedBackward chosen before valid key (M.required previous
-      (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
-      M.required (protectedBackward chosen before valid parent previous)
-        (M.attachment parent parentValue child childValue
-          (protectedEarlier chosen before parent parentValue parentFound (protectedBackward chosen before valid parent previous))
-          (Obs.Support.backwardPlain (Steps.stepSupport chosen before valid) child childValue childFound
-            (temporaryChildPlain selection (Pass.next chosen before) childValue (O.reference parent (O.kind (O.body parentValue))) attached))
-          (trans (Pins.temporaryParentStable selection before (Pass.next chosen before) childValue) attached) sameOwner)
+    mutual
+      protectedBackward : ∀ chosen before → O.Admissible before → ∀ key → M.Protected selection (Pass.next chosen before) key → M.Protected selection before key
+      protectedBackward chosen before valid key (M.held source value ref found included resolved) =
+        M.held source value ref earlier included
+          (All.lookup (Storage.lookupAll before source value (O.Admissible.sound valid) earlier) (heldRaw value ref included))
+        where earlier = metadataEarlier chosen before source value found (Pins.holderIsMetadata value ref included)
+      protectedBackward chosen before valid key (M.required previous (M.reference source value ref found included resolved)) =
+        M.requireReference source value ref (protectedBackward chosen before valid source previous) earlier raw
+          (All.lookup (Storage.lookupAll before source value (O.Admissible.sound valid) earlier) raw)
+        where
+        earlier = protectedEarlier chosen before source value found (protectedBackward chosen before valid source previous)
+        raw = subst (λ refs → ref ∈ refs) (M.holdingReferences (M.readerOrigin previous) selection (Pass.next chosen before) value) included
+      protectedBackward chosen before valid key (M.required previous
+        (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
+        M.required (protectedBackward chosen before valid parent previous)
+          (subst (λ mode → M.Dependency mode selection before parent child)
+            (cong M.temporaryFor (sym (readerBackward chosen before valid parent previous)))
+            (M.attachment parent parentValue child childValue
+              (protectedEarlier chosen before parent parentValue parentFound (protectedBackward chosen before valid parent previous))
+              (Obs.Support.backwardPlain (Steps.stepSupport chosen before valid) child childValue childFound
+                (holdingChildPlain (M.readerOrigin previous) selection (Pass.next chosen before) childValue (O.reference parent (O.kind (O.body parentValue))) attached))
+              (trans (Pins.holdingParentStable (M.readerOrigin previous) selection before (Pass.next chosen before) childValue) attached) sameOwner))
+
+      readerBackward : ∀ chosen before (valid : O.Admissible before) key (pin : M.Protected selection (Pass.next chosen before) key) →
+        M.readerOrigin (protectedBackward chosen before valid key pin) ≡ M.readerOrigin pin
+      readerBackward chosen before valid key (M.held source value ref found included resolved) = refl
+      readerBackward chosen before valid key (M.required previous (M.reference source value ref found included resolved)) = readerBackward chosen before valid source previous
+      readerBackward chosen before valid key (M.required previous (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
+        readerBackward chosen before valid parent previous
 
     canonicalPositive : ∀ before after key value → O.Admissible before → Obs.Support selection before after →
       DB.lookup key before ≡ just value → M.Needed selection before key → M.project selection before value ≡ value → M.project selection after value ≡ value

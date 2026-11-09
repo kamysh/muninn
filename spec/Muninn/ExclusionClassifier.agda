@@ -7,9 +7,11 @@ import Muninn.ExclusionOutcomes as E
 import Muninn.FiniteClosure as F
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false)
+import Data.Bool.Properties as BoolProperties
 open import Data.String using (String)
-open import Data.List using (List; []; _∷_; map)
+open import Data.List using (List; []; _∷_; _++_; map)
 open import Data.List.Membership.Propositional using (_∈_)
+open import Data.List.Membership.Propositional.Properties using (∈-++⁻; ∈-++⁺ˡ; ∈-++⁺ʳ)
 open import Data.List.Relation.Unary.Any using (here; there)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Maybe.Properties using (just-injective)
@@ -260,8 +262,6 @@ module Model (excluded : List String → String → Bool) where
 
     module Permanent = F.Closure Root (M.Dependency M.permanent selection world)
       root? (dependency? M.permanent) (keys world) rootIn (dependencyTargetIn M.permanent)
-    module Temporary = F.Closure Held (M.Dependency M.temporary selection world)
-      held? (dependency? M.temporary) (keys world) heldIn (dependencyTargetIn M.temporary)
 
     toNeeded : ∀ {key} → Permanent.Reach key → M.Needed selection world key
     toNeeded (Permanent.root (value , found , rooted)) = M.root _ value found rooted
@@ -271,21 +271,65 @@ module Model (excluded : List String → String → Bool) where
     fromNeeded (M.root key value found rooted) = Permanent.root (value , found , rooted)
     fromNeeded (M.required previous dependency) = Permanent.step (fromNeeded previous) dependency
 
-    toProtected : ∀ {key} → Temporary.Reach key → M.Protected selection world key
-    toProtected (Temporary.root (source , sourceIn , value , found , ref , present , refl , resolved)) =
-      M.held source value ref found present resolved
-    toProtected (Temporary.step previous dependency) = M.required (toProtected previous) dependency
+    HeldWith : Bool → ℕ → ℕ → Set
+    HeldWith flag target source = At world source (λ value → M.reader value ≡ flag ×
+      Σ O.Reference (λ ref → ref ∈ M.heldReferences value ×
+        (O.target ref ≡ target × O.Resolves world (O.owner value) ref)))
 
-    fromProtected : ∀ {key} → M.Protected selection world key → Temporary.Reach key
-    fromProtected (M.held source value ref found present resolved) = Temporary.root
-      (source , foundInKeys world source value found , value , found , ref , present , refl , resolved)
-    fromProtected (M.required previous dependency) = Temporary.step (fromProtected previous) dependency
+    heldWith? : ∀ flag target source → Dec (HeldWith flag target source)
+    heldWith? flag target source = at? world source _ (λ value → both (BoolProperties._≟_ (M.reader value) flag)
+      (F.choose (λ ref → O.target ref ≡ target × O.Resolves world (O.owner value) ref)
+        (λ ref → both (O.target ref ≟ target) (resolves? world (O.owner value) ref)) (M.heldReferences value)))
+
+    module Temporary (flag : Bool) where
+      Seed : ℕ → Set
+      Seed target = Σ ℕ (λ source → source ∈ keys world × HeldWith flag target source)
+
+      seed? : ∀ key → Dec (Seed key)
+      seed? key = F.choose (HeldWith flag key) (heldWith? flag key) (keys world)
+
+      seedIn : ∀ {key} → Seed key → key ∈ keys world
+      seedIn (source , sourceIn , value , found , origin , ref , present , refl , resolved) =
+        foundInKeys world (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved)
+
+      module Closure = F.Closure Seed (M.Dependency (M.temporaryFor flag) selection world)
+        seed? (dependency? (M.temporaryFor flag)) (keys world) seedIn (dependencyTargetIn (M.temporaryFor flag))
+      open Closure public
+
+      mutual
+        toProtected : ∀ {key} → Reach key → M.Protected selection world key
+        toProtected (root (source , sourceIn , value , found , origin , ref , present , refl , resolved)) =
+          M.held source value ref found present resolved
+        toProtected (step previous dependency) = M.required (toProtected previous)
+          (subst (λ mode → M.Dependency mode selection world _ _) (cong M.temporaryFor (sym (originIsReader previous))) dependency)
+
+        originIsReader : ∀ {key} (path : Reach key) → M.readerOrigin (toProtected path) ≡ flag
+        originIsReader (root (source , sourceIn , value , found , origin , ref , present , refl , resolved)) = origin
+        originIsReader (step previous dependency) = originIsReader previous
+
+      fromProtected : ∀ {key} (pin : M.Protected selection world key) → M.readerOrigin pin ≡ flag → Reach key
+      fromProtected (M.held source value ref found present resolved) origin = root
+        (source , foundInKeys world source value found , value , found , origin , ref , present , refl , resolved)
+      fromProtected (M.required previous dependency) origin = step (fromProtected previous origin)
+        (subst (λ mode → M.Dependency mode selection world _ _) (cong M.temporaryFor origin) dependency)
+
+    module Readers = Temporary true
+    module Background = Temporary false
+
+    toProtected : ∀ {key} → Readers.Reach key ⊎ Background.Reach key → M.Protected selection world key
+    toProtected (inj₁ path) = Readers.toProtected path
+    toProtected (inj₂ path) = Background.toProtected path
+
+    fromProtected : ∀ {key} → M.Protected selection world key → Readers.Reach key ⊎ Background.Reach key
+    fromProtected pin with M.readerOrigin pin in origin
+    ... | true = inj₁ (Readers.fromProtected pin origin)
+    ... | false = inj₂ (Background.fromProtected pin origin)
 
     needed? : ∀ key → Dec (M.Needed selection world key)
     needed? key = mapDecision toNeeded fromNeeded (Permanent.decide key)
 
     protected? : ∀ key → Dec (M.Protected selection world key)
-    protected? key = mapDecision toProtected fromProtected (Temporary.decide key)
+    protected? key = mapDecision toProtected fromProtected (either (Readers.decide key) (Background.decide key))
 
     -- Independent evidence: a record can be needed AND protected. No priority
     -- enum may discard its lease and permit premature snapshot rewriting.
@@ -296,7 +340,7 @@ module Model (excluded : List String → String → Bool) where
     neededKeys = Permanent.Saturated.known Permanent.saturation
 
     protectedKeys : List ℕ
-    protectedKeys = Temporary.Saturated.known Temporary.saturation
+    protectedKeys = Readers.Saturated.known Readers.saturation ++ Background.Saturated.known Background.saturation
 
     neededSound : ∀ {key} → key ∈ neededKeys → M.Needed selection world key
     neededSound present = toNeeded (Permanent.Saturated.sound Permanent.saturation present)
@@ -305,7 +349,11 @@ module Model (excluded : List String → String → Bool) where
     neededComplete needed = Permanent.complete (fromNeeded needed)
 
     protectedSound : ∀ {key} → key ∈ protectedKeys → M.Protected selection world key
-    protectedSound present = toProtected (Temporary.Saturated.sound Temporary.saturation present)
+    protectedSound present with ∈-++⁻ (Readers.Saturated.known Readers.saturation) present
+    ... | inj₁ reader = Readers.toProtected (Readers.Saturated.sound Readers.saturation reader)
+    ... | inj₂ work = Background.toProtected (Background.Saturated.sound Background.saturation work)
 
     protectedComplete : ∀ {key} → M.Protected selection world key → key ∈ protectedKeys
-    protectedComplete protected = Temporary.complete (fromProtected protected)
+    protectedComplete protected with fromProtected protected
+    ... | inj₁ reader = ∈-++⁺ˡ (Readers.complete reader)
+    ... | inj₂ work = ∈-++⁺ʳ (Readers.Saturated.known Readers.saturation) (Background.complete work)

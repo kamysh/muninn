@@ -114,7 +114,7 @@ module Model (excluded : List String → String → Bool) where
         (O.Resolves.rightOwner resolved) (trans (cong O.owner targetSame) owned)
       sourceCaptured = covered source value sourceFound sourceOwned
       sourceUnprotected : ¬ M.Protected selection world source
-      sourceUnprotected protected = unprotected (M.required protected (M.reference source value ref sourceFound included resolved))
+      sourceUnprotected protected = unprotected (M.requireReference source value ref protected sourceFound included resolved)
     ... | yes sourceNeeded = ⊥-elim (Data.Sum.[ unneeded , unprotected ]
       (referenceNeed world source value ref sourceFound included resolved sourceNeeded
         (canonicalAtRest world source value released quiet sourceFound sourceCaptured sourceNeeded)))
