@@ -94,25 +94,38 @@ module Model (excluded : List String → String → Bool) where
     sourceOf (M.held source value ref found included resolved) = source
     sourceOf (M.required previous dependency) = sourceOf previous
 
+    originReader : ∀ {world key} (pin : M.Protected selection world key) → M.readerOrigin pin ≡ M.readerAt world (sourceOf pin)
+    originReader {world = world} (M.held source value ref found included resolved) = sym (M.readerAtMatches world source value found)
+    originReader (M.required previous dependency) = originReader previous
+
     module Footprint (world : O.World) (source : ℕ) where
       module Facts = Classify.Assessment selection world
+      flag = M.readerAt world source
       Seed : ℕ → Set
       Seed key = Facts.HeldAt key source
       seed? : ∀ key → Dec (Seed key)
       seed? key = Facts.heldAt? key source
       seedIn : ∀ {key} → Seed key → key ∈ C.keys world
       seedIn (value , found , ref , included , refl , resolved) = C.foundInKeys world (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved)
-      module Closure = F.Closure Seed (M.Dependency M.temporary selection world) seed? (Facts.dependency? M.temporary)
-        (C.keys world) seedIn (Facts.dependencyTargetIn M.temporary)
+      module Closure = F.Closure Seed (M.Dependency (M.temporaryFor flag) selection world) seed? (Facts.dependency? (M.temporaryFor flag))
+        (C.keys world) seedIn (Facts.dependencyTargetIn (M.temporaryFor flag))
       open Closure public using (Reach; decide)
 
-      protected : ∀ {key} → Reach key → M.Protected selection world key
-      protected (Closure.root (value , found , ref , included , refl , resolved)) = M.held source value ref found included resolved
-      protected (Closure.step previous dependency) = M.required (protected previous) dependency
+      mutual
+        protected : ∀ {key} → Reach key → M.Protected selection world key
+        protected (Closure.root (value , found , ref , included , refl , resolved)) = M.held source value ref found included resolved
+        protected (Closure.step previous dependency) = M.required (protected previous)
+          (subst (λ mode → M.Dependency mode selection world _ _) (cong M.temporaryFor (sym (protectedReader previous))) dependency)
 
-      fromProtection : ∀ {key} (held : M.Protected selection world key) → sourceOf held ≡ source → Reach key
+        protectedReader : ∀ {key} (path : Reach key) → M.readerOrigin (protected path) ≡ flag
+        protectedReader (Closure.root (value , found , ref , included , refl , resolved)) = sym (M.readerAtMatches world source value found)
+        protectedReader (Closure.step previous dependency) = protectedReader previous
+
+      fromProtection : ∀ {key} (pin : M.Protected selection world key) → sourceOf pin ≡ source → Reach key
       fromProtection (M.held actual value ref found included resolved) refl = Closure.root (value , found , ref , included , refl , resolved)
-      fromProtection (M.required previous dependency) original = Closure.step (fromProtection previous original) dependency
+      fromProtection (M.required previous dependency) original = Closure.step (fromProtection previous original)
+        (subst (λ mode → M.Dependency mode selection world _ _)
+          (cong M.temporaryFor (trans (originReader previous) (cong (M.readerAt world) original))) dependency)
 
     CleanRef : O.World → O.Reference → Set
     CleanRef world ref = C.At world (O.target ref) (λ value → O.kind (O.body value) ≡ O.expected ref ×

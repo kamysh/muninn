@@ -12,7 +12,7 @@ import Muninn.CleanupReleased as Released
 import Muninn.CleanupAdmission as Admission
 import Muninn.ReceiptLedger as Ledger
 open import Data.Nat using (ℕ; _≟_)
-open import Data.Bool using (Bool)
+open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
 open import Data.List using (List; [])
 open import Data.List.Membership.Propositional using (_∈_)
@@ -171,17 +171,29 @@ module Model (excluded : List String → String → Bool) where
     protectedPresent world .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) = O.Resolves.value resolved , O.Resolves.found resolved
     protectedPresent world child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) = childValue , childFound
 
-    protectedBackward : ∀ world removed key → M.Protected selection (DB.delete removed world) key → M.Protected selection world key
-    protectedBackward world removed .(O.target ref) (M.held source value ref found included resolved) =
-      M.held source value ref (lookupBeforeDelete world removed source value found) included (resolveBeforeDelete world removed (O.owner value) ref resolved)
-    protectedBackward world removed .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) =
-      M.required (protectedBackward world removed source previous)
-        (M.reference source value ref (lookupBeforeDelete world removed source value found) included (resolveBeforeDelete world removed (O.owner value) ref resolved))
-    protectedBackward world removed child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) =
-      M.required (protectedBackward world removed parent previous)
-        (M.attachment parent parentValue child childValue (lookupBeforeDelete world removed parent parentValue parentFound)
-          (lookupBeforeDelete world removed child childValue childFound)
-          (trans (Pins.temporaryParentStable selection world (DB.delete removed world) childValue) attached) sameOwner)
+    mutual
+      protectedBackward : ∀ world removed key → M.Protected selection (DB.delete removed world) key → M.Protected selection world key
+      protectedBackward world removed .(O.target ref) (M.held source value ref found included resolved) =
+        M.held source value ref (lookupBeforeDelete world removed source value found) included (resolveBeforeDelete world removed (O.owner value) ref resolved)
+      protectedBackward world removed .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) =
+        M.requireReference source value ref (protectedBackward world removed source previous)
+          (lookupBeforeDelete world removed source value found)
+          (subst (λ refs → ref ∈ refs) (M.holdingReferences (M.readerOrigin previous) selection (DB.delete removed world) value) included)
+          (resolveBeforeDelete world removed (O.owner value) ref resolved)
+      protectedBackward world removed child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) =
+        M.required (protectedBackward world removed parent previous)
+          (subst (λ mode → M.Dependency mode selection world parent child)
+            (cong M.temporaryFor (sym (backwardReader world removed parent previous)))
+            (M.attachment parent parentValue child childValue (lookupBeforeDelete world removed parent parentValue parentFound)
+              (lookupBeforeDelete world removed child childValue childFound)
+              (trans (Pins.holdingParentStable (M.readerOrigin previous) selection world (DB.delete removed world) childValue) attached) sameOwner))
+
+      backwardReader : ∀ world removed key (pin : M.Protected selection (DB.delete removed world) key) →
+        M.readerOrigin (protectedBackward world removed key pin) ≡ M.readerOrigin pin
+      backwardReader world removed .(O.target ref) (M.held source value ref found included resolved) = refl
+      backwardReader world removed .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) = backwardReader world removed source previous
+      backwardReader world removed child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) =
+        backwardReader world removed parent previous
 
     backwardSource : ∀ world removed key (pin : M.Protected selection (DB.delete removed world) key) →
       Gate.sourceOf (protectedBackward world removed key pin) ≡ Gate.sourceOf pin
@@ -204,6 +216,10 @@ module Model (excluded : List String → String → Bool) where
       where impossible : just ref ≢ nothing
             impossible ()
 
+    holdingAttachmentNotReader : ∀ flag world value ref → M.parentOf (M.temporaryFor flag) selection world value ≡ just ref → O.kind (O.body value) ≢ O.activeReaderK
+    holdingAttachmentNotReader true world value ref ()
+    holdingAttachmentNotReader false world value ref attached = attachmentNotReader world value ref attached
+
     module Removing (world : O.World) (owner : O.Owner) (removed : ℕ) (valid : O.Admissible world) (actual : ReaderAt owner removed world) where
       unreferenced = privateUnreferenced world owner removed valid actual
 
@@ -216,22 +232,35 @@ module Model (excluded : List String → String → Bool) where
       survivingProtectionDistinct .removed pin refl with protectedPresent (DB.delete removed world) removed pin
       ... | value , found = Effects.presentNotAbsent (trans (sym found) (DB.deleteAbsent removed world))
 
-      otherHolds : ∀ key (pin : M.Protected selection world key) → Gate.sourceOf pin ≢ removed → M.Protected selection (DB.delete removed world) key
-      otherHolds .(O.target ref) (M.held source value ref found included resolved) different =
-        M.held source value ref (trans (DB.deletePreservesOther removed source world (λ equal → different (sym equal))) found) included
-          (resolvedSurvives source value ref found (Released.Model.heldRaw excluded value ref included) resolved)
-      otherHolds .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) different =
-        M.required earlier (M.reference source value ref
-          (trans (DB.deletePreservesOther removed source world (survivingProtectionDistinct source earlier)) found) included
-          (resolvedSurvives source value ref found included resolved))
-        where earlier = otherHolds source previous different
-      otherHolds child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) different =
-        M.required earlier (M.attachment parent parentValue child childValue
-          (trans (DB.deletePreservesOther removed parent world (survivingProtectionDistinct parent earlier)) parentFound)
-          (trans (DB.deletePreservesOther removed child world (differentFromReader world owner removed actual child childValue childFound
-            (attachmentNotReader world childValue _ attached))) childFound)
-          (trans (sym (Pins.temporaryParentStable selection world (DB.delete removed world) childValue)) attached) sameOwner)
-        where earlier = otherHolds parent previous different
+      mutual
+        otherHolds : ∀ key (pin : M.Protected selection world key) → Gate.sourceOf pin ≢ removed → M.Protected selection (DB.delete removed world) key
+        otherHolds .(O.target ref) (M.held source value ref found included resolved) different =
+          M.held source value ref (trans (DB.deletePreservesOther removed source world (λ equal → different (sym equal))) found) included
+            (resolvedSurvives source value ref found (Released.Model.heldRaw excluded value ref included) resolved)
+        otherHolds .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) different =
+          M.requireReference source value ref earlier
+            (trans (DB.deletePreservesOther removed source world (survivingProtectionDistinct source earlier)) found) raw
+            (resolvedSurvives source value ref found raw resolved)
+          where
+          earlier = otherHolds source previous different
+          raw = subst (λ refs → ref ∈ refs) (M.holdingReferences (M.readerOrigin previous) selection world value) included
+        otherHolds child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) different =
+          M.required earlier
+            (subst (λ mode → M.Dependency mode selection (DB.delete removed world) parent child)
+              (cong M.temporaryFor (sym (otherReader parent previous different)))
+              (M.attachment parent parentValue child childValue
+                (trans (DB.deletePreservesOther removed parent world (survivingProtectionDistinct parent earlier)) parentFound)
+                (trans (DB.deletePreservesOther removed child world (differentFromReader world owner removed actual child childValue childFound
+                  (holdingAttachmentNotReader (M.readerOrigin previous) world childValue _ attached))) childFound)
+                (trans (sym (Pins.holdingParentStable (M.readerOrigin previous) selection world (DB.delete removed world) childValue)) attached) sameOwner))
+          where earlier = otherHolds parent previous different
+
+        otherReader : ∀ key (pin : M.Protected selection world key) (different : Gate.sourceOf pin ≢ removed) →
+          M.readerOrigin (otherHolds key pin different) ≡ M.readerOrigin pin
+        otherReader .(O.target ref) (M.held source value ref found included resolved) different = refl
+        otherReader .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) different = otherReader source previous different
+        otherReader child (M.required previous (M.attachment parent parentValue .child childValue parentFound childFound attached sameOwner)) different =
+          otherReader parent previous different
 
     noNewProtection : ∀ {A : Set} owner removed (ready : A) replan world key →
       M.Protected selection (proj₂ (DB.execute (finish owner removed ready replan) world)) key → M.Protected selection world key

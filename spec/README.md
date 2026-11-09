@@ -313,3 +313,11 @@ transaction while access is unavailable, then resumes or replays actual saved
 work through the current shared receipt. It preserves context and bootstrap
 credentials across connection observations. See [database resumption](DATABASE-RESUMPTION.md).
 Initial bootstrap, migrations and full runtime integration remain under #46.
+
+## Exact search read footprints
+
+`Protected` derives its dependency scope from the stored holder origin. Search
+readers follow their saved-view references; background work keeps its existing
+attachment scope. The exact classifier, admission guard, cleanup preservation
+and reader-release proofs use that same rule. See [search footprints](READ-FOOTPRINT.md).
+Fresh-view production and full lifecycle integration remain under #84.

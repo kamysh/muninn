@@ -301,22 +301,41 @@ module Model (excluded : List String → String → Bool) where
   rooted : Rule → O.World → O.Record → Bool
   rooted selection world value = rootedFrom selection world (O.owner value) (classify (O.body value))
 
-  data Mode : Set where permanent temporary : Mode
+  data Mode : Set where permanent temporary reading : Mode
+
+  temporaryFor : Bool → Mode
+  temporaryFor true = reading
+  temporaryFor false = temporary
+
+  reader : O.Record → Bool
+  reader (O.recordOf owner (O.activeReader refs payload)) = true
+  reader _ = false
+
+  readerAt : O.World → ℕ → Bool
+  readerAt world source with DB.lookup source world
+  ... | just value = reader value
+  ... | nothing = false
+
+  readerAtMatches : ∀ world source value → DB.lookup source world ≡ just value → readerAt world source ≡ reader value
+  readerAtMatches world source value found rewrite found = refl
 
   referencesFor : Mode → Rule → O.World → O.Record → List O.Reference
   referencesFor temporary selection world value = O.references (O.body value)
+  referencesFor reading selection world value = O.references (O.body value)
   referencesFor permanent selection world value with classify (O.body value)
   ... | holder = []
   ... | _ = O.references (O.body (project selection world value))
 
   gateAllows : Mode → Rule → O.World → O.Owner → Gate → Bool
   gateAllows temporary selection world owner gate = true
+  gateAllows reading selection world owner gate = false
   gateAllows permanent selection world owner content = true
   gateAllows permanent selection world owner (sourcePath version path) =
     versionPublishedAtPath selection world owner path version
   gateAllows permanent selection world owner transient = false
 
   parentOf : Mode → Rule → O.World → O.Record → Maybe O.Reference
+  parentOf reading selection world value = nothing
   parentOf mode selection world value with classify (O.body value)
   ... | attached parent gate = if gateAllows mode selection world (O.owner value) gate then just parent else nothing
   ... | _ = nothing
@@ -341,11 +360,47 @@ module Model (excluded : List String → String → Bool) where
   ... | holder = O.references (O.body value)
   ... | _ = []
 
-  data Protected (selection : Rule) (world : O.World) : ℕ → Set where
-    held : ∀ source value ref → DB.lookup source world ≡ just value →
-      ref ∈ heldReferences value → O.Resolves world (O.owner value) ref → Protected selection world (O.target ref)
-    required : ∀ {source target} → Protected selection world source →
-      Dependency temporary selection world source target → Protected selection world target
+  -- The origin fixes the dependency interpretation. A search follows its
+  -- actual saved roots and strong dependencies; work keeps its existing scope.
+  mutual
+    data Protected (selection : Rule) (world : O.World) : ℕ → Set where
+      held : ∀ source value ref → DB.lookup source world ≡ just value →
+        ref ∈ heldReferences value → O.Resolves world (O.owner value) ref → Protected selection world (O.target ref)
+      required : ∀ {source target} → (previous : Protected selection world source) →
+        Dependency (temporaryFor (readerOrigin previous)) selection world source target → Protected selection world target
+
+    readerOrigin : ∀ {selection world key} → Protected selection world key → Bool
+    readerOrigin (held source value ref found included resolved) = reader value
+    readerOrigin (required previous dependency) = readerOrigin previous
+
+  holdingReferences : ∀ flag selection world value → referencesFor (temporaryFor flag) selection world value ≡ O.references (O.body value)
+  holdingReferences true selection world value = refl
+  holdingReferences false selection world value = refl
+
+  requireReference : ∀ {selection world} source value ref → Protected selection world source → DB.lookup source world ≡ just value →
+    ref ∈ O.references (O.body value) → O.Resolves world (O.owner value) ref → Protected selection world (O.target ref)
+  requireReference {selection} {world} source value ref previous found included resolved = required previous
+    (reference source value ref found
+      (Relation.Binary.PropositionalEquality.subst (λ refs → ref ∈ refs) (sym (holdingReferences (readerOrigin previous) selection world value)) included) resolved)
+
+  -- Reading dependencies are exactly actual typed strong references. Both
+  -- saved-view members and their prerequisites remain retained; mere
+  -- attachment to the same file version does not add another read.
+  ReadReference : O.World → ℕ → ℕ → Set
+  ReadReference world source target = Σ O.Record (λ value → DB.lookup source world ≡ just value ×
+    Σ O.Reference (λ ref → ref ∈ O.references (O.body value) × (O.target ref ≡ target × O.Resolves world (O.owner value) ref)))
+
+  readingDependency : ∀ {selection world source target} → Dependency reading selection world source target → ReadReference world source target
+  readingDependency (reference source value ref found included resolved) = value , found , ref , included , refl , resolved
+  readingDependency (attachment parent parentValue child childValue parentFound childFound () sameOwner)
+
+  referenceIsReadingDependency : ∀ selection world source target → ReadReference world source target → Dependency reading selection world source target
+  referenceIsReadingDependency selection world source target (value , found , ref , included , refl , resolved) =
+    reference source value ref found included resolved
+
+  referenceKeepsOrigin : ∀ {selection world} source value ref (previous : Protected selection world source) found included resolved →
+    readerOrigin (requireReference source value ref previous found included resolved) ≡ readerOrigin previous
+  referenceKeepsOrigin source value ref previous found included resolved = refl
 
   -- Capture every owned key, including records whose registry/pointer is gone.
   -- Eligibility is decided separately; metadata cannot be deleted by the core.
@@ -438,8 +493,8 @@ module Model (excluded : List String → String → Bool) where
     Dependency permanent selection world source target → Needed selection world target
   sourceDependencyIsNeeded = Needed.required
 
-  activeWorkProtectsDependency : ∀ {selection world source target} → Protected selection world source →
-    Dependency temporary selection world source target → Protected selection world target
+  activeWorkProtectsDependency : ∀ {selection world source target} → (previous : Protected selection world source) →
+    Dependency (temporaryFor (readerOrigin previous)) selection world source target → Protected selection world target
   activeWorkProtectsDependency = Protected.required
 
   -- Rootless components, including cycles, cannot retain themselves merely

@@ -7,13 +7,13 @@ import Muninn.ExclusionOutcomes as E
 import Muninn.CleanupEffects as Effects
 import Muninn.CleanupProgress as Progress
 open import Data.Nat using (ℕ)
-open import Data.Bool using (Bool; false)
+open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
 open import Data.List using (List)
 open import Data.List.Membership.Propositional using (_∈_)
 open import Data.Maybe using (just)
 open import Data.Product using (proj₂)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong; subst)
 module DB = O.DB
 
 module Model (excluded : List String → String → Bool) where
@@ -62,22 +62,39 @@ module Model (excluded : List String → String → Bool) where
     ; found = M.Safety.protected safe (O.target ref) (O.Resolves.value resolved) (O.Resolves.found resolved) pinned
     ; rightKind = O.Resolves.rightKind resolved; rightOwner = O.Resolves.rightOwner resolved }
 
-  protectedSurvives : ∀ selection before after key → M.Safety selection before after →
-    M.Protected selection before key → M.Protected selection after key
-  protectedSurvives selection before after key safe pinned@(M.held source value ref found included resolved) =
-    M.held source value ref (M.Safety.metadata safe source value found (holderIsMetadata value ref included))
-      included (protectedResolves selection before after (O.owner value) ref safe pinned resolved)
-  protectedSurvives selection before after key safe pinned@(M.required previous (M.reference source value ref found included resolved)) =
-    M.required (protectedSurvives selection before after source safe previous)
-      (M.reference source value ref (M.Safety.protected safe source value found previous) included
-        (protectedResolves selection before after (O.owner value) ref safe pinned resolved))
-  protectedSurvives selection before after key safe pinned@(M.required previous
-    (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
-    M.required (protectedSurvives selection before after parent safe previous)
-      (M.attachment parent parentValue child childValue
-        (M.Safety.protected safe parent parentValue parentFound previous)
-        (M.Safety.protected safe child childValue childFound pinned)
-        (trans (sym (temporaryParentStable selection before after childValue)) attached) sameOwner)
+  holdingParentStable : ∀ flag selection before after value →
+    M.parentOf (M.temporaryFor flag) selection before value ≡ M.parentOf (M.temporaryFor flag) selection after value
+  holdingParentStable true selection before after value = refl
+  holdingParentStable false selection before after value = temporaryParentStable selection before after value
+
+  mutual
+    protectedSurvives : ∀ selection before after key → M.Safety selection before after →
+      M.Protected selection before key → M.Protected selection after key
+    protectedSurvives selection before after key safe pin@(M.held source value ref found included resolved) =
+      M.held source value ref (M.Safety.metadata safe source value found (holderIsMetadata value ref included))
+        included (protectedResolves selection before after (O.owner value) ref safe pin resolved)
+    protectedSurvives selection before after key safe pin@(M.required previous (M.reference source value ref found included resolved)) =
+      M.requireReference source value ref (protectedSurvives selection before after source safe previous)
+        (M.Safety.protected safe source value found previous)
+        (subst (λ refs → ref ∈ refs) (M.holdingReferences (M.readerOrigin previous) selection before value) included)
+        (protectedResolves selection before after (O.owner value) ref safe pin resolved)
+    protectedSurvives selection before after key safe pin@(M.required previous
+      (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
+      M.required (protectedSurvives selection before after parent safe previous)
+        (subst (λ mode → M.Dependency mode selection after parent child)
+          (cong M.temporaryFor (sym (readerSurvives selection before after parent safe previous)))
+          (M.attachment parent parentValue child childValue
+            (M.Safety.protected safe parent parentValue parentFound previous)
+            (M.Safety.protected safe child childValue childFound pin)
+            (trans (sym (holdingParentStable (M.readerOrigin previous) selection before after childValue)) attached) sameOwner))
+
+    readerSurvives : ∀ selection before after key (safe : M.Safety selection before after) (pin : M.Protected selection before key) →
+      M.readerOrigin (protectedSurvives selection before after key safe pin) ≡ M.readerOrigin pin
+    readerSurvives selection before after key safe (M.held source value ref found included resolved) = refl
+    readerSurvives selection before after key safe (M.required previous (M.reference source value ref found included resolved)) =
+      readerSurvives selection before after source safe previous
+    readerSurvives selection before after key safe (M.required previous (M.attachment parent parentValue child childValue parentFound childFound attached sameOwner)) =
+      readerSurvives selection before after parent safe previous
 
   module Trace (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
     module Pass = Progress.Model.Pass excluded selection accepted intent
