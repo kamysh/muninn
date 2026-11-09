@@ -402,3 +402,12 @@ transaction and redirects stale version/revision continuations to the current
 rule. Resolution completeness and deterministic policy selection are proved.
 See [stored policy](STORED-POLICY.md). Rule parsing, atomic policy acceptance,
 history/supersession and full lifecycle integration remain separate obligations.
+
+## Cleanup effects under current stored policy
+
+`PolicyCleanupBatch` resolves policy and verifies the actual saved task before
+executing the existing bounded deletion/projection effect in the same transaction.
+It keeps the original capture, derives productive progress and preserves receipts,
+protected data, stored policy and current-view invariants. See
+[current-policy cleanup batches](POLICY-CLEANUP-BATCH.md). Complete acceptance,
+supersession reporting and lifecycle scheduling remain under #84/#25.

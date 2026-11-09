@@ -56,6 +56,7 @@ data Reply : Set where unchanged removed projected : Reply
 -- maintained step counter. Adding another put/remove invalidates this proof.
 data MutationBound {A : Set} : ℕ → DB.Transaction A → Set where
   returnWithin : ∀ capacity result → MutationBound capacity (DB.commit result)
+  abortWithin : ∀ capacity result → MutationBound capacity (DB.abort result)
   putWithin : ∀ {capacity next} key value → MutationBound capacity next →
     MutationBound (suc capacity) (DB.put key value next)
   removeWithin : ∀ {capacity next} key → MutationBound capacity next →
