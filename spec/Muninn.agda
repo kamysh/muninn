@@ -102,3 +102,5 @@ open import Muninn.Registration public
 open import Muninn.Cli          public
 open import Muninn.Knowledge    public
 open import Muninn.Concurrency  public
+
+import Muninn.CheckoutReconciliation

@@ -498,3 +498,15 @@ The universally quantified map and atomic retry laws are proved. Constructing
 and certifying the Rust storage transaction, and requiring this interface in
 the closed dispatcher, remain the separate correspondence/catalog obligations.
 A proof-carrying storage interface is not itself a verified SQL implementation.
+
+## Unreadable files and Git suspension
+
+`CheckoutReconciliation` is the total per-file publication state machine.
+Unreadable files lose both text and structural visibility and retain actionable
+read work. Other indexed paths advance without a premise about their peers.
+Operating/conflicted Git state ignores new candidates and retains the whole
+previous view, filtered by current family policy; an absent initial view stays
+absent. See [the transition laws and adapter boundary](CHECKOUT-RECONCILIATION.md).
+The public `Index.FileReconciliation` module exposes this contract alongside
+existing authorization, schema and dispatch gates. This is specification work,
+not a claim that Rust currently implements the new per-file behavior.

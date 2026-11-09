@@ -13,6 +13,7 @@ module Muninn.Index where
 open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
+import Muninn.CheckoutReconciliation as Reconciliation
 import Muninn.IndexSelection as Selection
 import Muninn.IndexFileLimits as FileLimits
 import Muninn.ArtifactReuse as Reuse
@@ -157,3 +158,6 @@ module FileAnalysis (family selected generation : ℕ) (policy : Config.FamilyPo
 -- Reconciliation/embedding use the mandatory saved-work decisions.
 module ReuseAnalysis (model : Reuse.AnalysisModel) (family : Worktree.FamilyId) = Reuse.Analyses model family
 module ReuseEmbedding (family : Worktree.FamilyId) = Reuse.Embeddings family
+
+-- Mandatory per-file publication semantics after the existing admission gates.
+module FileReconciliation = Reconciliation

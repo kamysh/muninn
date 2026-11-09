@@ -73,8 +73,10 @@ indexingRequiresReadySchema autoDiscovered = refl
 indexingRequiresReadySchema bgReindex = refl
 indexingRequiresReadySchema bgReindexStale = refl
 
--- Publication is separate from job state: failure, suspension, and retries
--- keep the entire last snapshot (including graph), even when no snapshot exists.
+-- Git gates publication separately from job phase. Per-file unreadable work
+-- is handled by CheckoutReconciliation before forming the settled candidate;
+-- it must not be treated as a reason to retain stale file contents. A missing
+-- candidate here means no newly completed publication, not a file-read result.
 chooseSnapshot : ∀ {A : Set} → GitState → Maybe A → Maybe A → Maybe A
 chooseSnapshot Operating previous candidate = previous
 chooseSnapshot Conflicted previous candidate = previous
