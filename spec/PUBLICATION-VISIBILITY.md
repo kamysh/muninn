@@ -7,7 +7,7 @@ contents selected from that snapshot.
 
 ## Derive the observations from actual writes
 
-`Quiet` identifies actual structural-snapshot, published-selector and receipt
+`Quiet` identifies actual structural-snapshot, published-selector, receipt and private-reader
 records. Those bodies do not supply registration, checkout, file-binding,
 symbol or edge query facts. It is not a caller-provided unchanged-visibility
 predicate.
@@ -17,7 +17,8 @@ They use the existing unique-store condition and actual old-record lookup to
 prove that replacing an ignored record cannot remove or create a query hit.
 No per-operation atomic relation or selected fixture is introduced.
 
-`Model.Write` applies those laws to the actual `DB.write` result. It derives,
+`Model.Write` applies those laws to replacement writes; `Model.Insert` covers
+fresh insertion. They share the observation-congruence proof and derive,
 in dependency order:
 
 - Family registration and checkout observations.

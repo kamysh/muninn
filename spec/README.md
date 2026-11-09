@@ -377,3 +377,11 @@ preserves saved data/readers/worksets and proves interrupted retry convergence
 without repeating allocation. See [view publication](VIEW-PUBLICATION.md).
 Stored-policy selection, new-reader construction and full lifecycle assembly
 remain under #84.
+
+## Structural readers from the current view
+
+`CurrentReader` selects the actual stored current snapshot and admits its saved
+reader in one transaction. It preserves old rows/readers/worksets and derives
+successful admission after the existing productive cleanup pass, including
+canonicality under the new reader insertion. See [current readers](CURRENT-READER.md).
+Query-specific footprints and full lifecycle assembly remain under #84.

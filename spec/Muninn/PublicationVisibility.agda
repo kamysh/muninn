@@ -8,6 +8,7 @@ import Muninn.CleanupStorage as Storage
 import Muninn.CleanupObservations as Observations
 import Muninn.CleanupOrder as Order
 import Muninn.CleanupEffects as Effects
+import Muninn.CleanupAdmissionStorage as Allocation
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false; _∧_; _∨_)
 open import Data.String using (String)
@@ -38,6 +39,25 @@ anyCong : ∀ first second world → (∀ key value → first key value ≡ seco
 anyCong first second [] same = refl
 anyCong first second ((key , value) ∷ rows) same =
   cong₂ _∨_ (same key value) (anyCong first second rows same)
+
+deleteMissing : ∀ world key → DB.lookup key world ≡ nothing → DB.delete key world ≡ world
+deleteMissing [] key missing = refl
+deleteMissing ((stored , value) ∷ rows) key missing with key ≟ stored
+... | yes same with missing
+...   | ()
+deleteMissing ((stored , value) ∷ rows) key missing | no different = cong ((stored , value) ∷_) (deleteMissing rows key missing)
+
+anyInsert : ∀ test world key new → Allocation.Fresh world key → test key new ≡ false →
+  E.anyRow test (DB.write key new world) ≡ E.anyRow test world
+anyInsert test world key new fresh ignored rewrite deleteMissing world key (Allocation.freshAbsent world key fresh) | ignored = refl
+
+observedInsert : ∀ {A : Set} (observe : Maybe O.Record → A) world key new → Allocation.Fresh world key →
+  observe (just new) ≡ observe nothing → ∀ target →
+  observe (DB.lookup target world) ≡ observe (DB.lookup target (DB.write key new world))
+observedInsert observe world key new fresh ignored target with key ≟ target
+... | yes refl = trans (cong observe (Allocation.freshAbsent world key fresh))
+  (trans (sym ignored) (sym (cong observe (DB.writeVisible key new world))))
+... | no different = sym (cong observe (DB.writePreservesOther key target new world different))
 
 anyWrite : ∀ test world key old new → O.Unique world →
   DB.lookup key world ≡ just old → test key old ≡ false → test key new ≡ false →
@@ -82,6 +102,7 @@ data Quiet : O.Record → Set where
     Quiet (O.recordOf owner (O.structuralSnapshot selected nodes edges payload))
   selector : ∀ owner selected target → Quiet (O.recordOf owner (O.publishedView selected target))
   receipt : ∀ owner receiptData → Quiet (O.recordOf owner (O.receipt receiptData))
+  reader : ∀ owner refs payload → Quiet (O.recordOf owner (O.activeReader refs payload))
 
 module Model (excluded : List String → String → Bool) where
   module M = E.Model excluded
@@ -91,32 +112,90 @@ module Model (excluded : List String → String → Bool) where
   quietRegistered selection ._ (snapshot owner selected nodes edges payload) = refl
   quietRegistered selection ._ (selector owner selected target) = refl
   quietRegistered selection ._ (receipt owner receiptData) = refl
+  quietRegistered selection ._ (reader owner refs payload) = refl
 
   quietCheckout : ∀ selection value → Quiet value → M.checkoutObservation selection (just value) ≡ false
   quietCheckout selection ._ (snapshot owner selected nodes edges payload) = refl
   quietCheckout selection ._ (selector owner selected target) = refl
   quietCheckout selection ._ (receipt owner receiptData) = refl
+  quietCheckout selection ._ (reader owner refs payload) = refl
 
   quietDelta : ∀ owner selected path value → Quiet value → M.deltaValue owner selected path value ≡ false
   quietDelta owner selected path ._ (snapshot storedOwner checkout nodes edges payload) = refl
   quietDelta owner selected path ._ (selector storedOwner checkout target) = refl
   quietDelta owner selected path ._ (receipt storedOwner receiptData) = refl
+  quietDelta owner selected path ._ (reader storedOwner refs payload) = refl
 
   quietBinding : ∀ selection world owner selected path version value → Quiet value →
     M.bindingValue selection world owner selected path version value ≡ false
   quietBinding selection world owner selected path version ._ (snapshot storedOwner checkout nodes edges payload) = refl
   quietBinding selection world owner selected path version ._ (selector storedOwner checkout target) = refl
   quietBinding selection world owner selected path version ._ (receipt storedOwner receiptData) = refl
+  quietBinding selection world owner selected path version ._ (reader storedOwner refs payload) = refl
 
   quietSymbol : ∀ value → Quiet value → M.symbolFacts (just value) ≡ nothing
   quietSymbol ._ (snapshot owner selected nodes edges payload) = refl
   quietSymbol ._ (selector owner selected target) = refl
   quietSymbol ._ (receipt owner receiptData) = refl
+  quietSymbol ._ (reader owner refs payload) = refl
 
   quietEdge : ∀ value → Quiet value → M.edgeFacts (just value) ≡ nothing
   quietEdge ._ (snapshot owner selected nodes edges payload) = refl
   quietEdge ._ (selector owner selected target) = refl
   quietEdge ._ (receipt owner receiptData) = refl
+  quietEdge ._ (reader owner refs payload) = refl
+
+  module StableFacts (selection : E.Rule) (before after : O.World)
+    (checkoutSame : ∀ selected → M.checkoutLive selection before selected ≡ M.checkoutLive selection after selected)
+    (bindingRowsSame : ∀ owner selected path version →
+      E.anyRow (λ key value → M.bindingValue selection before owner selected path version value) before ≡
+      E.anyRow (λ key value → M.bindingValue selection after owner selected path version value) after)
+    (symbolFactsSame : ∀ key → M.symbolFacts (DB.lookup key before) ≡ M.symbolFacts (DB.lookup key after))
+    (edgeFactsSame : ∀ key → M.edgeFacts (DB.lookup key before) ≡ M.edgeFacts (DB.lookup key after)) where
+    versionSame : ∀ owner selected path version →
+      M.versionAtPath selection before owner selected path version ≡ M.versionAtPath selection after owner selected path version
+    versionSame owner selected path version = cong₂ _∧_ (checkoutSame selected)
+      (cong (M.included selection owner path ∧_) (bindingRowsSame owner selected path version))
+
+    symbolValueSame : ∀ owner selected value →
+      M.symbolObservation selection before owner selected value ≡ M.symbolObservation selection after owner selected value
+    symbolValueSame owner selected value with M.symbolFacts value
+    ... | nothing = refl
+    ... | just (storedOwner , version , path) = cong (E.sameOwner owner storedOwner ∧_) (versionSame owner selected path version)
+
+    symbolSame : ∀ owner selected symbol →
+      M.symbolVisible selection before owner selected symbol ≡ M.symbolVisible selection after owner selected symbol
+    symbolSame owner selected symbol = trans (symbolValueSame owner selected (DB.lookup symbol before))
+      (cong (M.symbolFromFacts selection after owner selected)
+        (symbolFactsSame symbol))
+
+    edgeValueSame : ∀ owner selected value →
+      M.edgeObservation selection before owner selected value ≡ M.edgeObservation selection after owner selected value
+    edgeValueSame owner selected value with M.edgeFacts value
+    ... | nothing = refl
+    ... | just (storedOwner , source , target) = cong (E.sameOwner owner storedOwner ∧_)
+      (cong₂ _∧_ (symbolSame owner selected source) (symbolSame owner selected target))
+
+    edgeSame : ∀ owner selected edge →
+      M.edgeVisible selection before owner selected edge ≡ M.edgeVisible selection after owner selected edge
+    edgeSame owner selected edge = trans (edgeValueSame owner selected (DB.lookup edge before))
+      (cong (M.edgeFromFacts selection after owner selected)
+        (edgeFactsSame edge))
+
+    projectSame : ∀ value → M.project selection before value ≡ M.project selection after value
+    projectSame value with Observations.snapshotView value
+    ... | Observations.plain nonSnapshot = trans (Obs.projectionPlain selection before value nonSnapshot)
+      (sym (Obs.projectionPlain selection after value nonSnapshot))
+    ... | Observations.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
+    ...   | no different = refl
+    ...   | yes same = cong₂ (λ ns es → O.recordOf owner (O.structuralSnapshot selected ns es payload))
+      (filterCong (M.symbolVisible selection before owner selected) (M.symbolVisible selection after owner selected) nodes
+        (symbolSame owner selected))
+      (filterCong (M.edgeVisible selection before owner selected) (M.edgeVisible selection after owner selected) edges
+        (edgeSame owner selected))
+
+    canonicalPersists : ∀ value → M.project selection before value ≡ value → M.project selection after value ≡ value
+    canonicalPersists value canonical = trans (sym (projectSame value)) canonical
 
   module Write (selection : E.Rule) (before : O.World) (key : ℕ) (old new : O.Record)
     (unique : O.Unique before) (found : DB.lookup key before ≡ just old)
@@ -152,49 +231,44 @@ module Model (excluded : List String → String → Bool) where
         (λ key value → M.bindingValue selection after owner selected path version value) after
         (λ key value → bindingSame owner selected path version value))
 
-    versionSame : ∀ owner selected path version →
-      M.versionAtPath selection before owner selected path version ≡ M.versionAtPath selection after owner selected path version
-    versionSame owner selected path version = cong₂ _∧_ (checkoutSame selected)
-      (cong (M.included selection owner path ∧_) (bindingRowsSame owner selected path version))
+    module Stable = StableFacts selection before after checkoutSame bindingRowsSame
+      (observedWrite M.symbolFacts before key old new found
+        (trans (quietSymbol old oldQuiet) (sym (quietSymbol new newQuiet))))
+      (observedWrite M.edgeFacts before key old new found
+        (trans (quietEdge old oldQuiet) (sym (quietEdge new newQuiet))))
+    open Stable public
 
-    symbolValueSame : ∀ owner selected value →
-      M.symbolObservation selection before owner selected value ≡ M.symbolObservation selection after owner selected value
-    symbolValueSame owner selected value with M.symbolFacts value
-    ... | nothing = refl
-    ... | just (storedOwner , version , path) = cong (E.sameOwner owner storedOwner ∧_) (versionSame owner selected path version)
+  module Insert (selection : E.Rule) (before : O.World) (key : ℕ) (new : O.Record)
+    (fresh : Allocation.Fresh before key) (quiet : Quiet new) where
+    after = DB.write key new before
 
-    symbolSame : ∀ owner selected symbol →
-      M.symbolVisible selection before owner selected symbol ≡ M.symbolVisible selection after owner selected symbol
-    symbolSame owner selected symbol = trans (symbolValueSame owner selected (DB.lookup symbol before))
-      (cong (M.symbolFromFacts selection after owner selected)
-        (observedWrite M.symbolFacts before key old new found
-          (trans (quietSymbol old oldQuiet) (sym (quietSymbol new newQuiet))) symbol))
+    registeredSame : M.familyRegistered selection before ≡ M.familyRegistered selection after
+    registeredSame = sym (anyInsert (λ key value → M.registeredValue selection value) before key new fresh
+      (quietRegistered selection new quiet))
 
-    edgeValueSame : ∀ owner selected value →
-      M.edgeObservation selection before owner selected value ≡ M.edgeObservation selection after owner selected value
-    edgeValueSame owner selected value with M.edgeFacts value
-    ... | nothing = refl
-    ... | just (storedOwner , source , target) = cong (E.sameOwner owner storedOwner ∧_)
-      (cong₂ _∧_ (symbolSame owner selected source) (symbolSame owner selected target))
+    checkoutSame : ∀ selected → M.checkoutLive selection before selected ≡ M.checkoutLive selection after selected
+    checkoutSame = observedInsert (M.checkoutObservation selection) before key new fresh (quietCheckout selection new quiet)
 
-    edgeSame : ∀ owner selected edge →
-      M.edgeVisible selection before owner selected edge ≡ M.edgeVisible selection after owner selected edge
-    edgeSame owner selected edge = trans (edgeValueSame owner selected (DB.lookup edge before))
-      (cong (M.edgeFromFacts selection after owner selected)
-        (observedWrite M.edgeFacts before key old new found
-          (trans (quietEdge old oldQuiet) (sym (quietEdge new newQuiet))) edge))
+    deltaSame : ∀ owner selected path → M.hasDelta owner selected path before ≡ M.hasDelta owner selected path after
+    deltaSame owner selected path = sym (anyInsert (λ key value → M.deltaValue owner selected path value)
+      before key new fresh (quietDelta owner selected path new quiet))
 
-    projectSame : ∀ value → M.project selection before value ≡ M.project selection after value
-    projectSame value with Observations.snapshotView value
-    ... | Observations.plain nonSnapshot = trans (Obs.projectionPlain selection before value nonSnapshot)
-      (sym (Obs.projectionPlain selection after value nonSnapshot))
-    ... | Observations.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
-    ...   | no different = refl
-    ...   | yes same = cong₂ (λ ns es → O.recordOf owner (O.structuralSnapshot selected ns es payload))
-      (filterCong (M.symbolVisible selection before owner selected) (M.symbolVisible selection after owner selected) nodes
-        (symbolSame owner selected))
-      (filterCong (M.edgeVisible selection before owner selected) (M.edgeVisible selection after owner selected) edges
-        (edgeSame owner selected))
+    bindingSame : ∀ owner selected path version value →
+      M.bindingValue selection before owner selected path version value ≡ M.bindingValue selection after owner selected path version value
+    bindingSame owner selected path version value =
+      cong (λ overridden → M.bindingWithDelta overridden owner selected path version value) (deltaSame owner selected path)
 
-    canonicalPersists : ∀ value → M.project selection before value ≡ value → M.project selection after value ≡ value
-    canonicalPersists value canonical = trans (sym (projectSame value)) canonical
+    bindingRowsSame : ∀ owner selected path version →
+      E.anyRow (λ key value → M.bindingValue selection before owner selected path version value) before ≡
+      E.anyRow (λ key value → M.bindingValue selection after owner selected path version value) after
+    bindingRowsSame owner selected path version = trans
+      (sym (anyInsert (λ key value → M.bindingValue selection before owner selected path version value)
+        before key new fresh (quietBinding selection before owner selected path version new quiet)))
+      (anyCong (λ key value → M.bindingValue selection before owner selected path version value)
+        (λ key value → M.bindingValue selection after owner selected path version value) after
+        (λ key value → bindingSame owner selected path version value))
+
+    module Stable = StableFacts selection before after checkoutSame bindingRowsSame
+      (observedInsert M.symbolFacts before key new fresh (quietSymbol new quiet))
+      (observedInsert M.edgeFacts before key new fresh (quietEdge new quiet))
+    open Stable public
