@@ -108,3 +108,12 @@ import Muninn.CheckoutReconciliation
 import Muninn.Retirement
 import Muninn.RetirementControl
 import Muninn.RetirementCleanup
+
+-- Stable database identities and request-bound discovery dialogue (#32).
+import Muninn.RepositoryIdentity
+import Muninn.RepositoryDiscovery
+import Muninn.IdentityCheckpoint
+import Muninn.RegistryCreation
+import Muninn.RepositoryRegistry
+import Muninn.TransactionSequence
+import Muninn.DirectoryConversion

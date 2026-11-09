@@ -520,3 +520,23 @@ cleanup capture inside a receipt-sealed shared transaction, preserving store
 admissibility, metadata and other families. `RetirementCleanup` connects retired
 availability to the existing reclamation contract without a retention TTL.
 See [the lifecycle and implementation boundary](RETIREMENT.md).
+
+## Repository discovery and stable identities
+
+`RepositoryIdentity` separates database IDs, current locations and trusted
+filesystem/Git object-incarnation evidence. Paths, content hashes, branch names
+and remote URLs do not establish identity. There are no private IDs in Git
+metadata. When evidence is insufficient, `RepositoryDiscovery` uses the generic
+corrective dialogue, bound to the current inspection. Both same-repository and
+new/replacement answers have constructive next decisions. See
+[the discovery contract](REPOSITORY-IDENTITY.md).
+
+`RegistryCreation` writes the family reservation, typed immutable creation policy
+and first checkout in one receipt-sealed transaction. It cannot start indexing.
+`RepositoryRegistry` implements guarded location updates and admission of fresh
+checkouts under an existing family. General laws cover actual stored records,
+other-family preservation and interrupted-run/completed-retry convergence.
+`DirectoryConversion` retains directory behavior until an explicitly requested,
+Git-reclassified view and updated metadata can publish together. Its publication
+adapter owes fixed content, structural, retention and cleanup outcomes; this is
+a mandatory refinement interface, not a completed Rust/SQL implementation.

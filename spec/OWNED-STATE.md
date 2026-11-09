@@ -12,8 +12,8 @@ cache delegation and output streams; test fixtures were excluded from ownership.
 
 | Storage or code | Logical records in `OwnedState` |
 | --- | --- |
-| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, `creationIntent`; retirement, legacy readability and the absence-start timestamp are explicit fields; identity, preparation, authorization and pause remain in metadata |
-| `migrations/repo/checkouts.sql`, `missing_checkouts.sql`: `checkouts` | `checkout`; retirement, pause, Git suspension and the absence-start timestamp are explicit fields; incarnation and publication metadata remain separate obligations |
+| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, typed immutable `creationIntent`; database family ID, optional physical binding, retirement, legacy readability, absence-start timestamp, indexing authorization and creation completion are explicit fields |
+| `migrations/repo/checkouts.sql`, `missing_checkouts.sql`: `checkouts` | `checkout`; database ID/incarnation, optional physical binding, retirement, pause, Git suspension and the absence-start timestamp are explicit fields; publication has its own current-view contract |
 | `migrations/repo/configuration.sql`: `policy_defaults`, `policy_versions`, `family_policy` | `defaults`, `policyVersion`, `currentPolicy`; pointers require the corresponding immutable version/default record |
 | `migrations/public/001_init.sql`: `knowledge` | `note`, `notePosting`, `noteVector`; the generated text and optional vector are independently visible to outcomes |
 | `migrations/repo/worktrees.sql`: `file_versions` | `fileVersion` |
@@ -105,9 +105,10 @@ one record at a time.
   log-maintenance outcome must preserve files not owned by Muninn. This PR
   records the discrepancy; it does not repair that runtime behavior.
 - Remaining per-kind metadata is retained as uninterpreted payload here. Saved
-  policy/default contents are typed by [stored-policy resolution](STORED-POLICY.md). Identity,
-  selection, transitions, ranking and operation-specific validity are subsequent
-  issues; this ownership/reference invariant is not the complete product spec.
+  policy/default contents are typed by [stored-policy resolution](STORED-POLICY.md). Identity and discovery are refined by [stable repository identity](REPOSITORY-IDENTITY.md),
+  and selection/publication have their own contracts. Remaining transitions, ranking
+  and operation-specific validity are subsequent issues; this ownership/reference
+  invariant is not the complete product spec.
 - The closed dispatcher and Rust/SQL projection must require this complete world
   and these invariants. Merely importing it does not enforce them in Rust.
   The generic finite-store interface does not establish an atomic transaction

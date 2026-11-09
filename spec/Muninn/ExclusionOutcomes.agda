@@ -178,10 +178,10 @@ filterKeysIdempotent keep (key ∷ keys) with keep key in decision
 checkoutAvailable : O.CheckoutInfo → Bool
 checkoutAvailable info = not (O.CheckoutInfo.retired info)
 
-pauseAndGitDoNotChangeAvailability : ∀ retired pause git since metadata pause′ git′ since′ metadata′ →
-  checkoutAvailable (O.checkoutInfo retired pause git since metadata) ≡
-    checkoutAvailable (O.checkoutInfo retired pause′ git′ since′ metadata′)
-pauseAndGitDoNotChangeAvailability retired pause git since metadata pause′ git′ since′ metadata′ = refl
+pauseAndGitDoNotChangeAvailability : ∀ id incarnation identity retired pause git since metadata id′ incarnation′ identity′ pause′ git′ since′ metadata′ →
+  checkoutAvailable (O.checkoutInfo id incarnation identity retired pause git since metadata) ≡
+    checkoutAvailable (O.checkoutInfo id′ incarnation′ identity′ retired pause′ git′ since′ metadata′)
+pauseAndGitDoNotChangeAvailability id incarnation identity retired pause git since metadata id′ incarnation′ identity′ pause′ git′ since′ metadata′ = refl
 
 -- The policy matcher is fixed once by the shared selection semantics (#26).
 -- It is not a field supplied by a cleanup operation. No raw rule parsing here.

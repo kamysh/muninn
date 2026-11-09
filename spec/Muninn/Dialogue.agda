@@ -98,7 +98,7 @@ record Option : Set where
 data Question : Set where
   detail : Text → Question
   correction : Text → Text → Question
-  alternatives : Option → List Option → Question
+  alternatives : Text → Option → List Option → Question
   prerequisite : Text → Text → Question
 
 lostExplanation : Text
@@ -110,13 +110,13 @@ lostAction = text 'S' "end the original request again, including the details you
 explanation : Question → Text
 explanation (detail requested) = text 'I' (" need " ++ render requested ++ " to continue.")
 explanation (correction requested reason) = reason
-explanation (alternatives first rest) = text 'T' "here are several ways to continue; each option explains what would change."
+explanation (alternatives why first rest) = why
 explanation (prerequisite reason action) = reason
 
 nextAction : Question → Text
 nextAction (detail requested) = text 'P' ("rovide " ++ render requested ++ ".")
 nextAction (correction requested reason) = text 'S' ("end a corrected value for " ++ render requested ++ ".")
-nextAction (alternatives first rest) = text 'C' "hoose one of the listed options."
+nextAction (alternatives why first rest) = text 'C' "hoose one of the listed options."
 nextAction (prerequisite reason action) = action
 
 record Prompt : Set where
@@ -128,7 +128,7 @@ record Prompt : Set where
 questionPrompt : Question → Prompt
 questionPrompt q@(detail requested) = prompt (explanation q) (nextAction q) []
 questionPrompt q@(correction requested reason) = prompt (explanation q) (nextAction q) []
-questionPrompt q@(alternatives first rest) = prompt (explanation q) (nextAction q)
+questionPrompt q@(alternatives why first rest) = prompt (explanation q) (nextAction q)
   (map (λ choice → Option.label choice , Option.consequences choice) (first ∷ rest))
 questionPrompt q@(prerequisite reason action) = prompt (explanation q) (nextAction q) []
 
@@ -258,9 +258,9 @@ module Protocol
       Interaction {world} {env} {env} (responded ctx (needs blocked question))
         (responded ctx (needs blocked nextQuestion))
     contextStillNeeded : ∀ {world env} → Interaction {world} {env} {env} noContext noContext
-    chosen : ∀ {world env ctx blocked first rest} selected → selected ∈ (first ∷ rest) →
+    chosen : ∀ {world env ctx blocked why first rest} selected → selected ∈ (first ∷ rest) →
       All (λ update → Data.Product.proj₁ update ∈ Fields) (Option.updates selected) →
-      Interaction {world} {env} {env} (responded ctx (needs blocked (alternatives first rest)))
+      Interaction {world} {env} {env} (responded ctx (needs blocked (alternatives why first rest)))
         (examining (repairMany (Option.updates selected) ctx) nothing)
     environmentChanged : ∀ {world beforeEnv afterEnv} phase →
       Interaction {world} {beforeEnv} {afterEnv} phase (changeEnvironment phase)

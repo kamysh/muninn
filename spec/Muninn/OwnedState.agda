@@ -24,6 +24,8 @@ import Muninn.FileLimits as Limits
 import Muninn.PolicyRuleAdmission as Admission
 import Muninn.GitIgnore as Git
 import Data.String as String
+import Muninn.RepositoryIdentity as Repository
+import Muninn.Types as Types
 import Muninn.Worktree as Worktree
 import Data.List.Relation.Unary.All as All
 
@@ -49,13 +51,18 @@ open Reference public
 -- Strong references are derived below, never supplied as an operation goal.
 record RegistrationInfo : Set where
   constructor registrationInfo
-  field retired legacyReadable : Bool
+  field id : Worktree.FamilyId
+        identity : Maybe Repository.FamilyBinding
+        retired legacyReadable indexingEnabled creationCompleted : Bool
         missingSince : Maybe ℕ
         metadata : String
 
 record CheckoutInfo : Set where
   constructor checkoutInfo
-  field retired paused gitSuspended : Bool
+  field id : Worktree.CheckoutId
+        incarnation : Types.UUID
+        identity : Maybe Repository.CheckoutBinding
+        retired paused gitSuspended : Bool
         missingSince : Maybe ℕ
         metadata : String
 
@@ -92,7 +99,7 @@ captureDefaults revision global excludes vendors = defaultsInfo
 
 data Body : Set where
   registration : RegistrationInfo → Body
-  creationIntent : String → Body
+  creationIntent : Config.FamilyPolicy → Body
   defaults : DefaultsInfo → Body
   checkout : CheckoutInfo → Body
   policyVersion : ℕ → PolicyVersionInfo → Body
