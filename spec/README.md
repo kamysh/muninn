@@ -281,3 +281,11 @@ preserves indexed records and other holders, and proves retry idempotence.
 proves the full cleanup outcome when other pending use has ended. The shared
 store and admission enforce private reader identities. See [reader release](READER-RELEASE.md).
 Lifecycle scheduling and current-view production remain under #84.
+
+## Durable follow-up cleanup capture
+
+`CleanupScheduling` commits a fixed follow-up workset and its existing receipt
+checkpoint atomically. It preserves original tasks, derives the worker intent
+from the persisted IDs, and proves old-checkpoint retries do not recapture.
+See [durable follow-up capture](CLEANUP-SCHEDULING.md). Full lifecycle scheduling,
+current-view production and policy integration remain under #84.

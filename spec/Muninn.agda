@@ -39,6 +39,7 @@ import Muninn.CleanupResumption
 import Muninn.ReaderRelease
 import Muninn.ReaderReleaseCleanup
 import Muninn.CleanupLoop
+import Muninn.CleanupScheduling
 import Muninn.CleanupAlignment
 import Muninn.CleanupHistory
 import Muninn.CleanupCompletion
