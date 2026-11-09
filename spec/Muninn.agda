@@ -30,6 +30,7 @@ import Muninn.Database
 import Muninn.Recovery
 import Muninn.Workset
 import Muninn.PublicationVisibility
+import Muninn.ViewPublication
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
