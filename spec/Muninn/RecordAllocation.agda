@@ -67,17 +67,17 @@ module Model (excluded : List String → String → Bool) where
       Ledger.ReceiptFrame world (proj₂ (DB.execute (admit refs payload ready replan) world))
     admissionReceipts refs payload ready replan world = Gate.receiptFrame (freshId world) refs payload ready replan world
 
-    create : String → String → DB.Transaction String
-    create payload checkpoint = DB.scan (λ world → Tasks.create (freshId world) payload checkpoint)
+    create : I.OperationId → String → String → DB.Transaction String
+    create id payload checkpoint = DB.scan (λ world → Tasks.create id (freshId world) payload checkpoint)
 
-    creates : ∀ payload checkpoint world →
-      DB.evaluate (create payload checkpoint) world ≡ DB.committed checkpoint (Tasks.created (freshId world) payload world)
-    creates payload checkpoint world = Tasks.creates (freshId world) payload checkpoint world (fresh world)
+    creates : ∀ id payload checkpoint world →
+      DB.evaluate (create id payload checkpoint) world ≡ DB.committed checkpoint (Tasks.created id (freshId world) payload world)
+    creates id payload checkpoint world = Tasks.creates id (freshId world) payload checkpoint world (fresh world)
 
-    effect : String → String → (String → D.Prompt) → Ledger.Effect
-    effect payload checkpoint guidance = record
-      { transaction = create payload checkpoint; guidance = guidance
-      ; isolates = λ before result after committed → Tasks.isolates (freshId before) payload checkpoint before result after committed }
+    effect : I.OperationId → String → String → (String → D.Prompt) → Ledger.Effect
+    effect id payload checkpoint guidance = record
+      { transaction = create id payload checkpoint; guidance = guidance
+      ; isolates = λ before result after committed → Tasks.isolates id (freshId before) payload checkpoint before result after committed }
 
     module Current (before : O.World) (valid : O.Admissible before)
       (payload checkpoint : String) (guidance : String → D.Prompt)
@@ -86,14 +86,14 @@ module Model (excluded : List String → String → Bool) where
       (located : DB.lookup receiptSlot before ≡ just (Ledger.recordAt {id = id} (E.targetOwner selection) (R.active input names progress)))
       (foundHere : Ledger.find id before ≡ just (Ledger.found receiptSlot (E.targetOwner selection) (R.active input names progress))) where
       module Durable = Tasks.Current before valid (freshId before) payload checkpoint guidance (fresh before) id input names receiptSlot progress located foundHere
-      open Durable public using (intent; captured; after; afterValid; next; savedCapture; savedOriginalWorkset; cleanupComplete; persistsThroughCleanup)
+      open Durable public using (intent; captured; after; afterValid; next; savedCapture; ownedCapture; savedOriginalWorkset; cleanupComplete; persistsThroughCleanup)
       module Worker = Durable.Worker
-      work = effect payload checkpoint guidance
+      work = effect id payload checkpoint guidance
       transaction = Ledger.update id input (R.generation progress) Durable.change work
 
       commits : DB.execute transaction before ≡ (Ledger.resume receiptSlot next , after)
       commits = Ledger.committedUpdate id input names Durable.change work receiptSlot (E.targetOwner selection)
-        progress before checkpoint Durable.inserted foundHere (creates payload checkpoint before)
+        progress before checkpoint Durable.inserted foundHere (creates id payload checkpoint before)
 
       retryObserved : ∀ observed → Ledger.find id observed ≡ just (Ledger.found receiptSlot (E.targetOwner selection) (R.active input names next)) →
         DB.execute transaction observed ≡ (Ledger.resume receiptSlot next , observed)

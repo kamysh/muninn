@@ -313,3 +313,12 @@ readers follow their saved-view references; background work keeps its existing
 attachment scope. The exact classifier, admission guard, cleanup preservation
 and reader-release proofs use that same rule. See [search footprints](READ-FOOTPRINT.md).
 Fresh-view production and full lifecycle integration remain under #84.
+
+## Private execution bookkeeping
+
+The shared admissibility invariant now prevents strong references to readers,
+cleanup tasks, accepted work, continuations and receipts. Admission checks the
+same predicate; private records' no-incoming-reference guard is derived.
+Cleanup captures carry the same typed request ID as their accepting receipt.
+See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Verified task removal and
+the full lifecycle remain under #84.

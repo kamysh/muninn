@@ -73,7 +73,7 @@ snapshotView (O.recordOf owner (O.structuralSnapshot selected nodes edges payloa
 snapshotView (O.recordOf owner (O.legacy _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.staging _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.acceptedWork _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.cleanupWork _ _)) = plain (λ ())
+snapshotView (O.recordOf owner (O.cleanupWork _ _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.activeReader _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.continuation _ _)) = plain (λ ())
 snapshotView (O.recordOf owner (O.receipt _)) = plain (λ ())
@@ -116,7 +116,7 @@ module Model (excluded : List String → String → Bool) where
   indexedIgnoresControls selection (O.recordOf owner (O.legacy _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.staging _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.acceptedWork _ _)) ()
-  indexedIgnoresControls selection (O.recordOf owner (O.cleanupWork _ _)) ()
+  indexedIgnoresControls selection (O.recordOf owner (O.cleanupWork _ _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.activeReader _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.continuation _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) ()

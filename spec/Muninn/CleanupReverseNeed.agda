@@ -143,7 +143,7 @@ module Model (excluded : List String → String → Bool) where
     parentBackward (O.recordOf owner (O.legacy _ _)) ref ()
     parentBackward (O.recordOf owner (O.staging _ _)) ref ()
     parentBackward (O.recordOf owner (O.acceptedWork _ _)) ref ()
-    parentBackward (O.recordOf owner (O.cleanupWork _ _)) ref ()
+    parentBackward (O.recordOf owner (O.cleanupWork _ _ _)) ref ()
     parentBackward (O.recordOf owner (O.activeReader _ _)) ref ()
     parentBackward (O.recordOf owner (O.continuation _ _)) ref ()
     parentBackward (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) ref ()

@@ -53,8 +53,11 @@ Accepted work retains the file versions it requires. An active reader declares
 the exact records it uses. Its operation contract must establish that this list
 is complete. Cleanup captures and idle continuations retain weak incarnation
 identities, not strong references: an already absent record is valid progress,
-and an idle continuation cannot indefinitely prevent reclamation. A later task
-identity contract must prevent reusing an incarnation still captured by work.
+and an idle continuation cannot indefinitely prevent reclamation. The shared allocation
+contract prevents reusing an incarnation still captured by work;
+see [record allocation](RECORD-ALLOCATION.md). Cleanup tasks also carry the typed
+operation ID of their accepting receipt; scheduling commits the task and
+checkpoint under that same ID.
 
 ## Ownership, references and admissibility
 
@@ -65,14 +68,18 @@ explicit. Notes are family-owned even when their payload describes a narrower
 scope; a path string does not establish a new family.
 
 The state invariant requires unique logical record identities, permitted owner
-placement, and resolution of every strong reference to a record of the expected
-kind and permitted owner. Chunk, posting, vector, symbol, edge and snapshot
+placement, resolution of every strong reference to a record of the expected
+kind and permitted owner, and private execution bookkeeping. Strong references
+cannot target readers, cleanup tasks, accepted work, continuations or receipts.
+Status tools may still inspect them through ordinary reads. This privacy rule
+does not remove their outgoing holds on indexed data; see
+[private bookkeeping](PRIVATE-BOOKKEEPING.md). Chunk, posting, vector, symbol, edge and snapshot
 dependencies come from their constructors, rather than a cleanup operation
 choosing which dependencies count. Weak identities are deliberately excluded.
 
 General proofs establish that deleting a record preserves records of another
 owner; references survive deletion of a distinct identity; and deleting an
-unreferenced record preserves all three admissibility requirements. In
+unreferenced record preserves all admissibility requirements. In
 particular, a record retained by another checkout, accepted work or an active
 reader cannot satisfy that deletion theorem's no-incoming-reference guard.
 This guard is a sufficient condition for this theorem, not the final cleanup

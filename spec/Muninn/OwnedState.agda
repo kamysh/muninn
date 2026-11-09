@@ -4,7 +4,7 @@
 module Muninn.OwnedState where
 
 open import Data.Nat using (ℕ; _≟_)
-open import Data.Bool using (Bool)
+open import Data.Bool using (Bool; true; false)
 open import Data.List using (List; []; _∷_; _++_; map)
 open import Data.List.Relation.Unary.All using (All; []; _∷_)
 open import Data.Maybe using (Maybe; just; nothing)
@@ -13,11 +13,13 @@ open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.String using (String)
 open import Data.Unit using (⊤; tt)
 open import Data.Empty using (⊥)
-open import Relation.Nullary using (yes; no; ¬_)
+open import Relation.Nullary using (Dec; yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; cong; trans; sym)
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.ReceiptTypes as Receipt
+import Muninn.CatalogInputs as Input
+import Data.List.Relation.Unary.All as All
 
 data Owner : Set where
   installation : Owner
@@ -68,7 +70,7 @@ data Body : Set where
   legacy : String → String → Body -- path, remaining payload
   staging : ℕ → String → Body
   acceptedWork : List ℕ → String → Body
-  cleanupWork : List ℕ → String → Body
+  cleanupWork : Input.OperationId → List ℕ → String → Body
   activeReader : List Reference → String → Body
   continuation : List ℕ → String → Body
   receipt : Receipt.Entry → Body
@@ -98,7 +100,7 @@ kind (structuralSnapshot _ _ _ _) = structuralSnapshotK
 kind (legacy _ _) = legacyK
 kind (staging _ _) = stagingK
 kind (acceptedWork _ _) = acceptedWorkK
-kind (cleanupWork _ _) = cleanupWorkK
+kind (cleanupWork _ _ _) = cleanupWorkK
 kind (activeReader _ _) = activeReaderK
 kind (continuation _ _) = continuationK
 kind (receipt _) = receiptK
@@ -137,7 +139,7 @@ references (structuralSnapshot selected nodes edges _) = reference selected chec
 references (legacy _ _) = []
 references (staging source _) = reference source fileVersionK ∷ []
 references (acceptedWork versions _) = map (λ v → reference v fileVersionK) versions
-references (cleanupWork _ _) = []
+references (cleanupWork _ _ _) = []
 references (activeReader retained _) = retained
 references (continuation _ _) = []
 references (receipt (Receipt.entry id (Receipt.active input names progress))) =
@@ -200,7 +202,7 @@ Placed (recordOf o (structuralSnapshot _ _ _ _)) = LocalTo o
 Placed (recordOf o (legacy _ _)) = LocalTo o
 Placed (recordOf o (staging _ _)) = LocalTo o
 Placed (recordOf o (acceptedWork _ _)) = LocalTo o
-Placed (recordOf o (cleanupWork _ _)) = LocalTo o
+Placed (recordOf o (cleanupWork _ _ _)) = LocalTo o
 Placed (recordOf o (activeReader _ _)) = LocalTo o
 Placed (recordOf o (continuation _ _)) = LocalTo o
 Placed (recordOf o (receipt (Receipt.entry id (Receipt.active input names progress)))) = ⊤
@@ -233,15 +235,74 @@ Unique ((key , value) ∷ rest) = (DB.lookup key rest ≡ nothing) × Unique res
 SoundReferences : World → ℕ × Record → Set
 SoundReferences world row = All (Resolves world (owner (proj₂ row))) (references (body (proj₂ row)))
 
--- Reader rows are private bookkeeping. Strong references never target them.
+-- Every owned kind has an explicit search-hold visibility decision.
+executionBookkeeping : Kind → Bool
+executionBookkeeping registrationK = false
+executionBookkeeping checkoutK = false
+executionBookkeeping creationIntentK = false
+executionBookkeeping defaultsK = false
+executionBookkeeping policyVersionK = false
+executionBookkeeping currentPolicyK = false
+executionBookkeeping noteK = false
+executionBookkeeping notePostingK = false
+executionBookkeeping noteVectorK = false
+executionBookkeeping fileVersionK = false
+executionBookkeeping baseBindingK = false
+executionBookkeeping deltaBindingK = false
+executionBookkeeping basePointerK = false
+executionBookkeeping chunkK = false
+executionBookkeeping postingK = false
+executionBookkeeping vectorK = false
+executionBookkeeping symbolK = false
+executionBookkeeping edgeK = false
+executionBookkeeping structuralSnapshotK = false
+executionBookkeeping legacyK = false
+executionBookkeeping stagingK = false
+executionBookkeeping acceptedWorkK = true
+executionBookkeeping cleanupWorkK = true
+executionBookkeeping activeReaderK = true
+executionBookkeeping continuationK = true
+executionBookkeeping receiptK = true
+executionBookkeeping migrationK = false
+executionBookkeeping usageK = false
+executionBookkeeping bootstrapK = false
+executionBookkeeping modelCacheK = false
+executionBookkeeping coordinationK = false
+executionBookkeeping schemaResourceK = false
+executionBookkeeping graphResourceK = false
+executionBookkeeping logFileK = false
+executionBookkeeping bootstrapStageK = false
+
+PublicReference : Reference → Set
+PublicReference ref = executionBookkeeping (expected ref) ≡ false
+
+publicReference? : ∀ ref → Dec (PublicReference ref)
+publicReference? ref with executionBookkeeping (expected ref)
+... | true = no (λ ())
+... | false = yes refl
+
+PrivateBookkeepingReferences : Record → Set
+PrivateBookkeepingReferences value = All PublicReference (references (body value))
+
 PrivateReaderReferences : Record → Set
 PrivateReaderReferences value = All (λ ref → expected ref ≢ activeReaderK) (references (body value))
+
+privateReferenceImpossible : ∀ internal → executionBookkeeping internal ≡ true → ∀ ref → PublicReference ref → expected ref ≢ internal
+privateReferenceImpossible internal hidden ref visible same = impossible
+  (trans (sym hidden) (trans (cong executionBookkeeping (sym same)) visible))
+  where impossible : true ≢ false
+        impossible ()
 
 record Admissible (world : World) : Set where
   field unique : Unique world
         placed : All (λ row → Placed (proj₂ row)) world
         sound : All (SoundReferences world) world
-        privateReaders : All (λ row → PrivateReaderReferences (proj₂ row)) world
+        privateBookkeeping : All (λ row → PrivateBookkeepingReferences (proj₂ row)) world
+
+  -- Compatibility projection; privacy has one authoritative stored invariant.
+  privateReaders : All (λ row → PrivateReaderReferences (proj₂ row)) world
+  privateReaders = All.map (λ {row} refs → All.map
+    (λ {ref} visible → privateReferenceImpossible activeReaderK refl ref visible) refs) privateBookkeeping
 
 -- Deleting one family record preserves every already-present record of a
 -- different owner, regardless of its category, checkout or payload.
@@ -307,5 +368,12 @@ deleteUnreferencedPreservesAdmissibility key world valid unreferenced = record
   { unique = deleteUnique key world (Admissible.unique valid)
   ; placed = deleteAll key world (Admissible.placed valid)
   ; sound = deleteAll key world (shiftSound key world world (Admissible.sound valid) unreferenced)
-  ; privateReaders = deleteAll key world (Admissible.privateReaders valid)
+  ; privateBookkeeping = deleteAll key world (Admissible.privateBookkeeping valid)
   }
+
+-- Privacy and reference soundness derive the deletion guard for bookkeeping.
+privateUnreferenced : ∀ key world value → Admissible world → DB.lookup key world ≡ just value →
+  executionBookkeeping (kind (body value)) ≡ true → All (NoIncomingTo key) world
+privateUnreferenced key world value valid found hidden =
+  All.tabulate (λ {row} present → All.tabulate (λ {ref} included equal →
+    privateReferenceImpossible (kind (body value)) hidden ref (All.lookup (All.lookup (Admissible.privateBookkeeping valid) present) included) (sym (trans (cong (λ stored → kind (body stored)) (just-injective (trans (sym found) (trans (cong (λ id → DB.lookup id world) (sym equal)) (Resolves.found (All.lookup (All.lookup (Admissible.sound valid) present) included)))))) (Resolves.rightKind (All.lookup (All.lookup (Admissible.sound valid) present) included))))))

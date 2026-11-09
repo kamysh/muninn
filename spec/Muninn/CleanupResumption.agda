@@ -108,10 +108,10 @@ module Model (excluded : List String → String → Bool) where
       prependCompleted trail (readerCompletes request slot refs payload ready replan released fresh resolved clean)
 
     savedWorkset : ∀ {A : Set} (request : Catalog.Request) slot refs payload
-      (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) task ids note →
-      DB.lookup task before ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork ids note)) →
+      (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) task requestId ids note →
+      DB.lookup task before ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids note)) →
       DB.lookup task (proj₂ (DB.execute (Gate.admit slot refs payload (ready request) (replan request)) after)) ≡
-        just (O.recordOf (E.targetOwner selection) (O.cleanupWork ids note))
-    savedWorkset request slot refs payload ready replan task ids note found =
-      Gate.savedWorkset slot refs payload (ready request) (replan request) after task ids note
+        just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids note))
+    savedWorkset request slot refs payload ready replan task requestId ids note found =
+      Gate.savedWorkset slot refs payload (ready request) (replan request) after task requestId ids note
         (Work.Pass.traceMetadata trail task _ found refl)
