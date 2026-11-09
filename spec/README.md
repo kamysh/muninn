@@ -360,3 +360,11 @@ holds; existing snapshot data, receipts and current-view invariants survive.
 Unresolved contexts roll back through the existing continuation.
 See [selector replacement](VIEW-REPLACEMENT.md). Complete publication
 composition, canonicality and receipt replay remain under #84.
+
+## Canonicality across publication writes
+
+`PublicationVisibility` derives unchanged binding, symbol and edge observations
+from actual snapshot/selector/receipt writes and proves canonical filtering
+persists. The policy input stays fixed; the entrypoints still compute query
+facts from the actual world. See [publication filtering](PUBLICATION-VISIBILITY.md).
+Receipt-sealed publication composition and reader resumption remain under #84.
