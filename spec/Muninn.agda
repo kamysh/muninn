@@ -43,6 +43,8 @@ import Muninn.RuleScope
 import Muninn.OrderedSelection
 import Muninn.StrictGlob
 import Muninn.PolicyRuleAdmission
+import Muninn.IndexFileLimits
+import Muninn.FileLimits
 import Muninn.GitIgnore
 import Muninn.GitDiscovery
 import Muninn.InclusionTraversal

@@ -2,6 +2,8 @@
 -- Complete typed payload codecs. Each record transport must prove its inverse.
 module Muninn.RequestCodecs where
 
+import Muninn.FileLimits as FileLimits
+
 open import Muninn.Canonical
 open import Muninn.CatalogInputs
 open import Muninn.Types using (UUID; FilePath)
@@ -118,11 +120,17 @@ embedding = transport
   (λ (x0 , (x1 , x2)) → record { backend = x0; model = x1; batchSize = x2 })
   (λ r → refl) (pair backend (pair (optional string) nat))
 
+fileLimits : Codec FileLimits.Limits
+fileLimits = transport
+  (λ r → FileLimits.Limits.fileBytes r , FileLimits.Limits.structuralBytes r)
+  (λ (file , structural) → FileLimits.limits file structural)
+  (λ r → refl) (pair nat nat)
+
 index : Codec (IndexConfig)
 index = transport
-  (λ r → (IndexConfig.exclude r , IndexConfig.vendor r))
-  (λ (x0 , x1) → record { exclude = x0; vendor = x1 })
-  (λ r → refl) (pair (list string) (list string))
+  (λ r → (IndexConfig.exclude r , (IndexConfig.vendor r , IndexConfig.limits r)))
+  (λ (x0 , (x1 , x2)) → record { exclude = x0; vendor = x1; limits = x2 })
+  (λ r → refl) (pair (list string) (pair (list string) (optional fileLimits)))
 
 logging : Codec (McpLogConfig)
 logging = transport

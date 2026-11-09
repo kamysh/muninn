@@ -14,6 +14,8 @@ open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
 import Muninn.IndexSelection as Selection
+import Muninn.IndexFileLimits as FileLimits
+import Muninn.Config as Config
 open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool   using (Bool; true; false)
 open import Data.List   using (List)
@@ -145,3 +147,7 @@ dispatchPermitsBackgroundStart true Ready Settled false false false true chosen 
 -- Whole-job scheduling/publication remains separate from this mandatory input.
 module FileSelection (family selected generation : ℕ) where
   open Selection.Checkout family selected generation public
+
+-- After selection, this exact byte gate produces work plus corrective questions.
+module FileAnalysis (family selected generation : ℕ) (policy : Config.FamilyPolicy) where
+  open FileLimits.Checkout family selected generation policy public

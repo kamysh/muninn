@@ -9,7 +9,7 @@ open import Data.List using (List; []; _∷_; _++_; map)
 open import Data.List.Relation.Unary.All using (All; []; _∷_)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Maybe.Properties using (just-injective)
-open import Data.Product using (_×_; _,_; proj₁; proj₂)
+open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String using (String)
 open import Data.Unit using (⊤; tt)
 open import Data.Empty using (⊥)
@@ -20,6 +20,7 @@ import Muninn.Recovery
 import Muninn.ReceiptTypes as Receipt
 import Muninn.CatalogInputs as Input
 import Muninn.Config as Config
+import Muninn.FileLimits as Limits
 import Muninn.PolicyRuleAdmission as Admission
 import Muninn.GitIgnore as Git
 import Data.String as String
@@ -78,6 +79,14 @@ record DefaultsInfo : Set where
           (map String.toList (Config.IndexConfig.exclude (Config.PolicyDefaults.rules value)))
         vendorValid : Admission.Entries
           (map String.toList (Config.IndexConfig.vendor (Config.PolicyDefaults.rules value)))
+
+  field concreteLimits : Σ Limits.Limits (λ caps → Config.IndexConfig.limits (Config.PolicyDefaults.rules value) ≡ just caps)
+
+captureDefaults : ∀ revision global →
+  Admission.Entries (map String.toList (Config.IndexConfig.exclude global)) →
+  Admission.Entries (map String.toList (Config.IndexConfig.vendor global)) → DefaultsInfo
+captureDefaults revision global excludes vendors = defaultsInfo
+  (Config.captureDefaults revision global) excludes vendors (Limits.initial (Config.IndexConfig.limits global) , refl)
 
 data Body : Set where
   registration : RegistrationInfo → Body

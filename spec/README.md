@@ -469,3 +469,10 @@ entries and lists, preserving quoted literals and the strict class requirement.
 rules and deterministic selection. See [policy admission](POLICY-RULE-ADMISSION.md).
 Git supplies batched defaults; traversal and stored-policy integration are
 described in [Git authority](SELECTION-INTEGRATION.md).
+
+## Exact file and structural limits
+
+`FileLimits` decides admission from actual raw bytes with inclusive bounds.
+`IndexFileLimits` schedules every ready selected file while preserving actionable
+size questions and explicit text-only coverage. Captured family defaults and
+normalized request identity include both caps. See [file limits](FILE-LIMITS.md).

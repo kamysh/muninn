@@ -5,6 +5,8 @@
 -- checkouts from the registered family; no repository marker is required.
 module Muninn.Config where
 
+import Muninn.FileLimits as FileLimits
+
 open import Muninn.Types
 open import Muninn.Worktree using (Checkout; FamilyId)
 open import Muninn.Embeddings
@@ -71,6 +73,7 @@ record EmbeddingSelection : Set where
 record IndexConfig : Set where
   field exclude : List String
         vendor  : List String
+        limits : Maybe FileLimits.Limits
 
 -- ─── Axis resolution (last-match-wins fold with negation) ────────────────────
 -- The engine matches a path against the ordered pattern list and the LAST
@@ -132,6 +135,15 @@ record PolicyDefaults : Set where
   field defaultsRevision : String
         rules : IndexConfig
 
+-- Capture scalar defaults as explicit numbers; later live defaults are not read.
+captureDefaults : String → IndexConfig → PolicyDefaults
+captureDefaults revision global = record
+  { defaultsRevision = revision
+  ; rules = record
+      { exclude = IndexConfig.exclude global
+      ; vendor = IndexConfig.vendor global
+      ; limits = just (FileLimits.initial (IndexConfig.limits global)) } }
+
 record FamilyPolicy : Set where
   field family : FamilyId
         name : String
@@ -147,6 +159,7 @@ record EffectiveConfig : Set where
         exclude : List String
         vendor : List String
         repoName : String
+        limits : FileLimits.Limits
 
 -- Defaults are immutable inputs to policy creation. A stored family policy is
 -- authoritative afterward, and its globs apply to all linked checkouts.
@@ -168,6 +181,7 @@ familyConfig p = record
   ; watcher = FamilyPolicy.watcher p
   ; exclude = IndexConfig.exclude (PolicyDefaults.rules (FamilyPolicy.defaults p)) ++ IndexConfig.exclude (FamilyPolicy.index p)
   ; vendor = IndexConfig.vendor (PolicyDefaults.rules (FamilyPolicy.defaults p)) ++ IndexConfig.vendor (FamilyPolicy.index p)
+  ; limits = FileLimits.resolve (FileLimits.initial (IndexConfig.limits (PolicyDefaults.rules (FamilyPolicy.defaults p)))) (IndexConfig.limits (FamilyPolicy.index p))
   ; repoName = FamilyPolicy.name p
   }
 

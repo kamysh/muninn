@@ -4,6 +4,7 @@ module Muninn.StoredPolicy where
 
 import Muninn.OwnedState as O
 import Muninn.Config as Config
+import Muninn.FileLimits as Limits
 import Muninn.PolicyRuleAdmission as Admission
 import Muninn.AdmittedSelection as Admitted
 import Muninn.CatalogInputs as I
@@ -134,6 +135,42 @@ module Family (family pointer : ℕ) where
     Config.IndexConfig.exclude (Config.PolicyDefaults.rules (O.DefaultsInfo.value (Saved.frozen current))) ++
     Config.IndexConfig.exclude (I.PolicyDraft.index (O.PolicyVersionInfo.contents (Saved.info current)))
   effectiveExclusions world current = refl
+
+  limits : ∀ {world} → Saved world → Limits.Limits
+  limits current = Config.EffectiveConfig.limits (Config.familyConfig (policy current))
+
+  selectedLimits : O.World → Maybe Limits.Limits
+  selectedLimits world = map (λ p → Config.EffectiveConfig.limits (Config.familyConfig p)) (selectedPolicy world)
+
+  limitsKnown : ∀ world (current : Saved world) → selectedLimits world ≡ just (limits current)
+  limitsKnown world current = cong (map (λ p → Config.EffectiveConfig.limits (Config.familyConfig p)))
+    (selectsKnown world (Saved.version current) (Saved.defaultsSlot current) (Saved.info current) (Saved.frozen current)
+      (Saved.pointerAt current) (Saved.versionAt current) (Saved.defaultsAt current))
+
+  -- An update of global defaults or another family does not reinterpret an
+  -- existing family. The three saved-policy records are the only dependencies.
+  otherWriteKeepsLimits : ∀ before (current : Saved before) key value →
+    key ≢ pointer → key ≢ Saved.version current → key ≢ Saved.defaultsSlot current →
+    selectedLimits (DB.write key value before) ≡ selectedLimits before
+  otherWriteKeepsLimits before current key value pointerDifferent versionDifferent defaultsDifferent =
+    trans (limitsKnown (DB.write key value before) after) (sym (limitsKnown before current))
+    where
+    after : Saved (DB.write key value before)
+    after = saved (Saved.version current) (Saved.defaultsSlot current) (Saved.info current) (Saved.frozen current)
+      (trans (DB.writePreservesOther key pointer value before pointerDifferent) (Saved.pointerAt current))
+      (trans (DB.writePreservesOther key (Saved.version current) value before versionDifferent) (Saved.versionAt current))
+      (trans (DB.writePreservesOther key (Saved.defaultsSlot current) value before defaultsDifferent) (Saved.defaultsAt current))
+
+  inheritedLimits : ∀ world (current : Saved world) caps →
+    Config.IndexConfig.limits (I.PolicyDraft.index (O.PolicyVersionInfo.contents (Saved.info current))) ≡ nothing →
+    Config.IndexConfig.limits (Config.PolicyDefaults.rules (O.DefaultsInfo.value (Saved.frozen current))) ≡ just caps →
+    limits current ≡ caps
+  inheritedLimits world current caps inherit captured rewrite inherit | captured = refl
+
+  explicitLimits : ∀ world (current : Saved world) caps →
+    Config.IndexConfig.limits (I.PolicyDraft.index (O.PolicyVersionInfo.contents (Saved.info current))) ≡ just caps →
+    limits current ≡ caps
+  explicitLimits world current caps chosen rewrite chosen = refl
 
   dispatch : ∀ {A : Set} (world : O.World) → Maybe (Saved world) →
     (E.Rule → DB.Transaction A) → (O.World → DB.Transaction A) → DB.Transaction A
