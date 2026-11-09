@@ -43,6 +43,9 @@ import Muninn.RuleScope
 import Muninn.OrderedSelection
 import Muninn.StrictGlob
 import Muninn.PolicyRuleAdmission
+import Muninn.ContentViews
+import Muninn.ContentPublication
+import Muninn.GenericFileMap
 import Muninn.ArtifactIdentity
 import Muninn.CanonicalChunks
 import Muninn.CompletedWork

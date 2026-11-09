@@ -5,6 +5,8 @@
 -- FileMap.moveBase proves preservation when the current base is replaced.
 module Muninn.Worktree where
 
+import Muninn.GenericFileMap as FileMaps
+
 open import Data.Bool using (Bool)
 
 open import Muninn.Types
@@ -92,46 +94,23 @@ record FileEntry : Set where
         tier : Tier
         gitDefault : Bool -- semantic selection metadata; receipt provenance is separate
 
--- Extensional meaning of a finite path map, not a requirement to materialize
--- one SQL row per inherited path. Paths must be validated by the implementation.
-Manifest : Set
-Manifest = FilePath → Maybe FileEntry
+-- Reuse the same extensional algebra for public and owned-record entries.
+module FileEntries = FileMaps.For FileEntry
+open FileEntries public using
+  (Manifest; Overlay; Override; Inherit; Deleted; Changed; applyOverride; DeltaRequired; MinimalOverlay)
 
--- Baselines are addressed by stable IDs, never by a moving branch name.
--- This total environment models available snapshots; retention is in Storage.
+-- Baselines are logical identifiers, independent of physical storage layout.
 Baselines : Set
 Baselines = SnapshotId → Manifest
-
-data Override : Set where
-  Inherit : Override
-  Deleted : Override
-  Changed : FileEntry → Override
-
-Overlay : Set
-Overlay = FilePath → Override
 
 record WorktreeView : Set where
   field baseline : SnapshotId
         overlay : Overlay
 
-applyOverride : Maybe FileEntry → Override → Maybe FileEntry
-applyOverride base Inherit = base
-applyOverride base Deleted = nothing
-applyOverride base (Changed entry) = just entry
-
 resolveView : Baselines → WorktreeView → Manifest
 resolveView baselines view path =
   applyOverride (baselines (WorktreeView.baseline view) path)
                 (WorktreeView.overlay view path)
-
--- An override must represent a real difference; unchanged entries are inherited.
-DeltaRequired : Maybe FileEntry → Override → Set
-DeltaRequired base Inherit = ⊤
-DeltaRequired base Deleted = Σ FileEntry (λ entry → base ≡ just entry)
-DeltaRequired base (Changed entry) = ¬ (base ≡ just entry)
-
-MinimalOverlay : Manifest → Overlay → Set
-MinimalOverlay base overlay = ∀ path → DeltaRequired (base path) (overlay path)
 
 unchangedHasNoOverride : ∀ base delta → DeltaRequired base delta →
   applyOverride base delta ≡ base → delta ≡ Inherit

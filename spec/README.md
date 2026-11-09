@@ -27,7 +27,7 @@ not solely by the model's type check.
 
 | Modules | Scope |
 | --- | --- |
-| `Worktree`, `FileMap` | Abstract file lookup, overrides/deletions, minimal differences and moving-base preservation |
+| `Worktree`, `GenericFileMap`, `FileMap`, `ContentViews`, `ContentPublication` | File-map algebra, actual owned-row projections, fixed publication outcomes and atomic receipt-sealed retry |
 | `Schema`, `Storage` | Application/graph roles, readiness evidence, family isolation and abstract publication/reference lifetimes |
 | `GraphMembership` | Selected-view symbol/edge membership and endpoint visibility; no compiler name-resolution proof |
 | `Config`, `Policy`, `Registration` | Bootstrap/policy separation, frozen defaults, revision guards, registration intent/retry and authorization preservation |
@@ -483,3 +483,18 @@ normalized request identity include both caps. See [file limits](FILE-LIMITS.md)
 exact versioned inputs and byte spans to certified immutable checkpoints.
 Completed hits cannot choose recomputation; explicit recreation isolates its
 requested family. See [artifact reuse](ARTIFACT-REUSE.md).
+
+## Fixed content and structural publication outcomes
+
+`ContentViews` reads logical file versions and saved Git defaults from actual
+owned base/delta rows. `ContentPublication` calculates the selected checkout
+result and other-checkout preservation under the policy read from stored state.
+The shared transaction interface requires proofs of exact representation,
+structural publication, retained data/readers, family isolation and durable
+cleanup capture. Receipt sealing keeps the original request active.
+
+See [publication intent and refinement boundary](CONTENT-PUBLICATION.md).
+The universally quantified map and atomic retry laws are proved. Constructing
+and certifying the Rust storage transaction, and requiring this interface in
+the closed dispatcher, remain the separate correspondence/catalog obligations.
+A proof-carrying storage interface is not itself a verified SQL implementation.

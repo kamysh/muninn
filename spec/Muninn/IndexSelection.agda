@@ -82,7 +82,7 @@ module Checkout (family selected generation : ℕ) where
 
   deltaPlaced : ∀ {policy path} version (source : File policy path) → O.Placed (O.recordOf (O.family family) (deltaBody version source))
   deltaPlaced version source = O.local ,
-    (cong Git.Context.family (sym (File.fresh source)) , cong Git.Context.checkout (sym (File.fresh source)))
+    cong Git.Context.family (sym (File.fresh source))
 
   selectedGate : ∀ {policy path} (source : File policy path) →
     M.includedWithGit (E.fromStoredPolicy family policy (File.validPolicy source)) (O.family family)
@@ -100,3 +100,10 @@ module Checkout (family selected generation : ℕ) where
     M.bindingSelected (E.fromStoredPolicy family policy valid) (O.recordOf (O.family family) (deltaBody version source)) ≡
       Ordered.included (A.classify policy valid (Git.ignored (File.answer source)) path false)
   currentPolicy {path = path} version source policy valid = agreement family policy valid (Git.ignored (File.answer source)) path
+
+-- Repacking an existing binding preserves its real query origin. This is not
+-- fresh intake; File above still demands a current-context answer.
+preservedDeltaPlaced : ∀ owner selected version path answer →
+  O.Placed (O.recordOf owner (O.baseBinding version path answer)) →
+  O.Placed (O.recordOf owner (O.deltaBinding selected (just version) path answer))
+preservedDeltaPlaced owner selected version path answer placed = placed

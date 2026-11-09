@@ -222,10 +222,11 @@ GitFamily : ∀ {path} → Owner → Git.Answer path → Set
 GitFamily installation answer = ⊥
 GitFamily (family id) answer = Git.Context.family (Git.at answer) ≡ id
 
-DeltaOrigin : ∀ owner selected version path → SelectionFor version path → Set
+DeltaOrigin : (owner : Owner) (selected : ℕ) (version : Maybe ℕ) (path : String) → SelectionFor version path → Set
 DeltaOrigin owner selected nothing path source = ⊤
-DeltaOrigin owner selected (just version) path source = GitFamily owner source ×
-  (Git.Context.checkout (Git.at source) ≡ selected)
+-- Preserved entries retain their true original Git query provenance. Fresh
+-- intake separately requires the current checkout in IndexSelection.File.
+DeltaOrigin owner selected (just version) path source = GitFamily owner source
 
 -- Every persistent constructor has an explicit ownership clause. Adding a
 -- category cannot silently inherit the ownership policy of a catch-all case.

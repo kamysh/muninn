@@ -86,5 +86,6 @@ acceptedFresh current request response requested answer accepted with context? c
 ...   | refl = same
 
 -- A saved answer belongs to published data. Later policy edits reuse its Git
--- default; a new checkout publication must obtain a fresh-context answer.
+-- default; fresh indexing must obtain a fresh-context answer. Repacking preserved
+-- entries retains the original query context rather than inventing a new one.
 -- Paused/Git-suspended views therefore need no unsafe query of conflicted input.
