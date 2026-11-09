@@ -43,10 +43,9 @@ as well as its original record IDs. No second receipt or task registry is added.
 
 This closes #104 under #84. The safe aggregate checks the strengthened store
 invariant and all adapted cleanup, admission, allocation and release proofs.
-The next lifecycle slice must verify cleanup completion, remove its private task
-and finish/reclaim the existing receipt while keeping the agreed compact
-request-ID marker. This slice does not implement that transition or claim
-the full cleanup lifecycle is complete.
+Verified task removal and receipt completion now follow in
+[cleanup finalization](CLEANUP-FINALIZATION.md). The full lifecycle, including
+policy selection and scheduling integration, remains under #84.
 
 These are specification laws. Rust correspondence, live data, binaries,
 installation and deployment are unchanged.

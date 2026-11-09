@@ -322,3 +322,12 @@ same predicate; private records' no-incoming-reference guard is derived.
 Cleanup captures carry the same typed request ID as their accepting receipt.
 See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Verified task removal and
 the full lifecycle remain under #84.
+
+## Verified cleanup-task completion
+
+`CleanupFinalization` checks the actual saved workset, then removes its private
+task and completes its existing receipt atomically. Productive cleanup constructs
+readiness; unresolved work keeps the whole store and continues the conversation.
+Retry, indexed-data preservation and compact-marker retention are proved.
+See [task completion](CLEANUP-FINALIZATION.md). Policy selection, fresh-view
+production and full lifecycle scheduling remain under #84.
