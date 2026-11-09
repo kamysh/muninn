@@ -58,9 +58,9 @@ writeAdmissible world key old new valid found sameOwner sameKind placed subset =
   { unique = writeUnique key new world (O.Admissible.unique valid)
   ; placed = placed ∷ O.deleteAll key world (O.Admissible.placed valid)
   ; sound = newSound ∷ O.deleteAll key world shifted
-  ; privateReaders = All.tabulate (λ {ref} present → All.lookup
-      (lookupAll world key old (O.Admissible.privateReaders valid) found) (subset ref present)) ∷
-      O.deleteAll key world (O.Admissible.privateReaders valid) }
+  ; privateBookkeeping = All.tabulate (λ {ref} present → All.lookup
+      (lookupAll world key old (O.Admissible.privateBookkeeping valid) found) (subset ref present)) ∷
+      O.deleteAll key world (O.Admissible.privateBookkeeping valid) }
   where
   oldSound : All (O.Resolves world (O.owner old)) (O.references (O.body old))
   oldSound = lookupAll world key old (O.Admissible.sound valid) found
@@ -118,7 +118,7 @@ module Model (excluded : List String → String → Bool) where
   shape selection world value@(O.recordOf owner (O.legacy _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.staging _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.acceptedWork _ _)) = plain refl
-  shape selection world value@(O.recordOf owner (O.cleanupWork _ _)) = plain refl
+  shape selection world value@(O.recordOf owner (O.cleanupWork _ _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.activeReader _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.continuation _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.receipt _)) = plain refl

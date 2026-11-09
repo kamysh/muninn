@@ -19,8 +19,11 @@ a wire error or require an agent to choose storage IDs.
 
 `commits` proves the actual receipt-controlled transaction's result and final
 store. `afterValid` preserves the shared admissibility invariant, including
-private readers. `savedCapture` identifies the exact persisted capture, and
+private execution bookkeeping. `savedCapture` identifies the exact persisted capture, and
 `savedOriginalWorkset` retains the original task's record and ID list.
+Each task also stores its accepting request's typed operation ID.
+`ownedCapture` proves that the persisted task and checkpoint use the same ID;
+replay and original-task preservation retain it.
 
 `retryObserved` proves that an old checkpoint is skipped whenever its saved
 successor is found, including worlds changed by unrelated indexing since the

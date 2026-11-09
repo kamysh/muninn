@@ -43,52 +43,52 @@ module Model (excluded : List String → String → Bool) where
     ids : ℕ → O.World → List ℕ
     ids slot world = slot ∷ M.capture selection world
 
-    task : ℕ → String → O.World → O.Record
-    task slot payload world = O.recordOf owner (O.cleanupWork (ids slot world) payload)
+    task : I.OperationId → ℕ → String → O.World → O.Record
+    task id slot payload world = O.recordOf owner (O.cleanupWork id (ids slot world) payload)
 
-    created : ℕ → String → O.World → O.World
-    created slot payload world = DB.write slot (task slot payload world) world
+    created : I.OperationId → ℕ → String → O.World → O.World
+    created id slot payload world = DB.write slot (task id slot payload world) world
 
-    createSnapshot : ℕ → String → String → O.World → DB.Transaction String
-    createSnapshot slot payload checkpoint world with F.member slot (Insert.reserved world)
+    createSnapshot : I.OperationId → ℕ → String → String → O.World → DB.Transaction String
+    createSnapshot id slot payload checkpoint world with F.member slot (Insert.reserved world)
     ... | yes reserved = DB.abort checkpoint
-    ... | no fresh = DB.put slot (task slot payload world) (DB.commit checkpoint)
+    ... | no fresh = DB.put slot (task id slot payload world) (DB.commit checkpoint)
 
-    create : ℕ → String → String → DB.Transaction String
-    create slot payload checkpoint = DB.scan (createSnapshot slot payload checkpoint)
+    create : I.OperationId → ℕ → String → String → DB.Transaction String
+    create id slot payload checkpoint = DB.scan (createSnapshot id slot payload checkpoint)
 
-    creates : ∀ slot payload checkpoint world → Insert.Fresh world slot →
-      DB.evaluate (create slot payload checkpoint) world ≡ DB.committed checkpoint (created slot payload world)
-    creates slot payload checkpoint world fresh with F.member slot (Insert.reserved world)
+    creates : ∀ id slot payload checkpoint world → Insert.Fresh world slot →
+      DB.evaluate (create id slot payload checkpoint) world ≡ DB.committed checkpoint (created id slot payload world)
+    creates id slot payload checkpoint world fresh with F.member slot (Insert.reserved world)
     ... | yes reserved = ⊥-elim (fresh reserved)
     ... | no same = refl
 
-    insertedReceipts : ∀ slot payload world → Insert.Fresh world slot → Ledger.ReceiptFrame world (created slot payload world)
-    insertedReceipts slot payload world fresh other recordOwner receiptData =
-      Insert.oldLookup world slot (task slot payload world) fresh other (O.recordOf recordOwner (O.receipt receiptData)) , backward
+    insertedReceipts : ∀ id slot payload world → Insert.Fresh world slot → Ledger.ReceiptFrame world (created id slot payload world)
+    insertedReceipts id slot payload world fresh other recordOwner receiptData =
+      Insert.oldLookup world slot (task id slot payload world) fresh other (O.recordOf recordOwner (O.receipt receiptData)) , backward
       where
-      disjoint : task slot payload world ≢ O.recordOf recordOwner (O.receipt receiptData)
+      disjoint : task id slot payload world ≢ O.recordOf recordOwner (O.receipt receiptData)
       disjoint ()
-      backward : DB.lookup other (created slot payload world) ≡ just (O.recordOf recordOwner (O.receipt receiptData)) →
+      backward : DB.lookup other (created id slot payload world) ≡ just (O.recordOf recordOwner (O.receipt receiptData)) →
         DB.lookup other world ≡ just (O.recordOf recordOwner (O.receipt receiptData))
       backward found with slot ≟ other
-      ... | no different = trans (sym (DB.writePreservesOther slot other (task slot payload world) world different)) found
-      ... | yes same = ⊥-elim (disjoint (just-injective (trans (sym (DB.writeVisible slot (task slot payload world) world))
-        (trans (cong (λ key → DB.lookup key (created slot payload world)) same) found))))
+      ... | no different = trans (sym (DB.writePreservesOther slot other (task id slot payload world) world different)) found
+      ... | yes same = ⊥-elim (disjoint (just-injective (trans (sym (DB.writeVisible slot (task id slot payload world) world))
+        (trans (cong (λ key → DB.lookup key (created id slot payload world)) same) found))))
 
-    isolates : ∀ slot payload checkpoint before result after →
-      DB.evaluate (create slot payload checkpoint) before ≡ DB.committed result after → Ledger.ReceiptFrame before after
-    isolates slot payload checkpoint before result after committed with F.member slot (Insert.reserved before)
+    isolates : ∀ id slot payload checkpoint before result after →
+      DB.evaluate (create id slot payload checkpoint) before ≡ DB.committed result after → Ledger.ReceiptFrame before after
+    isolates id slot payload checkpoint before result after committed with F.member slot (Insert.reserved before)
     ... | yes reserved = impossible committed
       where impossible : DB.aborted checkpoint ≡ DB.committed result after → Ledger.ReceiptFrame before after
             impossible ()
     ... | no fresh with committed
-    ...   | refl = insertedReceipts slot payload before fresh
+    ...   | refl = insertedReceipts id slot payload before fresh
 
-    effect : ℕ → String → String → (String → D.Prompt) → Ledger.Effect
-    effect slot payload checkpoint guidance = record
-      { transaction = create slot payload checkpoint; guidance = guidance
-      ; isolates = isolates slot payload checkpoint }
+    effect : I.OperationId → ℕ → String → String → (String → D.Prompt) → Ledger.Effect
+    effect id slot payload checkpoint guidance = record
+      { transaction = create id slot payload checkpoint; guidance = guidance
+      ; isolates = isolates id slot payload checkpoint }
 
     module Current (before : O.World) (valid : O.Admissible before)
       (slot : ℕ) (payload checkpoint : String) (guidance : String → D.Prompt)
@@ -102,32 +102,32 @@ module Model (excluded : List String → String → Bool) where
       next = R.nextWork progress (R.versions progress) checkpoint
       newReceipt = Ledger.recordAt {id = id} owner (R.active input names next)
       captured = ids slot before
-      inserted = created slot payload before
+      inserted = created id slot payload before
       after = DB.write receiptSlot newReceipt inserted
       change = Ledger.checkpoint (R.versions progress)
-      work = effect slot payload checkpoint guidance
+      work = effect id slot payload checkpoint guidance
       transaction = Ledger.update id input (R.generation progress) change work
 
       commits : DB.execute transaction before ≡ (Ledger.resume receiptSlot next , after)
       commits = Ledger.committedUpdate id input names change work receiptSlot owner progress before checkpoint inserted foundHere
-        (creates slot payload checkpoint before fresh)
+        (creates id slot payload checkpoint before fresh)
 
       receiptDistinct : receiptSlot ≢ slot
       receiptDistinct refl = fresh (Insert.storedReserved before slot oldReceipt located)
 
       insertedValid : O.Admissible inserted
-      insertedValid = Insert.insertAdmissible before slot (task slot payload before) valid fresh O.local [] []
+      insertedValid = Insert.insertAdmissible before slot (task id slot payload before) valid fresh O.local [] []
 
       afterValid : O.Admissible after
       afterValid = Storage.writeAdmissible inserted receiptSlot oldReceipt newReceipt insertedValid
-        (Insert.oldLookup before slot (task slot payload before) fresh receiptSlot oldReceipt located)
+        (Insert.oldLookup before slot (task id slot payload before) fresh receiptSlot oldReceipt located)
         refl refl tt (λ ref included → included)
 
       coveredInserted : ∀ key value → DB.lookup key inserted ≡ just value → O.owner value ≡ owner → key ∈ captured
       coveredInserted key value present owned with slot ≟ key
       ... | yes refl = here refl
       ... | no different = there (M.captureComplete selection before key value (Observations.lookupMember before key value
-        (trans (sym (DB.writePreservesOther slot key (task slot payload before) before different)) present)) owned)
+        (trans (sym (DB.writePreservesOther slot key (task id slot payload before) before different)) present)) owned)
 
       covered : ∀ key value → DB.lookup key after ≡ just value → O.owner value ≡ owner → key ∈ captured
       covered key value present owned with receiptSlot ≟ key
@@ -139,18 +139,23 @@ module Model (excluded : List String → String → Bool) where
         { keys = captured; uniqueBefore = O.Admissible.unique afterValid
         ; covers = λ key value present owned → covered key value (Order.memberLookup after key value (O.Admissible.unique afterValid) present) owned }
 
-      savedCapture : DB.lookup slot after ≡ just (O.recordOf owner (O.cleanupWork (M.Intent.keys intent) payload))
+      savedCapture : DB.lookup slot after ≡ just (O.recordOf owner (O.cleanupWork id (M.Intent.keys intent) payload))
       savedCapture = trans (DB.writePreservesOther receiptSlot slot newReceipt inserted receiptDistinct)
-        (DB.writeVisible slot (task slot payload before) before)
+        (DB.writeVisible slot (task id slot payload before) before)
 
-      savedOriginalWorkset : ∀ original ids note → DB.lookup original before ≡ just (O.recordOf owner (O.cleanupWork ids note)) →
-        DB.lookup original after ≡ just (O.recordOf owner (O.cleanupWork ids note))
-      savedOriginalWorkset original ids note present = trans (DB.writePreservesOther receiptSlot original newReceipt inserted different)
-        (Insert.oldLookup before slot (task slot payload before) fresh original _ present)
+      ownedCapture :
+        DB.lookup slot after ≡ just (O.recordOf owner (O.cleanupWork id captured payload)) ×
+        Ledger.find id after ≡ just (Ledger.found receiptSlot owner (R.active input names next))
+      ownedCapture = savedCapture , Ledger.writtenReceiptVisible id receiptSlot owner (R.active input names next) inserted
+
+      savedOriginalWorkset : ∀ original originalId ids note → DB.lookup original before ≡ just (O.recordOf owner (O.cleanupWork originalId ids note)) →
+        DB.lookup original after ≡ just (O.recordOf owner (O.cleanupWork originalId ids note))
+      savedOriginalWorkset original originalId ids note present = trans (DB.writePreservesOther receiptSlot original newReceipt inserted different)
+        (Insert.oldLookup before slot (task id slot payload before) fresh original _ present)
         where
         different : receiptSlot ≢ original
         different refl = impossible (just-injective (trans (sym located) present))
-          where impossible : oldReceipt ≢ O.recordOf owner (O.cleanupWork ids note)
+          where impossible : oldReceipt ≢ O.recordOf owner (O.cleanupWork originalId ids note)
                 impossible ()
 
       retryObserved : ∀ observed → Ledger.find id observed ≡ just (Ledger.found receiptSlot owner (R.active input names next)) →
@@ -161,7 +166,7 @@ module Model (excluded : List String → String → Bool) where
       retry : DB.execute transaction after ≡ (Ledger.resume receiptSlot next , after)
       retry = retryObserved after (Ledger.writtenReceiptVisible id receiptSlot owner (R.active input names next) inserted)
 
-      retryKeepsCapture : DB.lookup slot (proj₂ (DB.execute transaction after)) ≡ just (O.recordOf owner (O.cleanupWork captured payload))
+      retryKeepsCapture : DB.lookup slot (proj₂ (DB.execute transaction after)) ≡ just (O.recordOf owner (O.cleanupWork id captured payload))
       retryKeepsCapture = trans (cong (λ result → DB.lookup slot (proj₂ result)) retry) savedCapture
 
       atomicCapture : ∀ observed → Exec.Interrupted (Exec.atomic transaction Exec.done) before observed → (observed ≡ before) ⊎ (observed ≡ after)
@@ -187,5 +192,5 @@ module Model (excluded : List String → String → Bool) where
       cleanupComplete = Worker.finishes afterValid
 
       persistsThroughCleanup : ∀ {count final} → Worker.Pass.Trace count after final →
-        DB.lookup slot final ≡ just (O.recordOf owner (O.cleanupWork captured payload))
+        DB.lookup slot final ≡ just (O.recordOf owner (O.cleanupWork id captured payload))
       persistsThroughCleanup trace = Worker.Pass.traceMetadata trace slot _ savedCapture refl

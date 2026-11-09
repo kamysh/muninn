@@ -170,6 +170,6 @@ module Model (excluded : List String → String → Bool) where
         trail = Work.Pass.Result.trace (Work.Pass.run world)
         after = Work.Pass.Result.after (Work.Pass.run world)
 
-      savedOriginalTask : ∀ slot payload → DB.lookup slot world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork (M.Intent.keys intent) payload)) →
-        DB.lookup slot (Work.Pass.Result.after (Work.Pass.run world)) ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork (M.Intent.keys intent) payload))
-      savedOriginalTask slot payload found = Work.Pass.traceMetadata (Work.Pass.Result.trace (Work.Pass.run world)) slot _ found refl
+      savedOriginalTask : ∀ slot requestId payload → DB.lookup slot world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId (M.Intent.keys intent) payload)) →
+        DB.lookup slot (Work.Pass.Result.after (Work.Pass.run world)) ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId (M.Intent.keys intent) payload))
+      savedOriginalTask slot requestId payload found = Work.Pass.traceMetadata (Work.Pass.Result.trace (Work.Pass.run world)) slot _ found refl

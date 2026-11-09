@@ -55,7 +55,7 @@ module Model (excluded : List String → String → Bool) where
         (sym (Release.executes owner finished ready replan before actual))
         (Resume.prependCompleted Resume.trail Exec.stop))
 
-    savedWorkset : ∀ task taskOwner ids note → DB.lookup task before ≡ just (O.recordOf taskOwner (O.cleanupWork ids note)) →
-      DB.lookup task Resume.after ≡ just (O.recordOf taskOwner (O.cleanupWork ids note))
-    savedWorkset task taskOwner ids note found = Work.Pass.traceMetadata Resume.trail task _
+    savedWorkset : ∀ task taskOwner requestId ids note → DB.lookup task before ≡ just (O.recordOf taskOwner (O.cleanupWork requestId ids note)) →
+      DB.lookup task Resume.after ≡ just (O.recordOf taskOwner (O.cleanupWork requestId ids note))
+    savedWorkset task taskOwner requestId ids note found = Work.Pass.traceMetadata Resume.trail task _
       (trans (DB.deletePreservesOther finished task before (Release.differentFromReader before owner finished actual task _ found (λ ()))) found) refl

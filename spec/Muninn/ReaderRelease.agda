@@ -85,12 +85,8 @@ lookupBeforeDelete world removed key value found with removed ≟ key
 ... | no different = trans (sym (DB.deletePreservesOther removed key world different)) found
 
 privateUnreferenced : ∀ world owner key → O.Admissible world → ReaderAt owner key world → All (O.NoIncomingTo key) world
-privateUnreferenced world owner key valid (reader , found , owned , kind) = All.tabulate λ {row} present → All.tabulate λ {ref} included equal →
-  All.lookup (All.lookup (O.Admissible.privateReaders valid) present) included
-    (sym (trans (sym kind) (trans (cong (λ value → O.kind (O.body value))
-      (just-injective (trans (sym found) (trans (cong (λ id → DB.lookup id world) (sym equal))
-        (O.Resolves.found (All.lookup (All.lookup (O.Admissible.sound valid) present) included))))))
-      (O.Resolves.rightKind (All.lookup (All.lookup (O.Admissible.sound valid) present) included)))))
+privateUnreferenced world owner key valid (reader , found , owned , sameKind) =
+  O.privateUnreferenced key world reader valid found (cong O.executionBookkeeping sameKind)
 
 admissible : ∀ {A : Set} owner key (ready : A) replan world → O.Admissible world →
   O.Admissible (proj₂ (DB.execute (finish owner key ready replan) world))
@@ -130,10 +126,10 @@ indexedRow owner removed ready replan world key value found indexed = nonReaderR
   where impossible : Data.Bool.true ≢ Data.Bool.false
         impossible ()
 
-savedWorkset : ∀ {A : Set} owner removed (ready : A) replan world task taskOwner ids note →
-  DB.lookup task world ≡ just (O.recordOf taskOwner (O.cleanupWork ids note)) →
-  DB.lookup task (proj₂ (DB.execute (finish owner removed ready replan) world)) ≡ just (O.recordOf taskOwner (O.cleanupWork ids note))
-savedWorkset owner removed ready replan world task taskOwner ids note found =
+savedWorkset : ∀ {A : Set} owner removed (ready : A) replan world task taskOwner requestId ids note →
+  DB.lookup task world ≡ just (O.recordOf taskOwner (O.cleanupWork requestId ids note)) →
+  DB.lookup task (proj₂ (DB.execute (finish owner removed ready replan) world)) ≡ just (O.recordOf taskOwner (O.cleanupWork requestId ids note))
+savedWorkset owner removed ready replan world task taskOwner requestId ids note found =
   nonReaderRow owner removed ready replan world task _ found (λ ())
 
 resolveBeforeDelete : ∀ world removed source ref → O.Resolves (DB.delete removed world) source ref → O.Resolves world source ref

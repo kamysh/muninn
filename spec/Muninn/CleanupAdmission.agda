@@ -45,7 +45,7 @@ module Model (excluded : List String → String → Bool) where
 
   module Family (selection : E.Rule) where
     claimFor : O.Record → List ℕ
-    claimFor (O.recordOf owner (O.cleanupWork ids payload)) with E.ownerEqual owner (E.targetOwner selection)
+    claimFor (O.recordOf owner (O.cleanupWork requestId ids payload)) with E.ownerEqual owner (E.targetOwner selection)
     ... | yes same = ids
     ... | no different = []
     claimFor _ = []
@@ -58,14 +58,14 @@ module Model (excluded : List String → String → Bool) where
     claimRow ((slot , value) ∷ rows) .slot .value key (here refl) captured = ∈-++⁺ˡ captured
     claimRow ((other , stored) ∷ rows) slot value key (there present) captured = ∈-++⁺ʳ (claimFor stored) (claimRow rows slot value key present captured)
 
-    targetClaim : ∀ ids payload → claimFor (O.recordOf (E.targetOwner selection) (O.cleanupWork ids payload)) ≡ ids
-    targetClaim ids payload with E.ownerEqual (E.targetOwner selection) (E.targetOwner selection)
+    targetClaim : ∀ requestId ids payload → claimFor (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids payload)) ≡ ids
+    targetClaim requestId ids payload with E.ownerEqual (E.targetOwner selection) (E.targetOwner selection)
     ... | yes same = refl
     ... | no different = ⊥-elim (different refl)
 
-    savedClaim : ∀ world slot ids payload key → DB.lookup slot world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork ids payload)) → key ∈ ids → key ∈ claims world
-    savedClaim world slot ids payload key found captured = claimRow world slot _ key (Observations.lookupMember world slot _ found)
-      (subst (λ ids → key ∈ ids) (sym (targetClaim ids payload)) captured)
+    savedClaim : ∀ world slot requestId ids payload key → DB.lookup slot world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids payload)) → key ∈ ids → key ∈ claims world
+    savedClaim world slot requestId ids payload key found captured = claimRow world slot _ key (Observations.lookupMember world slot _ found)
+      (subst (λ ids → key ∈ ids) (sym (targetClaim requestId ids payload)) captured)
 
     Canonical : O.World → O.Record → Set
     Canonical world value = M.project selection world value ≡ value
@@ -129,12 +129,12 @@ module Model (excluded : List String → String → Bool) where
 
     CleanRef : O.World → O.Reference → Set
     CleanRef world ref = C.At world (O.target ref) (λ value → O.kind (O.body value) ≡ O.expected ref ×
-      (O.MayReference (E.targetOwner selection) (O.owner value) × (Canonical world value × O.expected ref Relation.Binary.PropositionalEquality.≢ O.activeReaderK)))
+      (O.MayReference (E.targetOwner selection) (O.owner value) × (Canonical world value × O.PublicReference ref)))
 
     cleanRef? : ∀ world ref → Dec (CleanRef world ref)
     cleanRef? world ref = C.at? world (O.target ref) _ (λ value → C.both (C.kindEqual (O.kind (O.body value)) (O.expected ref))
       (C.both (C.mayReference? (E.targetOwner selection) (O.owner value)) (C.both (canonical? world value)
-        (Effects.not? (C.kindEqual (O.expected ref) O.activeReaderK)))))
+        (O.publicReference? ref))))
 
     reader : List O.Reference → String → O.Record
     reader refs payload = O.recordOf (E.targetOwner selection) (O.activeReader refs payload)
@@ -240,10 +240,10 @@ module Model (excluded : List String → String → Bool) where
       proj₂ (admitted slot refs payload ready replan world fresh found) key pending
         (Footprint.fromProtection (proj₂ (DB.execute (admit slot refs payload ready replan) world)) slot pin original)
 
-    savedWorkset : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world task ids note →
-      DB.lookup task world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork ids note)) →
-      DB.lookup task (proj₂ (DB.execute (admit slot refs payload ready replan) world)) ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork ids note))
-    savedWorkset slot refs payload ready replan world task ids note found =
+    savedWorkset : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world task requestId ids note →
+      DB.lookup task world ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids note)) →
+      DB.lookup task (proj₂ (DB.execute (admit slot refs payload ready replan) world)) ≡ just (O.recordOf (E.targetOwner selection) (O.cleanupWork requestId ids note))
+    savedWorkset slot refs payload ready replan world task requestId ids note found =
       M.Safety.metadata (admissionSafety slot refs payload ready replan world) task _ found refl
 
     existingUse : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world key → M.Protected selection world key →

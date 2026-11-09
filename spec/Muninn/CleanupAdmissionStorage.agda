@@ -47,7 +47,7 @@ weakIds (O.structuralSnapshot _ _ _ _) = []
 weakIds (O.legacy _ _) = []
 weakIds (O.staging _ _) = []
 weakIds (O.acceptedWork _ _) = []
-weakIds (O.cleanupWork ids payload) = ids
+weakIds (O.cleanupWork _ ids payload) = ids
 weakIds (O.activeReader _ _) = []
 weakIds (O.continuation ids payload) = ids
 weakIds (O.receipt (Receipt.entry id (Receipt.active input names work))) = []
@@ -98,12 +98,12 @@ oldResolve world slot added fresh source ref resolved = record
   ; rightKind = O.Resolves.rightKind resolved; rightOwner = O.Resolves.rightOwner resolved }
 
 insertAdmissible : ∀ world slot added → O.Admissible world → Fresh world slot → O.Placed added →
-  All (O.Resolves world (O.owner added)) (O.references (O.body added)) → O.PrivateReaderReferences added → O.Admissible (DB.write slot added world)
+  All (O.Resolves world (O.owner added)) (O.references (O.body added)) → O.PrivateBookkeepingReferences added → O.Admissible (DB.write slot added world)
 insertAdmissible world slot added valid fresh placed resolved privateRefs = record
   { unique = Storage.writeUnique slot added world (O.Admissible.unique valid)
   ; placed = placed ∷ O.deleteAll slot world (O.Admissible.placed valid)
   ; sound = All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner added) ref proof) resolved ∷ O.deleteAll slot world shifted
-  ; privateReaders = privateRefs ∷ O.deleteAll slot world (O.Admissible.privateReaders valid) }
+  ; privateBookkeeping = privateRefs ∷ O.deleteAll slot world (O.Admissible.privateBookkeeping valid) }
   where
   shifted : All (O.SoundReferences (DB.write slot added world)) world
   shifted = All.map (λ {row} refs → All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner (proj₂ row)) ref proof) refs) (O.Admissible.sound valid)

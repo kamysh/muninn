@@ -83,7 +83,7 @@ bodyIndexed (O.recordOf owner (O.structuralSnapshot _ _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.legacy _ _)) = refl
 bodyIndexed (O.recordOf owner (O.staging _ _)) = refl
 bodyIndexed (O.recordOf owner (O.acceptedWork _ _)) = refl
-bodyIndexed (O.recordOf owner (O.cleanupWork _ _)) = refl
+bodyIndexed (O.recordOf owner (O.cleanupWork _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.activeReader _ _)) = refl
 bodyIndexed (O.recordOf owner (O.continuation _ _)) = refl
 bodyIndexed (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) = refl
@@ -135,7 +135,7 @@ module Model (excluded : List String → String → Bool) where
   unindexedTargets selection world (O.recordOf owner (O.legacy _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.staging _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.acceptedWork _ _)) proof = []
-  unindexedTargets selection world (O.recordOf owner (O.cleanupWork _ _)) proof = []
+  unindexedTargets selection world (O.recordOf owner (O.cleanupWork _ _ _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.activeReader _ _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.continuation _ _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) proof = []
@@ -183,7 +183,7 @@ module Model (excluded : List String → String → Bool) where
   parentIndexed selection world (O.recordOf owner (O.legacy _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.staging _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.acceptedWork _ _)) ref ()
-  parentIndexed selection world (O.recordOf owner (O.cleanupWork _ _)) ref ()
+  parentIndexed selection world (O.recordOf owner (O.cleanupWork _ _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.activeReader _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.continuation _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) ref ()
@@ -303,7 +303,7 @@ module Model (excluded : List String → String → Bool) where
   permanentTargets selection world (O.recordOf owner (O.legacy _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.staging _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.acceptedWork _ _)) = []
-  permanentTargets selection world (O.recordOf owner (O.cleanupWork _ _)) = []
+  permanentTargets selection world (O.recordOf owner (O.cleanupWork _ _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.activeReader _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.continuation _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) = []
@@ -350,7 +350,7 @@ module Model (excluded : List String → String → Bool) where
   parentNotSnapshot selection world (O.recordOf owner (O.legacy _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.staging _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.acceptedWork _ _)) ref ()
-  parentNotSnapshot selection world (O.recordOf owner (O.cleanupWork _ _)) ref ()
+  parentNotSnapshot selection world (O.recordOf owner (O.cleanupWork _ _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.activeReader _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.continuation _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.receipt (Receipt.entry id (Receipt.active input names work)))) ref ()
