@@ -32,6 +32,7 @@ import Muninn.PublicationVisibility
 import Muninn.ViewPublication
 import Muninn.CurrentReader
 import Muninn.StoredPolicy
+import Muninn.PolicyCleanupBatch
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
