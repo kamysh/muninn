@@ -6,7 +6,7 @@
 module Muninn.Knowledge where
 
 open import Muninn.Float
-open import Muninn.Worktree using (FamilyId)
+open import Muninn.Worktree using (FamilyId; CheckoutId)
 open import Muninn.Types
 open import Data.String  using (String)
 open import Data.List    using (List; length)
@@ -24,6 +24,7 @@ record KnowledgeId : Set where
 record KnowledgeItem : Set where
   field id           : KnowledgeId
         family       : FamilyId
+        scope        : Maybe CheckoutId -- nothing is family-wide
         origin       : Maybe FilePath   -- optional checkout where it was written
         title        : String
         body         : String

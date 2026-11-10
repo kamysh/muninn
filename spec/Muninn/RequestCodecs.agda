@@ -174,11 +174,24 @@ globalSettings = transport
   (λ (x0 , (x1 , (x2 , x3))) → record { bootstrap = x0; defaultIndex = x1; defaultWatcher = x2; defaultEmbeddings = x3 })
   (λ r → refl) (pair bootstrap (pair index (pair watcher embedding)))
 
-noteInput : Codec (NoteInput)
-noteInput = transport
-  (λ r → (NoteInput.target r , (NoteInput.id r , (NoteInput.origin r , (NoteInput.title r , (NoteInput.body r , (NoteInput.tags r , NoteInput.relatedFiles r)))))))
-  (λ (x0 , (x1 , (x2 , (x3 , (x4 , (x5 , x6)))))) → record { target = x0; id = x1; origin = x2; title = x3; body = x4; tags = x5; relatedFiles = x6 })
-  (λ r → refl) (pair familyTarget (pair (optional knowledgeId) (pair (optional path) (pair string (pair string (pair (list string) (list path)))))))
+currentNoteInput : Codec (NoteInput)
+currentNoteInput = transport
+  (λ r → (NoteInput.target r , (NoteInput.id r , (NoteInput.origin r , (NoteInput.scope r , (NoteInput.title r , (NoteInput.body r , (NoteInput.tags r , NoteInput.relatedFiles r))))))))
+  (λ (x0 , (x1 , (x2 , (x3 , (x4 , (x5 , (x6 , x7))))))) → record { target = x0; id = x1; origin = x2; scope = x3; title = x4; body = x5; tags = x6; relatedFiles = x7 })
+  (λ r → refl) (pair familyTarget (pair (optional knowledgeId) (pair (optional path) (pair (optional checkoutId) (pair string (pair string (pair (list string) (list path))))))))
+
+-- Existing receipts may contain the former seven-field request encoding.
+-- Decode those as family-wide, then compare their typed normalized content.
+legacyNoteInput = pair familyTarget (pair (optional knowledgeId) (pair (optional path) (pair string (pair string (pair (list string) (list path))))))
+
+noteInput : Codec NoteInput
+encode noteInput = encode currentNoteInput
+decode noteInput value with decode currentNoteInput value
+... | just input = just input
+... | nothing = Maybe.map (λ (target , (id , (origin , (title , (body , (tags , relatedFiles)))))) →
+      record { target = target; id = id; origin = origin; scope = nothing; title = title; body = body; tags = tags; relatedFiles = relatedFiles })
+      (decode legacyNoteInput value)
+roundTrip noteInput input rewrite roundTrip currentNoteInput input = refl
 
 reindexTarget : Codec ReindexTarget
 encode reindexTarget (foregroundIndex x0) = sequence (natural 0 ∷ encode familyTarget x0 ∷ [])

@@ -179,3 +179,20 @@ import Muninn.PaginationAdvance
 
 -- Evidence-bearing structural candidates (#42).
 import Muninn.StructuralSearch
+
+-- Family and worktree knowledge visibility (#43).
+import Muninn.KnowledgeViews
+
+import Muninn.KnowledgeWrite
+
+import Muninn.KnowledgeRead
+
+import Muninn.KnowledgeLookup
+
+import Muninn.KnowledgeErase
+
+import Muninn.KnowledgeDelete
+
+import Muninn.KnowledgePagination
+
+import Muninn.KnowledgeRanking

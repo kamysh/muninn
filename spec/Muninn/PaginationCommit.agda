@@ -57,6 +57,8 @@ savedQuery : P.Plan → Maybe Q.SavedSearch
 savedQuery plan with P.Plan.query plan | P.View.scope (P.Plan.view plan)
 ... | P.code mode request | P.checkout family checkout incarnation = just (Q.savedSearch (Q.code mode request) family checkout incarnation)
 ... | P.structural request | P.checkout family checkout incarnation = just (Q.savedSearch (Q.structural request) family checkout incarnation)
+... | P.notes target query page | P.checkout family checkout incarnation = just (Q.savedSearch (Q.notes target query page) family checkout incarnation)
+... | P.listNotes target page | P.checkout family checkout incarnation = just (Q.savedSearch (Q.listNotes target page) family checkout incarnation)
 ... | _ | _ = nothing
 
 module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where

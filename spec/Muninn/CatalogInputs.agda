@@ -81,6 +81,7 @@ record NoteInput : Set where
   field target : FamilyTarget
         id : Maybe KnowledgeId
         origin : Maybe FilePath
+        scope : Maybe CheckoutId
         title body : String
         tags : List String
         relatedFiles : List FilePath

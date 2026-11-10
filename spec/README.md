@@ -49,7 +49,7 @@ model or silently change the application during a documentation edit:
 | Area | Model | Current runtime |
 | --- | --- | --- |
 | Graph ownership | `Storage.SchemaAssignment` maps a family to a `SchemaPair`; `sameFamilySameSchemaPair` covers both roles | Application schema is family-owned; Git checkout graphs are separate AGE namespaces |
-| Curated knowledge | `Knowledge` models family-scoped notes | `public.knowledge` and MCP knowledge tools use exact repository-path strings |
+| Curated knowledge | Notes belong to a repository family, optionally restricted to one worktree, and use the family embedding profile | `public.knowledge` and MCP knowledge tools use exact repository-path strings; runtime migration and correspondence must preserve existing notes while resolving family/worktree identity |
 | Freshness | `Search` models response freshness/suspension | MCP code-search responses contain result lists without that metadata |
 | Removal | `RepositoryRemoval` specifies actual family unregistration and the approved forget-all intent; reindex remains rebuilding | `remove PATH` deletes code data/registration and family-local settings; public notes remain. Complete durable removal/forget dialogue and receipts are not implemented |
 

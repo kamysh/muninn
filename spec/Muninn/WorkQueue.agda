@@ -27,10 +27,14 @@ record Info : Set where
 data Search : Set where
   code : I.SearchMode → I.SearchInput → Search
   structural : I.StructuralInput → Search
+  notes : I.FamilyTarget → String → I.Page → Search
+  listNotes : I.FamilyTarget → I.Page → Search
 
 location : Search → I.Locator
 location (code mode input) = I.SearchInput.location input
 location (structural input) = I.StructuralInput.location input
+location (notes target query page) = I.FamilyTarget.location target
+location (listNotes target page) = I.FamilyTarget.location target
 
 record SavedSearch : Set where
   constructor savedSearch
