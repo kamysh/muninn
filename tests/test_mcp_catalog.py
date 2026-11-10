@@ -37,6 +37,22 @@ class CatalogCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.check('dispatch', before, after)
 
+    def test_extra_dispatch_arm_is_rejected(self):
+        changed = self.rust.replace('        other => Err(anyhow::anyhow!("unknown tool: {}", other)),',
+                                    '        "extra_tool" => tools::search_fulltext(ctx, args),\n'
+                                    '        other => Err(anyhow::anyhow!("unknown tool: {}", other)),', 1)
+        self.assertNotEqual(changed, self.rust)
+        before = [name + ':' + handler for name, handler in self.dispatch]
+        with self.assertRaises(ValueError):
+            after = [name + ':' + handler for name, handler in check.dispatched(check.tokens(changed))]
+            check.check('dispatch', before, after)
+
+    def test_missing_literal_tools_list_is_rejected(self):
+        changed = self.rust.replace('"tools/list" => {', '"other/list" => {', 1)
+        self.assertNotEqual(changed, self.rust)
+        with self.assertRaises(ValueError):
+            check.advertised(check.tokens(changed))
+
     def test_missing_decoder_or_intent(self):
         for clause in ['decodeTool "search_hybrid" = just searchHybrid',
                        'mcpIntent searchHybrid = searchCode hybrid']:
