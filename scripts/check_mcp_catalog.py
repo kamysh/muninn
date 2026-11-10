@@ -104,12 +104,14 @@ def dispatched(ts):
         if ts[i].startswith('"'):
             if fallback:
                 raise ValueError('tool arm follows fallback')
-            names.append(string(ts[i]))
+            name = string(ts[i])
         elif ts[i] in ('_', 'other') and not fallback:
             fallback = True
+            name = None
         else:
             raise ValueError('unsupported dispatch pattern')
         i += 2
+        body_start = i
         if i < stop and ts[i] == '{':
             i = end(ts, i) + 1
         else:
@@ -118,6 +120,12 @@ def dispatched(ts):
                     i = end(ts, i) + 1
                 else:
                     i += 1
+        if name is not None:
+            calls = [ts[j + 3] for j in range(body_start, i - 4)
+                     if ts[j:j+3] == ['tools', ':', ':'] and ts[j+4] == '(']
+            if len(calls) != 1:
+                raise ValueError(f'{name}: expected exactly one direct tools handler call')
+            names.append((name, calls[0]))
     if not fallback:
         raise ValueError('missing dispatch fallback')
     return names
@@ -159,11 +167,14 @@ def main():
     declarations = formal((ROOT / 'spec/Muninn/Catalog.agda').read_text())
     inventory = (ROOT / 'spec/Muninn/CatalogSources.agda').read_text()
     sites = re.findall(r'^mcpSite\s+(\w+)\s*=\s*site\s+mcpTools\s+"([^"\\]+)"\s*$', inventory, re.M)
-    check('formal source sites', [constructor + ':' + name for constructor, name in declarations],
-          [constructor + ':' + name for constructor, name in sites])
+    check('formal source sites', [constructor for constructor, _ in declarations],
+          [constructor for constructor, _ in sites])
+    site_by_constructor = dict(sites)
     expected = [name for _, name in declarations]
     check('advertised tools', expected, advertised(rust))
-    check('dispatch arms', expected, dispatched(rust))
+    check('dispatch arms', [name + ':' + site_by_constructor[constructor]
+                            for constructor, name in declarations],
+          [name + ':' + handler for name, handler in dispatched(rust)])
     print(f'{len(expected)} advertised and dispatched tools match the formal wire names')
     print('Proof registration and Rust effect correspondence remain unchecked (#51, #52).')
 
