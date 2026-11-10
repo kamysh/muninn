@@ -176,3 +176,6 @@ import Muninn.PaginationRanking
 import Muninn.PaginationCodeCall
 
 import Muninn.PaginationAdvance
+
+-- Evidence-bearing structural candidates (#42).
+import Muninn.StructuralSearch

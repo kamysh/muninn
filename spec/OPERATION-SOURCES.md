@@ -177,3 +177,7 @@ Search pagination and continuation checkpoints use `PaginationData`,
 `PaginationRanking`. The checkout page operation binds eligibility to actual
 stored source rows; idle cursor rows have no strong data references. See
 [stable pagination](PAGINATION.md) for the query, source and runtime boundaries.
+
+Structural results use `StructuralSearch`: both endpoints and their edge are
+in the selected eligible view, with name-based matching and source evidence.
+See [structural search](STRUCTURAL-SEARCH.md) for the runtime boundary.
