@@ -56,6 +56,12 @@ saved query in a new view. It does not return excluded content. Missing cursor
 context first reuses the surrounding conversation; the agent is asked for the
 query/repository only when that information is unavailable.
 
+Code plans also populate the saved-search field consumed by the existing
+`SearchResumption` lookup, and traversal checkpoints preserve that field.
+Unavailable-view replies carry the original typed plan and a nonempty restart
+prompt. `PaginationCodeCall.Restart.resume` reuses the existing identity checks
+and authorized indexing scheduler before asking for missing context.
+
 Continuations contain weak record identities only. They create no strong data
 references or active-reader rows. An active page uses the database transaction
 snapshot; no index hold remains between calls. The physical SQL adapter must

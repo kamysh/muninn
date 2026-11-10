@@ -8,10 +8,14 @@ import Muninn.OwnedState as O
 import Muninn.StoredPolicy as Policy
 import Muninn.CatalogInputs as I
 import Muninn.Types as T
+import Muninn.SearchResumption as Resumption
+import Muninn.RepositoryIdentity as Repository
+import Muninn.Dialogue as D
 open import Data.Nat using (ℕ)
 open import Data.List using (List; map)
 open import Data.List.Relation.Unary.All using (All)
 open import Data.Maybe using (Maybe; just; nothing)
+open import Relation.Binary.PropositionalEquality using (_≢_)
 
 module Family (family registrationSlot selected pointer : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
   module Operation = Commit.Family family queryId tokenId
@@ -36,3 +40,9 @@ module Family (family registrationSlot selected pointer : ℕ) (queryId : I.Oper
     ...   | nothing = nothing
     ...   | just visible = just record { policy = policy; identity = identity; view = view; visible = visible }
   module Checked = Operation.Checked Eligible check
+  -- A restart reuses the actual saved query before asking for context and
+  -- shares the existing authorized indexing scheduler, not a second queue.
+  module Restart (jobId : I.OperationId) (separate : queryId ≢ jobId)
+    (ctx : D.Context) (observed : Repository.Observation) where
+    module Existing = Resumption.Family family registrationSlot selected pointer queryId jobId separate ctx observed
+    resume = Existing.resume

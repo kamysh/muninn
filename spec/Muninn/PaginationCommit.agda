@@ -1,5 +1,5 @@
 {-# OPTIONS --safe #-}
--- A page and its traversal checkpoint are published in one shared transaction.
+-- A page and its next offset are published in one shared transaction.
 -- Private continuations carry no strong references to indexed content.
 module Muninn.PaginationCommit where
 import Muninn.PaginationData as P
@@ -11,12 +11,14 @@ import Muninn.RecordAllocation as Allocation
 import Muninn.ReceiptLedger as Ledger
 import Muninn.CatalogInputs as I
 import Muninn.Types as T
+import Muninn.FirstSearch as First
+import Muninn.Dialogue as D
+import Muninn.ExclusionOutcomes as E
 open import Data.Nat using (ℕ; _≟_; _≤?_; _≤_; _<_)
 open import Data.List using (List; []; length; map)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
-open import Data.String using (String)
 open import Data.Bool using (false)
 open import Data.Empty using (⊥-elim)
 open import Relation.Nullary using (yes; no)
@@ -28,7 +30,34 @@ data Reply : Set where
   served : P.Token → Reply
   queued : P.Token → Reply
   continueWork : Reply
-  explain : String → Reply
+  explain : D.Prompt → Reply
+  restart : P.Plan → D.Prompt → Reply
+  recover : I.OperationId → D.Prompt → Reply
+
+restartPrompt : D.Prompt
+restartPrompt = D.prompt (D.text 'T' "he earlier indexed view is no longer available for this search.")
+  (D.text 'I' " will reuse the saved query and repository, arrange any needed indexing through the existing search continuation, and start new pages in the available view. Earlier pages will not be mixed with the new view.") []
+recoverPrompt : D.Prompt
+recoverPrompt = D.prompt (D.text 'T' "his page context is no longer saved.")
+  (D.text 'I' " will first try the saved search and our conversation. If neither contains the query and repository, provide those details and I will continue.") []
+sizePrompt : D.Prompt
+sizePrompt = D.prompt (D.text 'T' "his page was already returned with a different page size.")
+  (D.text 'R' "euse the original size to retrieve that page, or start a new search with the desired size.") []
+existingPrompt : D.Prompt
+existingPrompt = D.prompt (D.text 'T' "his search ID already has saved work.")
+  (D.text 'C' "ontinue that search, or use a fresh ID for a different query. Its saved work is preserved.") []
+identityPrompt : D.Prompt
+identityPrompt = D.prompt (D.text 'T' "he search ID does not match the saved query.")
+  (D.text 'U' "se its original ID or start a new search with a fresh ID.") []
+tokenPrompt : D.Prompt
+tokenPrompt = D.prompt (D.text 'T' "his continuation ID is already in use.")
+  (D.text 'U' "se a fresh ID for the new search; the existing search is preserved.") []
+
+savedQuery : P.Plan → Maybe Q.SavedSearch
+savedQuery plan with P.Plan.query plan | P.View.scope (P.Plan.view plan)
+... | P.code mode request | P.checkout family checkout incarnation = just (Q.savedSearch (Q.code mode request) family checkout incarnation)
+... | P.structural request | P.checkout family checkout incarnation = just (Q.savedSearch (Q.structural request) family checkout incarnation)
+... | _ | _ = nothing
 
 module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
   module Saved = Store.Family family
@@ -37,11 +66,18 @@ module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
   owner = O.family family
 
   info : P.Payload → Q.Continuation
-  info payload = record { parent = queryId; payload = Q.page payload; search = nothing }
+  info (P.plan plan) = record { parent = queryId; payload = Q.page (P.plan plan); search = savedQuery plan }
+  info (P.token token) = record { parent = queryId; payload = Q.page (P.token token); search = nothing }
   planRow : P.Plan → O.Record
   planRow plan = Saved.newRow (info (P.plan plan)) (P.weakIds plan)
   tokenRow : P.Token → O.Record
   tokenRow token = Saved.newRow (info (P.token token)) []
+  resumptionReadsSavedQuery : ∀ plan → First.Context.select family queryId (planRow plan) ≡ savedQuery plan
+  resumptionReadsSavedQuery plan with E.ownerEqual owner owner
+  ... | no different = ⊥-elim (different refl)
+  ... | yes same with Ledger.sameId queryId queryId
+  ...   | no different = ⊥-elim (different refl)
+  ...   | yes same = refl
 
   -- Admission never overwrites another query or repeats its initial capture.
   -- A caller has to provide the independent source/ranking capture first.
@@ -51,10 +87,10 @@ module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
     first : P.Token
     first = record { id = tokenId; query = queryId; start = 0; served = nothing }
     existing : ∀ world → Maybe (Query.Plans.At world) → DB.Transaction Reply
-    existing world (just previous) = DB.commit (explain "This search ID already has saved work. Continue that search, or use a fresh ID for a different query.")
+    existing world (just previous) = DB.commit (explain existingPrompt)
     existing world nothing with Ledger.sameId (P.Plan.id plan) queryId | Store.tokenReserved tokenId world
-    ... | no _ | _ = DB.commit (explain "The search ID does not match the saved query. Use its original ID or start a new search.")
-    ... | _ | Data.Bool.true = DB.commit (explain "This continuation ID is already in use. Choose a fresh ID for the new search.")
+    ... | no _ | _ = DB.commit (explain identityPrompt)
+    ... | _ | Data.Bool.true = DB.commit (explain tokenPrompt)
     ... | yes _ | false = DB.put (Allocation.freshId world) (planRow plan)
       (DB.scan (λ tentative → DB.put (Allocation.freshId tentative) (tokenRow first) (DB.commit (queued first))))
 
@@ -80,9 +116,9 @@ module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
     (eligible? : ∀ world plan rows → Maybe (Eligible world plan rows)) where
     replayPage : ∀ world plan token → P.Receipt (P.Token.start token) → I.Page → DB.Transaction Reply
     replayPage world plan token receipt page with I.Page.size page ≟ P.Receipt.size receipt
-    ... | no different = DB.commit (explain "This page was already returned with a different page size. Reuse that size, or start a new search.")
+    ... | no different = DB.commit (explain sizePrompt)
     ... | yes same with eligible? world plan (P.Receipt.rows receipt)
-    ...   | nothing = DB.commit (explain "The saved search view is no longer available. Continue with the saved query in a new view.")
+    ...   | nothing = DB.commit (restart plan restartPrompt)
     ...   | just checked = DB.commit (served token)
     replaySnapshot : ∀ world plan token receipt page (checked : Eligible world plan (P.Receipt.rows receipt)) →
       I.Page.size page ≡ P.Receipt.size receipt → eligible? world plan (P.Receipt.rows receipt) ≡ just checked →
@@ -128,10 +164,13 @@ module Family (family : ℕ) (queryId : I.OperationId) (tokenId : T.UUID) where
       inspect : ∀ world → Maybe (Query.Plans.At world) → Maybe (Token.Tokens.At world) → DB.Transaction Reply
       inspect world (just planAt) (just tokenAt) with P.Token.served (Token.Tokens.At.value tokenAt)
       ... | just receipt = replayPage world (Query.Plans.At.value planAt) (Token.Tokens.At.value tokenAt) receipt page
-      ... | nothing with prepare world planAt tokenAt
-      ...   | nothing = DB.commit continueWork
-      ...   | just ready = seal world planAt tokenAt page ready
-      inspect world _ _ = DB.commit (explain "I no longer have this search continuation. I can use the query from our conversation to start it again; otherwise please give me the query and repository.")
+      ... | nothing with eligible? world (Query.Plans.At.value planAt)
+        (Page.slice (P.Token.start (Token.Tokens.At.value tokenAt)) (I.Page.size page) (P.Plan.known (Query.Plans.At.value planAt)))
+      ...   | nothing = DB.commit (restart (Query.Plans.At.value planAt) restartPrompt)
+      ...   | just checked with prepare world planAt tokenAt
+      ...     | nothing = DB.commit continueWork
+      ...     | just ready = seal world planAt tokenAt page ready
+      inspect world _ _ = DB.commit (recover queryId recoverPrompt)
 
     callReplay : ∀ page prepare world (planAt : Query.Plans.At world) (tokenAt : Token.Tokens.At world)
       (receipt : P.Receipt (P.Token.start (Token.Tokens.At.value tokenAt)))

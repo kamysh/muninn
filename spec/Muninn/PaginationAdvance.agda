@@ -48,18 +48,20 @@ module Family (family : ℕ) (queryId : I.OperationId)
     sameQuery = refl
     sameView : P.Plan.view after ≡ P.Plan.view plan
     sameView = refl
+    recoveryContext : Commit.savedQuery after ≡ Commit.savedQuery plan
+    recoveryContext = refl
     preservesPrefix : P.Plan.known after ≡ P.Plan.known plan ++ Source.found classified
     preservesPrefix = refl
 
   info : P.Plan → Q.Continuation
-  info plan = record { parent = queryId; payload = Q.page (P.plan plan); search = nothing }
+  info plan = record { parent = queryId; payload = Q.page (P.plan plan); search = Commit.savedQuery plan }
   row : P.Plan → O.Record
   row plan = Saved.newRow (info plan) (P.weakIds plan)
   advance : ℕ → (∀ world plan → Maybe (Batch world plan)) → DB.Transaction Commit.Reply
   advance expected prepare = DB.scan λ world → inspect world (Query.Plans.find world)
     where
     inspect : ∀ world → Maybe (Query.Plans.At world) → DB.Transaction Commit.Reply
-    inspect world nothing = DB.commit (Commit.explain "I no longer have the saved query. I can reuse it from our conversation, or you can provide the query and repository.")
+    inspect world nothing = DB.commit (Commit.recover queryId Commit.recoverPrompt)
     inspect world (just found) with P.Plan.revision (Query.Plans.At.value found) ≟ expected
     ... | no newer = DB.commit Commit.continueWork
     ... | yes same with prepare world (Query.Plans.At.value found)
