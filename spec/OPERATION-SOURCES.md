@@ -59,6 +59,23 @@ or connection lifecycle inputs, not permission to execute an arbitrary script.
 Today malformed JSON is skipped and ordinary tool errors become JSON-RPC errors;
 the agreed corrective conversation is still missing from Rust (#20, #52).
 
+## Mechanical CLI and TUI catalog check
+
+`scripts/check_cli_catalog.py` compares the current command and editor enum
+variants with the reviewed mappings in `CLI-TUI-COVERAGE.json` and the closed
+formal catalog. It checks command arguments, parser attributes, global scope,
+startup/help/version and foreground-interrupt routes, plus editor backend
+sources and calls. The captured parser attributes are a drift baseline; they
+are not a proof that Rust argument handling implements the formal contract.
+Focused tests exercise missing, extra and changed declarations and routes.
+
+`CLIInterrupt` binds the foreground interrupt to the existing pause-current-work
+contract and proves that selected accepted work is retained in the paused state.
+Current Rust
+instead exits with status 130 and asks for reindex; the actual pause behavior
+remains a runtime correspondence/repair gap. As with #48, proof-carrying
+dispatch enforcement belongs to #51 and effect correspondence to #52.
+
 ## Current CLI leaves
 
 `crates/cli/src/main.rs:22-125,339-387,391-724,726-790` defines:

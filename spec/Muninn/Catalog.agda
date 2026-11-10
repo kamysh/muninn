@@ -284,6 +284,7 @@ controlOwner initializeMcp = interface
 controlOwner listTools = interface
 controlOwner notification = interface
 controlOwner openEditor = interface
+controlOwner interrupt = indexing
 
 owner : Request → OutcomeOwner
 owner (user adapter input) = intentOwner (canonicalIntent adapter)

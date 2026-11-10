@@ -178,7 +178,7 @@ JobInput pruneLogs = ℕ
 JobInput flushDiagnostics = ⊤
 
 data Control : Set where
-  startup shutdown help version initializeMcp listTools notification openEditor : Control
+  startup shutdown help version initializeMcp listTools notification openEditor interrupt : Control
 
 ControlInput : Control → Set
 ControlInput startup = Binary
@@ -189,6 +189,7 @@ ControlInput initializeMcp = String
 ControlInput listTools = ⊤
 ControlInput notification = String
 ControlInput openEditor = Editor × Maybe Locator
+ControlInput interrupt = OperationId
 
 -- Local editing cannot carry an arbitrary database script. Effectful Save,
 -- Check, Start and Refresh use their shared public intents above.

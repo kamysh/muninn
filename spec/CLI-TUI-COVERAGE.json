@@ -1,0 +1,150 @@
+{
+  "commands": {
+    "Init": ["cli:initAssignments", "control:openEditor"],
+    "Config": ["cli:globalGet", "cli:globalSet", "cli:globalUnset", "cli:policyInspect", "cli:policyCheck", "cli:policyApply", "control:openEditor", "tui:inspectDraft"],
+    "Preflight": ["cli:preflightJson"],
+    "Add": ["cli:addJson", "control:openEditor", "tui:inspectDraft"],
+    "Start": ["cli:startHuman", "cli:startJson"],
+    "Reindex": ["cli:reindexOne", "cli:reindexAll", "cli:reindexDetached"],
+    "Pause": ["cli:pausePath"],
+    "Resume": ["cli:resumePath"],
+    "Remove": ["cli:removeConfirmed"],
+    "Status": ["cli:statusFleet", "cli:statusPath"],
+    "Usage": ["cli:usageDays"]
+  },
+  "config_operations": {
+    "Get": ["cli:globalGet"],
+    "Set": ["cli:globalSet"],
+    "Edit": ["control:openEditor"],
+    "Unset": ["cli:globalUnset"]
+  },
+  "family_actions": {
+    "Open": ["ui:openView"],
+    "Edit": ["ui:editField"],
+    "Advanced": ["ui:advanced"],
+    "EditMore": ["ui:editMore"],
+    "Rules": ["ui:rules"],
+    "Defaults": ["ui:defaults"],
+    "Rule": ["ui:selectRule"],
+    "AddRule": ["ui:addRule"],
+    "Check": ["tui:previewDraft"],
+    "Save": ["tui:saveNewFamily", "tui:saveExistingPolicy"],
+    "Start": ["tui:startSavedPolicy"],
+    "Close": ["ui:close"],
+    "Back": ["ui:back"],
+    "RefreshCurrent": ["tui:refreshCurrent"],
+    "LoadCurrent": ["ui:loadCurrent"],
+    "KeepDraft": ["ui:keepDraft"]
+  },
+  "family_confirmations": {
+    "Save": ["ui:confirmSave"],
+    "Discard": ["ui:confirmDiscard"],
+    "LoadCurrent": ["ui:confirmLoad"],
+    "KeepDraft": ["ui:confirmKeep"],
+    "RemoveRule": ["ui:confirmRemove", "ui:removeRule"]
+  },
+  "family_modals": {
+    "Edit": ["ui:editText", "ui:focus"],
+    "Backend": ["ui:selectProvider"],
+    "Confirm": ["ui:confirmSave", "ui:confirmDiscard", "ui:confirmLoad", "ui:confirmKeep", "ui:confirmRemove"],
+    "Rule": ["ui:selectRule", "ui:removeRule", "ui:moveRule"],
+    "Docs": ["ui:helpModal", "ui:scroll"]
+  },
+  "global_actions": {
+    "Field": ["ui:editField", "ui:focus"],
+    "Advanced": ["ui:advanced"],
+    "Save": ["tui:saveGlobalSettings"],
+    "Cancel": ["ui:close"],
+    "Back": ["ui:back"],
+    "Add": ["ui:addRule"],
+    "Rule": ["ui:selectRule"]
+  },
+  "global_modals": {
+    "Edit": ["ui:editText", "ui:focus"],
+    "Provider": ["ui:selectProvider"],
+    "Secret": ["ui:selectSecret"],
+    "Docs": ["ui:helpModal", "ui:scroll"],
+    "Confirm": ["ui:confirmSave", "ui:confirmDiscard"],
+    "Rule": ["ui:selectRule", "ui:removeRule", "ui:moveRule"]
+  },
+  "family_fields": {
+    "Name": ["ui:editField"],
+    "Debounce": ["ui:editField"],
+    "Backend": ["ui:selectProvider"],
+    "Batch": ["ui:editField"],
+    "Exclude": ["ui:selectRule"],
+    "AddExclude": ["ui:addRule"],
+    "Vendor": ["ui:selectRule"],
+    "AddVendor": ["ui:addRule"]
+  },
+  "family_views": {
+    "Policy": ["ui:openView"],
+    "Rules": ["ui:openView", "ui:rules"],
+    "Defaults": ["ui:openView", "ui:defaults"],
+    "Agent": ["ui:openView"],
+    "Conflict": ["ui:openView"],
+    "Message": ["ui:openView"],
+    "Help": ["ui:openView", "ui:helpModal"],
+    "Details": ["ui:openView"]
+  },
+  "arguments": {
+    "commands": {
+      "Init": ["set"],
+      "Config": ["scope", "op", "path", "json", "check", "apply"],
+      "Preflight": ["path", "json"],
+      "Add": ["path", "json", "input"],
+      "Start": ["path", "json", "input"],
+      "Reindex": ["path", "all", "detach"],
+      "Pause": ["path"],
+      "Resume": ["path"],
+      "Remove": ["path", "yes"],
+      "Status": ["path"],
+      "Usage": ["days"]
+    },
+    "config_operations": {
+      "Get": ["key"],
+      "Set": ["assignments"],
+      "Edit": [],
+      "Unset": ["key"]
+    }
+  },
+  "control_routes": {
+    "startup": "control:startup",
+    "help": "control:help",
+    "version": "control:version",
+    "foregroundInterrupt": "control:interrupt"
+  },
+  "backend_sites": {
+    "inspectDraft": "tuiBackend:load",
+    "previewDraft": "tuiBackend:check",
+    "saveNewFamily": "tuiBackend:save",
+    "saveExistingPolicy": "tuiBackend:save",
+    "startSavedPolicy": "tuiBackend:start",
+    "refreshCurrent": "tuiBackend:load",
+    "saveGlobalSettings": "cliMain:persist_global"
+  },
+  "argument_details": {
+    "commands": {
+      "Init": {"set": {"attributes": ["#[arg(value_name=\"KEY=VALUE\")]"], "type": "Vec<String>"}},
+      "Config": {"scope": {"attributes": ["#[command(flatten)]"], "type": "ScopeArgs"}, "op": {"attributes": ["#[command(subcommand)]"], "type": "Option<ConfigOp>"}, "path": {"attributes": ["#[arg(value_name=\"PATH\",conflicts_with=\"ScopeArgs\")]"], "type": "Option<std::path::PathBuf>"}, "json": {"attributes": ["#[arg(long,requires=\"path\")]"], "type": "bool"}, "check": {"attributes": ["#[arg(long,value_name=\"-\",value_parser=[\"-\"],requires=\"json\",conflicts_with=\"apply\")]"], "type": "Option<String>"}, "apply": {"attributes": ["#[arg(long,value_name=\"-\",value_parser=[\"-\"],requires=\"json\")]"], "type": "Option<String>"}},
+      "Preflight": {"path": {"attributes": [], "type": "std::path::PathBuf"}, "json": {"attributes": ["#[arg(long,required=true)]"], "type": "bool"}},
+      "Add": {"path": {"attributes": [], "type": "std::path::PathBuf"}, "json": {"attributes": ["#[arg(long)]"], "type": "bool"}, "input": {"attributes": ["#[arg(long,value_name=\"-\",value_parser=[\"-\"],requires=\"json\")]"], "type": "Option<String>"}},
+      "Start": {"path": {"attributes": [], "type": "std::path::PathBuf"}, "json": {"attributes": ["#[arg(long)]"], "type": "bool"}, "input": {"attributes": ["#[arg(long,value_name=\"-\",value_parser=[\"-\"],requires=\"json\")]"], "type": "Option<String>"}},
+      "Reindex": {"path": {"attributes": [], "type": "Option<String>"}, "all": {"attributes": ["#[arg(long,conflicts_with=\"path\")]"], "type": "bool"}, "detach": {"attributes": ["#[arg(long,conflicts_with=\"all\")]"], "type": "bool"}},
+      "Pause": {"path": {"attributes": [], "type": "String"}},
+      "Resume": {"path": {"attributes": [], "type": "String"}},
+      "Remove": {"path": {"attributes": [], "type": "String"}, "yes": {"attributes": ["#[arg(long)]"], "type": "bool"}},
+      "Status": {"path": {"attributes": [], "type": "Option<String>"}},
+      "Usage": {"days": {"attributes": ["#[arg(long,default_value_t=30)]"], "type": "i64"}}
+    },
+    "config_operations": {
+      "Get": {"key": {"attributes": [], "type": "Option<String>"}},
+      "Set": {"assignments": {"attributes": ["#[arg(value_name=\"KEY=VALUE\",required=true)]"], "type": "Vec<String>"}},
+      "Edit": {},
+      "Unset": {"key": {"attributes": [], "type": "String"}}
+    }
+  },
+  "scope_details": {
+    "global": {"attributes": ["#[arg(long,global=true)]"], "type": "bool"}
+  }
+}

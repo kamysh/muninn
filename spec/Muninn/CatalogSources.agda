@@ -133,6 +133,7 @@ controlCoverage initializeMcp protocol = sourceRecorded (site mcpMain "handle_re
 controlCoverage listTools input = sourceRecorded (site mcpMain "handle_request")
 controlCoverage notification input = sourceRecorded (site mcpMain "handle_request")
 controlCoverage openEditor (editor , location) = sourceRecorded (editorSite editor)
+controlCoverage interrupt input = missing (site cliMain "run_foreground_index") 52
 
 coverage : Request → Coverage
 coverage (user adapter input) = userCoverage adapter
