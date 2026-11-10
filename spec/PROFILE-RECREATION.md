@@ -36,7 +36,10 @@ just a statement that the known old IDs were visited.
 A committing transaction must resolve the inspected current policy, match the
 requested family, and verify that retained records no longer reference derived
 data. Running searches and accepted work must release those references first;
-recreation cannot break their saved dependencies. If work is still using the
+recreation cannot break their saved dependencies. Graph resources also carry
+a separate current-use flag, which readiness checks explicitly. The general
+`graphUsePreventsRecreation` law prevents replacement while a graph search is
+using its resource. If work is still using the
 index, the existing corrective continuation explains how to finish or cancel
 that work and continue the original request. No writes occur in that branch.
 

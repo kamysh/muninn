@@ -5,6 +5,7 @@ import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
 import Muninn.CleanupOrder as Order
 import Muninn.CleanupStorage as Storage
+import Muninn.CleanupObservations as Observations
 import Muninn.ReceiptLedger as L
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false; not; _∧_)
@@ -168,8 +169,14 @@ module Family (family : ℕ) where
   checks world ((key , value) ∷ rest) with keep value
   ... | false = checks world rest
   ... | true = refsKept world (O.references (O.body value)) ∧ checks world rest
+  graphBusy : O.Record → Bool
+  graphBusy (O.recordOf actualOwner (O.graphResource selected true payload)) = E.sameOwner actualOwner owner
+  graphBusy value = false
+  graphsIdle : O.World → Bool
+  graphsIdle world = not (E.anyRow (λ key value → graphBusy value) world)
+
   ready : O.World → Bool
-  ready world = checks world world
+  ready world = checks world world ∧ graphsIdle world
   refsSound : ∀ world refs → refsKept world refs ≡ true → All (λ ref → targetKept world ref ≡ true) refs
   refsSound world [] proof = []
   refsSound world (ref ∷ rest) proof = andLeft _ _ proof ∷ refsSound world rest (andRight _ _ proof)
@@ -180,6 +187,25 @@ module Family (family : ℕ) where
     where impossible : false ≢ true
           impossible ()
   ... | true = (λ ignored → refsSound world (O.references (O.body value)) (andLeft _ _ proof)) ∷ checksSound world rest (andRight _ _ proof)
+
+  busyHit : ∀ rows key value → (key , value) ∈ rows → graphBusy value ≡ true → E.anyRow (λ key value → graphBusy value) rows ≡ true
+  busyHit ((key , value) ∷ rows) .key .value (here refl) hit rewrite hit = refl
+  busyHit ((first , stored) ∷ rows) key value (there present) hit with graphBusy stored
+  ... | true = refl
+  ... | false = busyHit rows key value present hit
+
+  ownedGraphBusy : ∀ selected payload → graphBusy (O.recordOf owner (O.graphResource selected true payload)) ≡ true
+  ownedGraphBusy selected payload with E.ownerEqual owner owner
+  ... | yes same = refl
+  ... | no different = ⊥-elim (different refl)
+
+  graphUsePreventsRecreation : ∀ world key selected payload →
+    DB.lookup key world ≡ just (O.recordOf owner (O.graphResource selected true payload)) → ready world ≡ false
+  graphUsePreventsRecreation world key selected payload found
+    rewrite busyHit world key (O.recordOf owner (O.graphResource selected true payload))
+      (Observations.lookupMember world key _ found) (ownedGraphBusy selected payload) with checks world world
+  ... | true = refl
+  ... | false = refl
 
   record Source (before : O.World) (key : ℕ) (value : O.Record) : Set where
     field found : DB.lookup key before ≡ just value
@@ -214,7 +240,7 @@ module Family (family : ℕ) where
       where
       origin = source present
       oldSound = Storage.lookupAll before (proj₁ row) (proj₂ row) (O.Admissible.sound valid) (Source.found origin)
-      checksHere = Storage.lookupAll before (proj₁ row) (proj₂ row) (checksSound before before released) (Source.found origin)
+      checksHere = Storage.lookupAll before (proj₁ row) (proj₂ row) (checksSound before before (andLeft (checks before before) (graphsIdle before) released)) (Source.found origin)
       resolve : ∀ {ref} → ref ∈ O.references (O.body (proj₂ row)) → O.Resolves (final before) (O.owner (proj₂ row)) ref
       resolve {ref} included = record
         { value = O.Resolves.value old; found = retained before (O.target ref) (O.Resolves.value old) unique (O.Resolves.found old) kept
