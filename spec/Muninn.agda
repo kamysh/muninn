@@ -159,3 +159,20 @@ import Muninn.Retrieval
 -- Complete selected-view hybrid fusion without per-file suppression (#40).
 import Muninn.HybridNumbers
 import Muninn.HybridRanking
+
+-- Stable pagination and private typed continuation state (#41).
+import Muninn.PaginationData
+import Muninn.Pagination
+import Muninn.PaginationStore
+
+import Muninn.PaginationSource
+
+import Muninn.PaginationTraversal
+
+import Muninn.PaginationCommit
+
+import Muninn.PaginationRanking
+
+import Muninn.PaginationCodeCall
+
+import Muninn.PaginationAdvance

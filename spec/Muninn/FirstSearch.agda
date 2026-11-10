@@ -88,7 +88,7 @@ module Family (family registrationSlot checkoutSlot : ℕ) (query : Q.Search)
 
   continuation : Q.SavedSearch → O.Record
   continuation captured = O.recordOf owner (O.continuation (checkoutSlot ∷ []) (record
-    { parent = queryId; payload = "Saved search: continue with the same query and selected worktree."
+    { parent = queryId; payload = Q.message "Saved search: continue with the same query and selected worktree."
     ; search = just captured }))
   selectSaved : ∀ captured → select (continuation captured) ≡ just captured
   selectSaved captured with E.ownerEqual owner owner

@@ -63,15 +63,7 @@ module Family (family checkout pointer : ℕ) (world : O.World)
               FT.Selection.before candidate result ≡ true → FT.Selection.Present candidate text
             textApproxFills : I.SearchInput.precision request ≡ I.approximate → length text < budget → ∀ candidate → FT.Selection.Present candidate text
 
-    module Inputs (legs : Legs) where
-      textOrdered = FT.Selection.ordered (Legs.text legs)
-      semanticOrdered = Sem.Selection.ordered (Sem.Universe.items (Legs.semantic legs))
-      choose : ∀ {A : Set} → List A → List A
-      choose rows with I.SearchInput.precision request
-      ... | I.exact = rows
-      ... | I.approximate = take budget rows
-      textPool = choose textOrdered
-      semanticPool = choose semanticOrdered
+    module Pools (textPool : List FT.Candidate) (semanticPool : List Sem.Candidate) where
       textHits = map FT.Candidate.hit textPool
       semanticHits = map Sem.Candidate.hit semanticPool
 
@@ -140,3 +132,14 @@ module Family (family checkout pointer : ℕ) (world : O.World)
         response = record { rows = results; canonical = refl; coverage = Source.summary inventory }
         deterministic : ∀ first second → Response.rows first ≡ Response.rows second
         deterministic first second = trans (Response.canonical first) (sym (Response.canonical second))
+
+    module Inputs (legs : Legs) where
+      textOrdered = FT.Selection.ordered (Legs.text legs)
+      semanticOrdered = Sem.Selection.ordered (Sem.Universe.items (Legs.semantic legs))
+      choose : ∀ {A : Set} → List A → List A
+      choose rows with I.SearchInput.precision request
+      ... | I.exact = rows
+      ... | I.approximate = take budget rows
+      textPool = choose textOrdered
+      semanticPool = choose semanticOrdered
+      open Pools textPool semanticPool public

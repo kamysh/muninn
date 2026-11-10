@@ -5,6 +5,7 @@ import Muninn.CatalogInputs as I
 import Data.Bool
 import Muninn.Worktree as W
 import Muninn.Types as T
+import Muninn.PaginationData as Pagination
 open import Data.Maybe using (Maybe)
 open import Data.Nat using (ℕ; suc)
 open import Data.String using (String)
@@ -40,9 +41,13 @@ record SavedSearch : Set where
 
 -- Saved continuations identify their accepted request; cancellation can remove
 -- them without deleting another request or guessing from a text description.
+data Payload : Set where
+  message : String → Payload
+  page : Pagination.Payload → Payload
+
 record Continuation : Set where
   field parent : I.OperationId
-        payload : String
+        payload : Payload
         search : Maybe SavedSearch
 
 move : Phase → Info → Info

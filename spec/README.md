@@ -608,3 +608,6 @@ candidates with the agreed fusion formula, current-policy vendor weights and
 per-query vendor weighting. Its selection pipeline proves membership,
 deterministic output and page bounds, with no per-file suppression.
 Pagination and runtime correspondence remain their existing obligations.
+
+See [stable pagination](PAGINATION.md) for typed saved queries, atomic page
+receipts, finite approximate continuation and the no-idle-index-hold contract.

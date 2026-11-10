@@ -170,3 +170,10 @@ Legacy `Search` defaults/contributions delegate to `HybridNumbers`; a runtime
 adapter must satisfy the selected-view modality contracts and return the
 computed hybrid response, not call an isolated fusion helper as a substitute.
 See [hybrid ranking](HYBRID-RANKING.md) for the exact/approximate boundary.
+
+Search pagination and continuation checkpoints use `PaginationData`,
+`Pagination`, `PaginationTraversal`, `PaginationAdvance`, `PaginationStore`,
+`PaginationCommit`, `PaginationSource`, `PaginationCodeCall` and
+`PaginationRanking`. The checkout page operation binds eligibility to actual
+stored source rows; idle cursor rows have no strong data references. See
+[stable pagination](PAGINATION.md) for the query, source and runtime boundaries.
