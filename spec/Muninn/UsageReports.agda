@@ -3,12 +3,15 @@
 module Muninn.UsageReports where
 
 import Muninn.OwnedState as O
+import Muninn.Dialogue as D
 open import Data.Bool using (Bool; true; false)
-open import Data.Maybe using (Maybe; just; nothing)
+open import Data.Maybe using (Maybe; just; nothing; map)
 open import Data.Nat using (ℕ; zero; suc; _≤?_)
 import Data.Empty
 open import Data.List using ([]; _∷_)
-open import Data.Product using (_,_; proj₂)
+open import Data.List.Membership.Propositional using (_∈_)
+open import Data.List.Relation.Unary.Any using (here; there)
+open import Data.Product using (_×_; _,_; proj₂)
 open import Relation.Nullary using (yes; no)
 open import Data.String using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
@@ -48,24 +51,56 @@ recorded : Codec → Usage → O.Record
 recorded codec item = O.recordOf O.installation (O.usage (Codec.encode codec item))
 
 
--- Count saved usage rows in a requested time window. Runtime correspondence
--- must establish that every actual usage row has a valid decoding.
-countSince : Codec → ℕ → O.World → ℕ
-countSince codec cutoff [] = zero
-countSince codec cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest) with Codec.decode codec payload
-... | nothing = countSince codec cutoff rest
+-- An undecodable usage row prevents an incomplete count being reported.
+classify : Codec → ℕ → (ℕ × O.Record) → Maybe Bool
+classify codec cutoff (slot , O.recordOf owner (O.usage payload)) with Codec.decode codec payload
+... | nothing = nothing
 ... | just item with cutoff ≤? Usage.recordedAt item
-...   | yes _ = suc (countSince codec cutoff rest)
-...   | no _ = countSince codec cutoff rest
-countSince codec cutoff ((slot , O.recordOf owner other) ∷ rest) = countSince codec cutoff rest
+...   | yes _ = just true
+...   | no _ = just false
+classify codec cutoff (slot , O.recordOf owner other) = just false
 
-inspect : Codec → ℕ → O.DB.Transaction ℕ
+countSince : Codec → ℕ → O.World → Maybe ℕ
+countSince codec cutoff [] = just zero
+countSince codec cutoff (row ∷ rest) with classify codec cutoff row
+... | nothing = nothing
+... | just false = countSince codec cutoff rest
+... | just true = map suc (countSince codec cutoff rest)
+
+inspect : Codec → ℕ → O.DB.Transaction (Maybe ℕ)
 inspect codec cutoff = O.DB.scan (λ world → O.DB.commit (countSince codec cutoff world))
 inspectionPreservesWorld : ∀ codec cutoff world → proj₂ (O.DB.execute (inspect codec cutoff) world) ≡ world
 inspectionPreservesWorld codec cutoff world = refl
 
+undecodableDoesNotProduceCount : ∀ codec cutoff slot owner payload rest →
+  Codec.decode codec payload ≡ nothing →
+  countSince codec cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest) ≡ nothing
+undecodableDoesNotProduceCount codec cutoff slot owner payload rest missing rewrite missing = refl
+
+-- The same guarantee applies to an unreadable row anywhere in the store.
+noPartialCount : ∀ codec cutoff world slot owner payload →
+  (slot , O.recordOf owner (O.usage payload)) ∈ world →
+  Codec.decode codec payload ≡ nothing → countSince codec cutoff world ≡ nothing
+noPartialCount codec cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest)
+  .slot .owner .payload (here refl) missing rewrite missing = refl
+noPartialCount codec cutoff (first ∷ rest) slot actual bad (there later) missing
+  with classify codec cutoff first
+... | nothing = refl
+... | just false = noPartialCount codec cutoff rest slot actual bad later missing
+... | just true rewrite noPartialCount codec cutoff rest slot actual bad later missing = refl
+
+-- Do not present a partial count as complete; continue with clear guidance.
+data UsageAnswer : Set where
+  count : ℕ → UsageAnswer
+  explain : D.Prompt → UsageAnswer
+
+answer : Maybe ℕ → UsageAnswer
+answer (just total) = count total
+answer nothing = explain (D.prompt (D.text 'I' " cannot read all saved usage records, so I cannot give a complete count.")
+  (D.text 'C' "heck the database records and try again; ask the database administrator for help if needed.") [])
+
 recentRowCounted : ∀ codec cutoff item slot rest → cutoff Data.Nat.≤ Usage.recordedAt item →
-  countSince codec cutoff ((slot , recorded codec item) ∷ rest) ≡ suc (countSince codec cutoff rest)
+  countSince codec cutoff ((slot , recorded codec item) ∷ rest) ≡ map suc (countSince codec cutoff rest)
 recentRowCounted codec cutoff item slot rest within rewrite Codec.roundTrip codec item with cutoff ≤? Usage.recordedAt item
 ... | yes _ = refl
 ... | no outside = Data.Empty.⊥-elim (outside within)
@@ -98,11 +133,11 @@ pruneConfigured (settings usageEnabled false dir retention interval) codec cutof
 pruneConfigured (settings usageEnabled true dir zero interval) codec cutoff world = world
 pruneConfigured (settings usageEnabled true dir (suc retention) interval) codec cutoff world = pruneLogs codec cutoff world
 
-countToolSince : Codec → String → ℕ → O.World → ℕ
-countToolSince codec selected cutoff [] = zero
+countToolSince : Codec → String → ℕ → O.World → Maybe ℕ
+countToolSince codec selected cutoff [] = just zero
 countToolSince codec selected cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest) with Codec.decode codec payload
-... | nothing = countToolSince codec selected cutoff rest
+... | nothing = nothing
 ... | just item with Usage.tool item Data.String.≟ selected | cutoff ≤? Usage.recordedAt item
-...   | yes _ | yes _ = suc (countToolSince codec selected cutoff rest)
+...   | yes _ | yes _ = map suc (countToolSince codec selected cutoff rest)
 ...   | _ | _ = countToolSince codec selected cutoff rest
 countToolSince codec selected cutoff ((slot , O.recordOf owner other) ∷ rest) = countToolSince codec selected cutoff rest
