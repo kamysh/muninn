@@ -152,3 +152,9 @@ Vector payloads now follow [staged vector publication](STAGED-VECTORS.md):
 exact source/profile identity and validated coordinates, with normal pending
 and waiting metadata. The existing chunk reference and kind hierarchy remain;
 this refinement does not require a new physical table.
+
+Profile recreation deliberately removes code-derived records and typed note
+vectors while preserving identity, curated note text and settings. Note vectors
+now use the same validated `VectorData.State` payload as code vectors; their
+semantic-use certificate resolves the actual saved repository profile. See
+[profile recreation](PROFILE-RECREATION.md).

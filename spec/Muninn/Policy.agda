@@ -38,7 +38,7 @@ record PolicyGuard (family : FamilyId) (revision : ℕ) (s : PolicyState) : Set 
   field familyMatches : family ≡ FamilyPolicy.family (PolicyState.current s)
         revisionMatches : revision ≡ FamilyPolicy.revision (PolicyState.current s)
 
--- This implementation slice cannot migrate an embedding profile.
+-- Ordinary policy edits cannot migrate an embedding profile.
 record AdmissiblePolicyChange (s : PolicyState) (p : FamilyPolicy) : Set where
   field sameFamily : FamilyPolicy.family p ≡ FamilyPolicy.family (PolicyState.current s)
         nextRevision : FamilyPolicy.revision p ≡ suc (FamilyPolicy.revision (PolicyState.current s))
@@ -182,3 +182,16 @@ changedPolicyAdvancesExactlyOnce : ∀ {family revision s t} →
   PolicyStep family revision s PolicyChanged t →
   FamilyPolicy.revision (PolicyState.current t) ≡ suc (FamilyPolicy.revision (PolicyState.current s))
 changedPolicyAdvancesExactlyOnce (changePolicy guard valid) = AdmissiblePolicyChange.nextRevision valid
+
+-- Ordinary policy edits cannot change the backend/model in an existing index.
+-- A different profile must use the separate derived-index recreation intent.
+policyKeepsEmbeddingProfile : ∀ {family revision before outcome after} →
+  PolicyStep family revision before outcome after →
+  (EmbeddingSelection.backend (FamilyPolicy.embeddings (PolicyState.current after)) ≡
+   EmbeddingSelection.backend (FamilyPolicy.embeddings (PolicyState.current before))) ×
+  (EmbeddingSelection.model (FamilyPolicy.embeddings (PolicyState.current after)) ≡
+   EmbeddingSelection.model (FamilyPolicy.embeddings (PolicyState.current before)))
+policyKeepsEmbeddingProfile (rejectFamily mismatch) = refl , refl
+policyKeepsEmbeddingProfile (rejectRevision mismatch) = refl , refl
+policyKeepsEmbeddingProfile (noChange guard) = refl , refl
+policyKeepsEmbeddingProfile (changePolicy guard valid) = AdmissiblePolicyChange.sameBackend valid , AdmissiblePolicyChange.sameModel valid

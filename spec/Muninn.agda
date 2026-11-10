@@ -133,3 +133,8 @@ import Muninn.VectorData
 import Muninn.StagedVectors
 import Muninn.TextPublication
 import Muninn.VectorPublication
+
+-- Explicit profile recreation preserves identity, notes and settings (#37).
+import Muninn.RecreationStore
+import Muninn.RepositoryProfile
+import Muninn.ProfileRecreation

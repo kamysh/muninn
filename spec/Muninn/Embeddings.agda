@@ -27,8 +27,8 @@ EmbeddingDimension OpenAI = 1536
 EmbeddingDimension Local  = 512
 
 -- The dimension stored on a Repo must equal the canonical dimension for the
--- backend active at registration time.  Set once, never changes, so the
--- per-repo VECTOR(n) column stays consistent even if config is later switched.
+-- backend active for this derived-index incarnation. Changing the profile
+-- requires explicit recreation, including its dimensioned vector storage.
 RepoDimMatchesBackend : Repo → EmbeddingBackend → Set
 RepoDimMatchesBackend repo backend =
   Repo.embeddingDim repo ≡ EmbeddingDimension backend

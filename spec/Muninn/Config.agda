@@ -189,7 +189,8 @@ familyConfig p = record
 CheckoutUsesFamilyPolicy : Checkout → FamilyPolicy → Set
 CheckoutUsesFamilyPolicy c p = Checkout.family c ≡ FamilyPolicy.family p
 
--- Dimension stays fixed for a registered family until a deliberate migration.
+-- Dimension stays fixed for one derived-index incarnation; a profile change
+-- requires explicit derived-index recreation, preserving repository identity.
 DimFrozen : ℕ → FamilyPolicy → Set
 DimFrozen schemaDimension policy =
   schemaDimension ≡ EmbeddingDimension (EmbeddingSelection.backend (FamilyPolicy.embeddings policy))

@@ -575,3 +575,11 @@ embedding with text/symbol availability independent of vectors. `VectorData`,
 stored vectors, exact compatible reuse, truthful per-chunk/family coverage,
 and receipt-sealed preservation of published text while vectors are prepared.
 This is an approved behavior change; the Rust pipeline remains unchanged.
+
+## Embedding-profile recreation
+
+[Profile recreation](PROFILE-RECREATION.md) defines fixed derived-data removal,
+new-profile publication, preserved identity/notes/settings and receipt-sealed
+interruption/retry. `RepositoryProfile` binds code and curated-note vectors to
+the actual saved family profile. Rebuild scheduling and runtime correspondence
+remain the existing pipeline/dispatcher obligations.

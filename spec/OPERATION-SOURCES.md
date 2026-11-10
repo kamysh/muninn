@@ -145,3 +145,10 @@ derives coverage from actual stored associations and requires reuse of compatibl
 completed vectors; `VectorData` certifies usable coordinates. See
 [staged vector publication](STAGED-VECTORS.md) for the current Rust gap and
 provider/pipeline/search correspondence boundaries.
+
+The existing `recreateIndex` intent is specified by `RecreationStore`,
+`ProfileRecreation` and `RepositoryProfile`: explicit profile recreation, fixed
+owned-world removal/preservation, current-policy publication and receipt retry.
+It adds no standalone removal CLI command. End-to-end rebuild scheduling,
+physical schema adaptation and final dispatcher enforcement remain separate
+existing-series obligations. See [profile recreation](PROFILE-RECREATION.md).

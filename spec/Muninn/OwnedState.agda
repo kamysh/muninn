@@ -107,7 +107,8 @@ data Body : Set where
   policyVersion : ℕ → PolicyVersionInfo → Body
   currentPolicy : ℕ → Body
   note : String → Body
-  notePosting noteVector : ℕ → String → Body
+  notePosting : ℕ → String → Body
+  noteVector : ℕ → Vectors.State → Body
   fileVersion : String → Body
   baseBinding : (version : ℕ) (path : String) → Git.Answer path → Body
   deltaBinding : (selected : ℕ) (version : Maybe ℕ) (path : String) → SelectionFor version path → Body
