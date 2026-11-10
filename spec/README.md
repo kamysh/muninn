@@ -611,3 +611,12 @@ Pagination and runtime correspondence remain their existing obligations.
 
 See [stable pagination](PAGINATION.md) for typed saved queries, atomic page
 receipts, finite approximate continuation and the no-idle-index-hold contract.
+
+## Fair scheduling
+
+`FairScheduling` reserves configurable capacity for interactive requests and
+models a single-slot installation yielding running background work. A finite
+round visits each already-waiting background job even when new jobs arrive;
+completed jobs leave the queue. Progress requires the selected work to be
+productive and scheduler capacity to become available. The Rust scheduler and
+its dispatch integration remain correspondence obligations.

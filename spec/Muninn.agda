@@ -196,3 +196,6 @@ import Muninn.KnowledgeDelete
 import Muninn.KnowledgePagination
 
 import Muninn.KnowledgeRanking
+
+-- Fair scheduling and durable yield (#44).
+import Muninn.FairScheduling
