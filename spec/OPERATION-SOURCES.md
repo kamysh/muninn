@@ -21,6 +21,16 @@ those remaining details or claim their validation is complete. Raw CLI/TUI
 settings are lowered to a complete typed replacement before the shared change
 request, preserving unspecified settings through the adapter contract.
 
+## Mechanical MCP name check (partial)
+
+`scripts/check_mcp_catalog.py` compares the literal advertised tools, dispatch
+arms, formal wire names, decoder clauses, intent assignments and source-site
+handler identities. Unsupported source forms, duplicates and mismatches are
+rejected. `tests/test_mcp_catalog.py` exercises missing, extra, duplicate and
+misrouted entries. This is not a complete #48 coverage gate: it does not bind
+handlers to proof-carrying instances, cover planned administration or establish
+Rust/effect correspondence. It is not yet wired as a mandatory CI gate.
+
 ## Current MCP surface
 
 `crates/mcp/src/main.rs:78-275,428-476` advertises and dispatches exactly these
