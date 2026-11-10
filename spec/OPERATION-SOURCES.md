@@ -4,7 +4,8 @@ The user approved one semantic contract for equivalent CLI, MCP and TUI intents,
 with resumable background jobs registered separately. `CatalogInputs` defines
 structural input types; `Catalog` maps closed adapters to their shared intents;
 `CatalogSources` assigns every request an independent outcome owner and an
-explicit current-source or missing-adapter record. Approved administration wire names are specified in `Catalog`; their runtime adapters remain absent.
+explicit current-source or missing-adapter record. Approved administration wire
+names are specified in `Catalog`; their runtime adapters remain absent.
 
 This is the closed inventory, not the proof-requiring execution dispatcher.
 `sourceRecorded` means that a matching Rust declaration exists, not that its
@@ -21,15 +22,20 @@ those remaining details or claim their validation is complete. Raw CLI/TUI
 settings are lowered to a complete typed replacement before the shared change
 request, preserving unspecified settings through the adapter contract.
 
-## Mechanical MCP name check (partial)
+## Mechanical MCP catalog check
 
 `scripts/check_mcp_catalog.py` compares the literal advertised tools, dispatch
 arms, formal wire names, decoder clauses, intent assignments and source-site
-handler identities. Unsupported source forms, duplicates and mismatches are
-rejected. `tests/test_mcp_catalog.py` exercises missing, extra, duplicate and
-misrouted entries. This is not a complete #48 coverage gate: it does not bind
-handlers to proof-carrying instances, cover planned administration or establish
-Rust/effect correspondence. It is not yet wired as a mandatory CI gate.
+handler identities. It also checks the current initialization, tool-list and
+tool-call transport routes. Unsupported source forms, duplicates and mismatches
+are rejected. `tests/test_mcp_catalog.py` exercises missing, extra, duplicate,
+misrouted and unsupported entries.
+
+The checker validates the separately named planned administration and
+continuation entries and reports that their current runtime adapters are absent.
+As agreed for #48, proof-carrying operation enforcement and the mandatory gate
+belong to #51; Rust effect correspondence remains #52. Matching names and
+handlers alone does not prove implementation behavior.
 
 ## Current MCP surface
 
@@ -51,7 +57,7 @@ The transport also handles initialization, listing and calls. Input parsing,
 unknown methods/tools, notifications, EOF and malformed requests are admission
 or connection lifecycle inputs, not permission to execute an arbitrary script.
 Today malformed JSON is skipped and ordinary tool errors become JSON-RPC errors;
-the agreed corrective conversation is still missing (#20, #48).
+the agreed corrective conversation is still missing from Rust (#20, #52).
 
 ## Current CLI leaves
 
@@ -130,7 +136,7 @@ cancel; status; unregistration versus forget-all; and derived-index recreation f
 an embedding profile change while retaining notes/settings. The current eight
 tools do not expose this scope. `Catalog.adminWireName` defines the approved
 planned names; these are not yet advertised by the running server.
-Exact adapters and mechanical coverage remain #48 and #52.
+Exact runtime adapters and their correspondence remain #52.
 
 The planned wire names are:
 

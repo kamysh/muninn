@@ -93,6 +93,15 @@ class CatalogCheck(unittest.TestCase):
             with self.assertRaises(ValueError):
                 check.formal_admin(changed)
 
+    def test_missing_initialize_or_call_dispatch_is_rejected(self):
+        cases = [('"initialize" =>', '"other_init" =>'),
+                 ('dispatch_tool(ctx, tool_name, args)', 'other_dispatch(ctx, tool_name, args)')]
+        for before, after in cases:
+            changed = self.rust.replace(before, after, 1)
+            self.assertNotEqual(changed, self.rust)
+            with self.assertRaises(ValueError):
+                check.request_methods(check.tokens(changed))
+
     def test_unsupported_raw_string(self):
         with self.assertRaises(ValueError):
             check.tokens('let value = r#"opaque"#;')

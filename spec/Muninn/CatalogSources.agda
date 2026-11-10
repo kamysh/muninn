@@ -89,8 +89,8 @@ userCoverage : UserAdapter → Coverage
 userCoverage (cliAdapter leaf) = sourceRecorded (cliSite leaf)
 userCoverage (mcpAdapter tool) = sourceRecorded (mcpSite tool)
 userCoverage (tuiAdapter effect) = sourceRecorded (tuiSite effect)
-userCoverage (plannedAdministration admin) = missing (site mcpMain "dispatch_tool") 48
-userCoverage conversationContinuation = missing (site mcpMain "handle_request") 48
+userCoverage (plannedAdministration admin) = missing (site mcpMain "dispatch_tool") 52
+userCoverage conversationContinuation = missing (site mcpMain "handle_request") 52
 
 jobCoverage : Job → Coverage
 jobCoverage preparePublic = sourceRecorded (site database "run_migrations")

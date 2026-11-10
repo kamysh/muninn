@@ -48,6 +48,55 @@ def end(tokens_, start):
     raise ValueError('unterminated group')
 
 
+def request_methods(ts):
+    handlers = [i for i in range(len(ts) - 1) if ts[i:i+2] == ['fn', 'handle_request']]
+    if len(handlers) != 1:
+        raise ValueError('expected one MCP request handler')
+    begin = next((i for i in range(handlers[0] + 2, len(ts)) if ts[i] == '{'), None)
+    if begin is None:
+        raise ValueError('missing MCP request handler body')
+    finish = end(ts, begin)
+    matches = [i for i in range(begin, finish - 2) if ts[i:i+3] == ['match', 'method', '{']]
+    if len(matches) != 1:
+        raise ValueError('expected one request-method dispatch')
+    start = matches[0] + 2
+    stop = end(ts, start)
+    i, methods, fallback = start + 1, {}, False
+    while i < stop:
+        if ts[i] == ',':
+            i += 1
+            continue
+        if i + 1 >= stop or ts[i+1] != '=>':
+            raise ValueError('unsupported request-method arm')
+        if ts[i].startswith('"'):
+            name = string(ts[i])
+            if fallback or name in methods:
+                raise ValueError('duplicate or unreachable request method')
+        elif ts[i] == '_' and not fallback:
+            name, fallback = None, True
+        else:
+            raise ValueError('unsupported request-method pattern')
+        i += 2
+        body_start = i
+        if i < stop and ts[i] == '{':
+            i = end(ts, i) + 1
+        else:
+            while i < stop and ts[i] != ',':
+                if ts[i] in PAIR:
+                    i = end(ts, i) + 1
+                else:
+                    i += 1
+        if name is not None:
+            methods[name] = ts[body_start:i]
+    if not fallback:
+        raise ValueError('missing request-method fallback')
+    check('MCP transport methods', ['initialize', 'tools/list', 'tools/call'], list(methods))
+    calls = methods['tools/call']
+    if sum(calls[j:j+2] == ['dispatch_tool', '('] for j in range(len(calls)-1)) != 1:
+        raise ValueError('tools/call must reach exactly one direct tool dispatcher')
+    return methods
+
+
 def advertised(ts):
     handlers = [i for i in range(len(ts) - 1) if ts[i:i+2] == ['fn', 'handle_request']]
     if len(handlers) != 1:
@@ -211,6 +260,7 @@ def check_implementations(implementations, sites):
 
 def main():
     rust = tokens((ROOT / 'crates/mcp/src/main.rs').read_text())
+    request_methods(rust)
     source = (ROOT / 'spec/Muninn/Catalog.agda').read_text()
     declarations = formal(source)
     planned = formal_admin(source)
