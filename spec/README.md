@@ -310,6 +310,22 @@ The independently specified migration requirements and runtime correspondence
 remain obligations for the operation catalog and implementation work (#51 and
 #52). The Agda model does not verify the Rust database adapter.
 
+## Status from saved state
+
+`StatusReport` derives request progress and work phases from saved receipts and
+accepted work. Its cleanup assessment checks the captured workset and only
+reports completion with the existing completion certificate. Semantic coverage
+is tied to a stored vector for the actual chunk, or to saved guidance when work
+is waiting. A saved request result is distinct from verified cleanup or complete
+semantic coverage. `UsageReports` describes the current usage and log fields,
+the seven-day default log retention, and counts derived from stored rows. Log
+retention does not expire database usage records.
+
+The model restricts pruning to identified Muninn-owned logs, but the current
+Rust implementation can prune other files in its configured directory. Mapping
+logical records to the database and enforcing log-file ownership remain runtime
+correspondence work. These modules do not establish running-server behavior.
+
 ## Exact search read footprints
 
 `Protected` derives its dependency scope from the stored holder origin. Search
