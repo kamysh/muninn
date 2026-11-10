@@ -55,9 +55,11 @@ Cosine dot products, norms and division use the stated binary64 operations on
 those stored coordinates. Only the final cosine roundoff is clamped to [-1,1].
 A positive result must certify the actual calculated score, finite raw
 calculation, positive finite returned score and upper bound of one. Every
-usable vector is classified as a positive match or a finite nonpositive
-non-match. There is no silent branch that omits a vector because numerical
-evaluation was not completed.
+usable vector in exact mode is classified as a positive match or a finite
+nonpositive non-match. There is no silent branch in exact mode that omits a
+vector because numerical evaluation was not completed. Approximate mode does
+not owe exhaustive scoring; every candidate it does return owes the same
+numerical certificate.
 
 The exact rational image of the computed binary64 value is used for comparison;
 the specification does not assume real-number algebra for rounded arithmetic.

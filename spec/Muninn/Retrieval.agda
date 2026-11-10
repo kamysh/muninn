@@ -84,14 +84,14 @@ module Family (family checkout pointer : ℕ) (world : O.World)
     rank : Candidate → Numeric.Rank
     rank candidate = Numeric.Cosine.rank (Candidate.similarity candidate)
     module Selection = Select.For Candidate (λ c → Hit.key (Candidate.hit c)) (λ c → Hit.path (Candidate.hit c)) rank
-    -- No candidate can be omitted because its valid score was inconvenient:
-    -- every real vector gets an exhaustive positive/nonpositive evaluation.
+    -- Exact mode classifies all vectors. Approximate lookup may select a pool
+    -- without calculating the score of every other stored vector.
     record Universe : Set where
       field coverage : Source.SemanticInventory inventory
-            evaluated : ∀ hit → hit ∈ Source.Inventory.items inventory → (ready : Source.Semantic hit) →
+            evaluated : I.SearchInput.precision request ≡ I.exact → ∀ hit → hit ∈ Source.Inventory.items inventory → (ready : Source.Semantic hit) →
               Numeric.Evaluation queryValues (V.Value.values (Source.Semantic.value ready))
             items : List Candidate
-            complete : ∀ candidate → Selection.Present candidate items
+            complete : I.SearchInput.precision request ≡ I.exact → ∀ candidate → Selection.Present candidate items
     record Response (universe : Universe) : Set where
       field pool : List Candidate
             selectedFromUniverse : ∀ candidate → candidate ∈ pool → Selection.Present candidate (Universe.items universe)
