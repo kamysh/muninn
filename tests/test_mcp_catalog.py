@@ -67,6 +67,19 @@ class CatalogCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.formal(changed)
 
+    def test_decoy_tools_list_outside_handler_is_rejected(self):
+        changed = self.rust.replace('"tools/list" => {', '"other/list" => {', 1)
+        changed += '\nfn decoy() { match x { "tools/list" => { { "tools": [] } } } }\n'
+        with self.assertRaises(ValueError):
+            check.advertised(check.tokens(changed))
+
+    def test_missing_handler_definition_is_rejected(self):
+        source = (ROOT / 'crates/mcp/src/tools.rs').read_text()
+        changed = source.replace('fn search_hybrid(', 'fn renamed_hybrid(', 1)
+        self.assertNotEqual(changed, source)
+        with self.assertRaises(ValueError):
+            check.check_implementations(check.tokens(changed), [('searchHybrid', 'search_hybrid')])
+
     def test_unsupported_raw_string(self):
         with self.assertRaises(ValueError):
             check.tokens('let value = r#"opaque"#;')

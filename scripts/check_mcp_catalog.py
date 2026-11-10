@@ -47,7 +47,15 @@ def end(tokens_, start):
 
 
 def advertised(ts):
-    branches = [i for i in range(len(ts) - 2) if ts[i:i+3] == ['"tools/list"', '=>', '{']]
+    handlers = [i for i in range(len(ts) - 1) if ts[i:i+2] == ['fn', 'handle_request']]
+    if len(handlers) != 1:
+        raise ValueError('expected one MCP request handler')
+    handler_start = next((i for i in range(handlers[0] + 2, len(ts)) if ts[i] == '{'), None)
+    if handler_start is None:
+        raise ValueError('missing MCP request handler body')
+    handler_end = end(ts, handler_start)
+    branches = [i for i in range(handler_start, handler_end - 2)
+                if ts[i:i+3] == ['"tools/list"', '=>', '{']]
     if len(branches) != 1:
         raise ValueError('expected one literal tools/list branch')
     branch_start = branches[0] + 2
@@ -166,6 +174,13 @@ def check(label, expected, actual):
         raise ValueError(f'{label}: expected {sorted(expected)}, found {sorted(actual)}')
 
 
+def check_implementations(implementations, sites):
+    for constructor, handler in sites:
+        count = sum(implementations[i:i+2] == ['fn', handler] for i in range(len(implementations)-1))
+        if count != 1:
+            raise ValueError(f'{constructor}: expected exactly one handler definition for {handler}')
+
+
 def main():
     rust = tokens((ROOT / 'crates/mcp/src/main.rs').read_text())
     declarations = formal((ROOT / 'spec/Muninn/Catalog.agda').read_text())
@@ -179,6 +194,7 @@ def main():
     check('dispatch arms', [name + ':' + site_by_constructor[constructor]
                             for constructor, name in declarations],
           [name + ':' + handler for name, handler in dispatched(rust)])
+    check_implementations(tokens((ROOT / 'crates/mcp/src/tools.rs').read_text()), sites)
     print(f'{len(expected)} advertised and dispatched tools match the formal wire names')
     print('Proof registration and Rust effect correspondence remain unchecked (#51, #52).')
 
