@@ -158,3 +158,9 @@ First-search preparation and `continueRequest` query recovery are covered by
 `SearchReadiness`. Read queries remain separate from the durable finite
 `reconcileCheckout` work they arrange. These contracts add no MCP/CLI wire name;
 see [first search](FIRST-SEARCH.md) for the full execution boundary.
+
+Selected-checkout full-text and semantic search are specified by `Retrieval`
+and its numerical, corpus, text and selection modules. They require actual
+eligible rows, complete source universes, stored-coordinate precision evidence,
+truthful coverage and the appropriate exact/approximate outcome certificate.
+See [retrieval](RETRIEVAL.md) for the English-provider and runtime boundary.

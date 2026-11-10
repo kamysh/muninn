@@ -591,3 +591,12 @@ repository/checkout identity, arranges authorized work atomically and resumes
 toward the actual published view. Selected-view eligibility and evidence-backed
 freshness are explicit. Full retrieval/ranking, pagination, scheduling and
 runtime correspondence remain their existing series obligations.
+
+## Eligible text and semantic retrieval
+
+[Retrieval](RETRIEVAL.md) binds matches to the current eligible checkout, actual
+postings and vector associations, the stored binary32 representation and
+binary64 scoring. Exact mode requires global completeness; approximate mode
+reports its weaker candidate guarantee. All responses preserve numerical and
+page bounds and expose actual semantic coverage. Source-provider and final
+dispatch correspondence remain the existing series obligations.

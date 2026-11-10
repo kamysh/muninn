@@ -4,6 +4,7 @@
 module Muninn.Search where
 
 open import Muninn.Float
+import Muninn.RetrievalNumerics as Numeric
 open import Muninn.Types
 open import Muninn.Worktree using (Views; Checkout; CheckoutResult; Baselines; FileEntry)
 open import Muninn.Storage using (World; viewsOf)
@@ -20,9 +21,10 @@ open import Data.Bool   using (Bool; true; false)
 open import Data.Unit   using (⊤; tt)
 open import Agda.Builtin.String using (primStringEquality)
 
--- Cosine similarity: a Float known to lie in [0, 1].
+-- A returned positive cosine score is finite and bounded by one.
 record Similarity : Set where
-  field value : Float
+  field score : Numeric.Rank
+        bounded : Numeric.Rank.numerator score ≤ Numeric.Rank.denominator score
 
 -- Reciprocal Rank Fusion score at position rank (0-based).
 --   rrfScore(rank) = 1 / (60 + rank)
@@ -79,12 +81,9 @@ countFile fp (r ∷ rs) with primStringEquality fp (FilePath.value (Chunk.filePa
 PerFileBound : List SearchResult → Set
 PerFileBound results = ∀ (fp : String) → countFile fp results ≤ perFileCap
 
--- Reachability: down-weighting does NOT remove Tier-2 results. A Tier-2 chunk is
--- still a valid member of a result list (it is scaled, never filtered). Stated as
--- the simple fact that tieredScore is total on Tier2 (no Tier2 → ⊥ case): the
--- design forbids a "Tier-1-only" filter.
-Tier2Reachable : Tier → Set
-Tier2Reachable _ = ⊤
+-- Eligible vendor matches use the same complete retrieval universe.
+-- Retrieval.Semantic exactTop/fills require actual matching identities in
+-- the result page; there is no detached Tier → unit reachability predicate.
 
 -- ─── Query Limit Validity ─────────────────────────────────────────────────────
 

@@ -145,3 +145,13 @@ import Muninn.SearchView
 import Muninn.FirstSearch
 import Muninn.SearchResumption
 import Muninn.SearchReadiness
+
+import Muninn.RetrievalNumerics
+
+import Muninn.RetrievalCorpus
+
+import Muninn.RetrievalText
+
+import Muninn.RetrievalSelection
+
+import Muninn.Retrieval
