@@ -18,6 +18,8 @@ def tokens(source):
     parts = TOKEN.findall(source)
     if ''.join(parts) != source:
         raise ValueError('source contains an unsupported token')
+    if any(part.startswith('/*') and '/*' in part[2:] for part in parts):
+        raise ValueError('nested Rust comments require a Rust-aware catalog parser')
     result = [p for p in parts if not p.isspace() and not p.startswith(('//', '/*'))]
     if any(token in ('r', 'br') and index + 1 < len(result) and
            (result[index + 1] == '#' or result[index + 1].startswith('"'))

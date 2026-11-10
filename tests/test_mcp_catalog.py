@@ -80,6 +80,10 @@ class CatalogCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.check_implementations(check.tokens(changed), [('searchHybrid', 'search_hybrid')])
 
+    def test_unsupported_nested_comment(self):
+        with self.assertRaises(ValueError):
+            check.tokens('/* outer /* nested */ remaining */')
+
     def test_unsupported_raw_string(self):
         with self.assertRaises(ValueError):
             check.tokens('let value = r#"opaque"#;')
