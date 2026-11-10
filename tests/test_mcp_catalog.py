@@ -84,6 +84,15 @@ class CatalogCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.tokens('/* outer /* nested */ remaining */')
 
+    def test_missing_or_duplicate_admin_name_is_rejected(self):
+        cases = [('adminWireName inspect = "inspect_policy"', ''),
+                 ('adminWireName check = "check_policy"', 'adminWireName check = "inspect_policy"')]
+        for before, after in cases:
+            changed = self.agda.replace(before, after, 1)
+            self.assertNotEqual(changed, self.agda)
+            with self.assertRaises(ValueError):
+                check.formal_admin(changed)
+
     def test_unsupported_raw_string(self):
         with self.assertRaises(ValueError):
             check.tokens('let value = r#"opaque"#;')

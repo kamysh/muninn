@@ -168,6 +168,32 @@ def formal(source):
     return declarations
 
 
+def formal_admin(source):
+    declarations = re.findall(r'^adminWireName\s+(\w+)\s*=\s*"([^"\\]+)"\s*$', source, re.M)
+    matches = re.findall(r'^data McpAdministration : Set where\s*\n(.*?)(?=\n\S)', source, re.M | re.S)
+    if len(matches) != 1:
+        raise ValueError('expected one McpAdministration declaration')
+    constructors = []
+    for line in matches[0].splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(r'\s*([A-Za-z0-9_ ]+)\s*:\s*McpAdministration\s*', line)
+        if not match:
+            raise ValueError('unsupported McpAdministration declaration')
+        constructors.extend(match.group(1).split())
+    check('administration constructors', constructors, [constructor for constructor, _ in declarations])
+    decoders = re.findall(r'^decodeAdmin\s+"([^"\\]+)"\s*=\s*just\s+(\w+)\s*$', source, re.M)
+    clauses = [clause for clause in re.findall(r'^decodeAdmin\s+(.+)$', source, re.M)
+               if not clause.startswith(':')]
+    if sum(clause.strip() == '_ = nothing' for clause in clauses) != 1 or len(clauses) != len(decoders) + 1:
+        raise ValueError('administration decoder must reject unknown names')
+    check('administration decoder', [name + ':' + constructor for constructor, name in declarations],
+          [name + ':' + constructor for name, constructor in decoders])
+    intents = re.findall(r'^adminIntent\s+(\w+)\s*=\s*[^\n]+$', source, re.M)
+    check('administration intents', constructors, intents)
+    return declarations
+
+
 def check(label, expected, actual):
     for name, count in Counter(actual).items():
         if count != 1:
@@ -185,7 +211,16 @@ def check_implementations(implementations, sites):
 
 def main():
     rust = tokens((ROOT / 'crates/mcp/src/main.rs').read_text())
-    declarations = formal((ROOT / 'spec/Muninn/Catalog.agda').read_text())
+    source = (ROOT / 'spec/Muninn/Catalog.agda').read_text()
+    declarations = formal(source)
+    planned = formal_admin(source)
+    continuations = [line.split('"')[1] for line in source.splitlines()
+                     if line.startswith('continuationWireName = "') and line.endswith('"')]
+    if len(continuations) != 1:
+        raise ValueError('expected one continuation wire name')
+    planned += [('conversationContinuation', continuations[0])]
+    check('all formal wire names', [name for _, name in declarations + planned],
+          [name for _, name in declarations + planned])
     inventory = (ROOT / 'spec/Muninn/CatalogSources.agda').read_text()
     sites = re.findall(r'^mcpSite\s+(\w+)\s*=\s*site\s+mcpTools\s+"([^"\\]+)"\s*$', inventory, re.M)
     check('formal source sites', [constructor for constructor, _ in declarations],
@@ -198,6 +233,7 @@ def main():
           [name + ':' + handler for name, handler in dispatched(rust)])
     check_implementations(tokens((ROOT / 'crates/mcp/src/tools.rs').read_text()), sites)
     print(f'{len(expected)} advertised and dispatched tools match the formal wire names')
+    print(f'{len(planned)} planned administration and continuation entries are not yet implemented.')
     print('Proof registration and Rust effect correspondence remain unchecked (#51, #52).')
 
 

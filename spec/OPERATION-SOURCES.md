@@ -4,7 +4,7 @@ The user approved one semantic contract for equivalent CLI, MCP and TUI intents,
 with resumable background jobs registered separately. `CatalogInputs` defines
 structural input types; `Catalog` maps closed adapters to their shared intents;
 `CatalogSources` assigns every request an independent outcome owner and an
-explicit current-source or missing-adapter record. No new wire names are added.
+explicit current-source or missing-adapter record. Approved administration wire names are specified in `Catalog`; their runtime adapters remain absent.
 
 This is the closed inventory, not the proof-requiring execution dispatcher.
 `sourceRecorded` means that a matching Rust declaration exists, not that its
@@ -128,8 +128,21 @@ The user approved full administration through MCP: configuration inspection,
 checking and application; registration/discovery; start/reindex/pause/resume/
 cancel; status; unregistration versus forget-all; and derived-index recreation for
 an embedding profile change while retaining notes/settings. The current eight
-tools do not expose this scope. No new wire names are selected by this inventory.
+tools do not expose this scope. `Catalog.adminWireName` defines the approved
+planned names; these are not yet advertised by the running server.
 Exact adapters and mechanical coverage remain #48 and #52.
+
+The planned wire names are:
+
+| Purpose | MCP name |
+| --- | --- |
+| Inspect, check and apply policy | `inspect_policy`, `check_policy`, `apply_policy` |
+| Preview and register a family | `preflight_family`, `register_family` |
+| Start, reindex, pause and resume | `start_family`, `reindex_family`, `pause_family`, `resume_family` |
+| Cancel work and inspect status | `cancel_work`, `inspect_status` |
+| Unregister or forget a repository | `unregister_family`, `forget_repository` |
+| Recreate derived data or convert a directory | `recreate_index`, `convert_directory` |
+| Continue a conversation | `continue_request` |
 
 The closed catalog must also name missing corrective conversation, operation-ID,
 continuation and background-work adapters. Missing implementation must be explicit;
