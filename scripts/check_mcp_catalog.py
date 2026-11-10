@@ -18,7 +18,12 @@ def tokens(source):
     parts = TOKEN.findall(source)
     if ''.join(parts) != source:
         raise ValueError('source contains an unsupported token')
-    return [p for p in parts if not p.isspace() and not p.startswith(('//', '/*'))]
+    result = [p for p in parts if not p.isspace() and not p.startswith(('//', '/*'))]
+    if any(token in ('r', 'br') and index + 1 < len(result) and
+           (result[index + 1] == '#' or result[index + 1].startswith('"'))
+           for index, token in enumerate(result)):
+        raise ValueError('raw string syntax requires a Rust-aware catalog parser')
+    return result
 
 
 def string(token):
@@ -42,9 +47,14 @@ def end(tokens_, start):
 
 
 def advertised(ts):
-    matches = [i for i in range(len(ts) - 2) if ts[i:i+3] == ['"tools"', ':', '[']]
+    branches = [i for i in range(len(ts) - 2) if ts[i:i+3] == ['"tools/list"', '=>', '{']]
+    if len(branches) != 1:
+        raise ValueError('expected one literal tools/list branch')
+    branch_start = branches[0] + 2
+    branch_end = end(ts, branch_start)
+    matches = [i for i in range(branch_start, branch_end - 2) if ts[i:i+3] == ['"tools"', ':', '[']]
     if len(matches) != 1:
-        raise ValueError('expected one literal tools list')
+        raise ValueError('expected one literal tools list in tools/list branch')
     start = matches[0] + 2
     stop = end(ts, start)
     i, names = start + 1, []
@@ -75,7 +85,11 @@ def dispatched(ts):
     starts = [i for i in range(len(ts)-1) if ts[i:i+2] == ['fn', 'dispatch_tool']]
     if len(starts) != 1:
         raise ValueError('expected one dispatch_tool function')
-    starts = [i for i in range(starts[0], len(ts)-2) if ts[i:i+3] == ['match', 'name', '{']]
+    function_start = next((i for i in range(starts[0] + 2, len(ts)) if ts[i] == '{'), None)
+    if function_start is None:
+        raise ValueError('missing dispatch_tool body')
+    function_end = end(ts, function_start)
+    starts = [i for i in range(function_start, function_end - 2) if ts[i:i+3] == ['match', 'name', '{']]
     if len(starts) != 1:
         raise ValueError('expected one match on the tool name')
     start = starts[0] + 2
