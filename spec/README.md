@@ -304,7 +304,11 @@ and lifecycle integration remain under #84.
 transaction while access is unavailable, then resumes or replays actual saved
 work through the current shared receipt. It preserves context and bootstrap
 credentials across connection observations. See [database resumption](DATABASE-RESUMPTION.md).
-Initial bootstrap, migrations and full runtime integration remain under #46.
+`DatabaseStartup`, `MigrationBlock`, and `MigrationSequence` specify configured
+connection behavior, migration checkpoints, retry convergence, and readiness.
+The independently specified migration requirements and runtime correspondence
+remain obligations for the operation catalog and implementation work (#51 and
+#52). The Agda model does not verify the Rust database adapter.
 
 ## Exact search read footprints
 

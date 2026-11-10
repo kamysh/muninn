@@ -40,15 +40,25 @@ persistent records. It does not prevent independent background work or other
 clients from changing the database between calls. A request to continue actual
 business effects still goes through the existing governed operation protocol.
 
+## Startup and migration readiness
+
+`DatabaseStartup` retains the configured credential and TLS choices while
+waiting for a connection and requires public schema readiness before continuing.
+`prefer` permits its configured fallback when the server declines TLS; it is
+not treated as `require`. Family readiness also requires AGE graph evidence.
+
+`MigrationBlock` models a catalog update and its migration ledger entry in one
+transaction. `MigrationSequence` models an ordered finite sequence of those
+transactions, preserving unrelated records and resuming from committed ledger
+entries. Its convergence goal is stated over the final world and independent
+schema requirements; the proof assumes the supplied plan and requirements are
+consistent. Interrupted transactions and completed retries use the shared
+execution semantics.
+
 ## Boundary
 
-This is #100 under #46. The safe module is imported by the aggregate. Initial
-bootstrap, credential/TLS choices, interrupted migration/preparation and
-compatibility/upgrade rules remain under the parent. Runtime mapping of actual
-connection/preparation events to the access observation remains a correspondence
-obligation. A TCP connection alone is not evidence that receipt access is ready.
-
-The existing admission schema, independent goals, receipt semantics and
-credential/TLS policy are unchanged. These specification laws do not repair or
-deploy the running MCP server. No Rust, live data, installation or system
-configuration is changed.
+The catalog records and ledger codec are logical representations. Binding the
+independently specified requirements, real SQL migrations, ledger identities,
+connection observations and actual schema changes to this model remains an
+implementation correspondence obligation (#51 and #52). These proofs do not
+verify the Rust adapter, repair the running server, or change live data.

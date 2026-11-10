@@ -25,6 +25,9 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.MigrationBlock
+import Muninn.MigrationSequence
+import Muninn.DatabaseStartup
 import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery

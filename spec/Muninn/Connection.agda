@@ -87,3 +87,49 @@ uniform-policy : ∀ path mode transport trust hostname →
   pathPolicy path mode transport trust hostname ≡
   admissible mode transport trust hostname
 uniform-policy path mode transport trust hostname = refl
+
+-- The configured mode selects the initial transport. Fallback is allowed only
+-- for the cases explicitly defined by that mode, never for bad credentials or
+-- a failed certificate verification.
+data Observation : Set where
+  serverDeclinedTls plaintextRejected authenticationRejected certificateRejected connectionLost : Observation
+
+initial : Mode → Transport
+initial disable = plaintext
+initial allow = plaintext
+initial prefer = encrypted
+initial require = encrypted
+initial verifyCa = encrypted
+initial verifyFull = encrypted
+
+fallback : Mode → Transport → Observation → Maybe Transport
+fallback prefer encrypted serverDeclinedTls = just plaintext
+fallback allow plaintext plaintextRejected = just encrypted
+fallback _ _ _ = nothing
+
+noCertificateDowngrade : ∀ mode transport → fallback mode transport certificateRejected ≡ nothing
+noCertificateDowngrade disable transport = refl
+noCertificateDowngrade allow plaintext = refl
+noCertificateDowngrade allow encrypted = refl
+noCertificateDowngrade prefer plaintext = refl
+noCertificateDowngrade prefer encrypted = refl
+noCertificateDowngrade require transport = refl
+noCertificateDowngrade verifyCa transport = refl
+noCertificateDowngrade verifyFull transport = refl
+
+noAuthenticationDowngrade : ∀ mode transport → fallback mode transport authenticationRejected ≡ nothing
+noAuthenticationDowngrade disable transport = refl
+noAuthenticationDowngrade allow plaintext = refl
+noAuthenticationDowngrade allow encrypted = refl
+noAuthenticationDowngrade prefer plaintext = refl
+noAuthenticationDowngrade prefer encrypted = refl
+noAuthenticationDowngrade require transport = refl
+noAuthenticationDowngrade verifyCa transport = refl
+noAuthenticationDowngrade verifyFull transport = refl
+
+credentialFor : ∀ {A : Set} → Path → Maybe A → Maybe A → Maybe A → Maybe A
+credentialFor path configured environment file = firstAvailable configured environment file
+
+allPathsUseSameCredential : ∀ {A : Set} (first second : Path) (configured environment file : Maybe A) →
+  credentialFor first configured environment file ≡ credentialFor second configured environment file
+allPathsUseSameCredential first second configured environment file = refl
