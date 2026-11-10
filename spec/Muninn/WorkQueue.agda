@@ -3,6 +3,9 @@
 module Muninn.WorkQueue where
 import Muninn.CatalogInputs as I
 import Data.Bool
+import Muninn.Worktree as W
+import Muninn.Types as T
+open import Data.Maybe using (Maybe)
 open import Data.Nat using (ℕ; suc)
 open import Data.String using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
@@ -18,11 +21,29 @@ record Info : Set where
         phase : Phase
         generation : ℕ
 
+-- Read requests do not become mutation receipts. A pending first search saves
+-- its complete typed input and stable scope; arranged indexing has a job ID.
+data Search : Set where
+  code : I.SearchMode → I.SearchInput → Search
+  structural : I.StructuralInput → Search
+
+location : Search → I.Locator
+location (code mode input) = I.SearchInput.location input
+location (structural input) = I.StructuralInput.location input
+
+record SavedSearch : Set where
+  constructor savedSearch
+  field request : Search
+        family : W.FamilyId
+        checkout : W.CheckoutId
+        incarnation : T.UUID
+
 -- Saved continuations identify their accepted request; cancellation can remove
 -- them without deleting another request or guessing from a text description.
 record Continuation : Set where
   field parent : I.OperationId
         payload : String
+        search : Maybe SavedSearch
 
 move : Phase → Info → Info
 move phase before = record before { phase = phase; generation = suc (Info.generation before) }

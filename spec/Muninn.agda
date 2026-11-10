@@ -138,3 +138,10 @@ import Muninn.VectorPublication
 import Muninn.RecreationStore
 import Muninn.RepositoryProfile
 import Muninn.ProfileRecreation
+
+-- First search retains its intent and arranges authorized selected-checkout work (#38).
+import Muninn.SearchTarget
+import Muninn.SearchView
+import Muninn.FirstSearch
+import Muninn.SearchResumption
+import Muninn.SearchReadiness

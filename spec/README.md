@@ -583,3 +583,11 @@ new-profile publication, preserved identity/notes/settings and receipt-sealed
 interruption/retry. `RepositoryProfile` binds code and curated-note vectors to
 the actual saved family profile. Rebuild scheduling and runtime correspondence
 remain the existing pipeline/dispatcher obligations.
+
+## First-search continuation
+
+[First search](FIRST-SEARCH.md) binds the complete saved query to verified
+repository/checkout identity, arranges authorized work atomically and resumes
+toward the actual published view. Selected-view eligibility and evidence-backed
+freshness are explicit. Full retrieval/ranking, pagination, scheduling and
+runtime correspondence remain their existing series obligations.

@@ -152,3 +152,9 @@ owned-world removal/preservation, current-policy publication and receipt retry.
 It adds no standalone removal CLI command. End-to-end rebuild scheduling,
 physical schema adaptation and final dispatcher enforcement remain separate
 existing-series obligations. See [profile recreation](PROFILE-RECREATION.md).
+
+First-search preparation and `continueRequest` query recovery are covered by
+`SearchTarget`, `FirstSearch`, `SearchResumption`, `SearchView` and
+`SearchReadiness`. Read queries remain separate from the durable finite
+`reconcileCheckout` work they arrange. These contracts add no MCP/CLI wire name;
+see [first search](FIRST-SEARCH.md) for the full execution boundary.

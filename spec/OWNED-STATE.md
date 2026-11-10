@@ -158,3 +158,9 @@ vectors while preserving identity, curated note text and settings. Note vectors
 now use the same validated `VectorData.State` payload as code vectors; their
 semantic-use certificate resolves the actual saved repository profile. See
 [profile recreation](PROFILE-RECREATION.md).
+
+Private continuations now optionally retain a complete typed `SavedSearch`,
+including code/structural input and stable family/checkout/incarnation scope.
+The existing weak IDs reserve identities without pinning derived data. Arranged
+indexing jobs keep their separately registered queue and receipt identities.
+See [first-search continuation](FIRST-SEARCH.md).
