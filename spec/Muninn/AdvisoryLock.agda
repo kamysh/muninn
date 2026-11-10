@@ -1,119 +1,249 @@
 {-# OPTIONS --safe #-}
--- Muninn/AdvisoryLock.agda
--- The index mutex: a PostgreSQL session-scoped advisory lock plus one boolean
--- preemption signal. Replaces the heartbeat-timestamp mutex (the old
--- Muninn.Concurrency). Re-exported by Muninn.Concurrency.
---
--- Liveness is no longer a modelled clock. A held lock is held by a LIVE session;
--- the database frees it when the session ends (crash / kill -9 / connection
--- drop). So there is NO "held-but-stale" state — the case the heartbeat model
--- had to detect and override is unrepresentable here (see `Lock`).
---
--- The only persisted state is one boolean, `preempt`. The advisory lock itself is
--- a session resource, not a column, and it records NO holder identity — the
--- implementation has no `lock_holder` column and `pg_advisory_lock` does not
--- track a "kind". So the lock here is a bare Free/Held, matching reality.
--- `HolderKind` is retained only for the *task* identity in Muninn.IndexFsm
--- (the CLI indexes as Fg, the daemon as Bg — known by code path), not for the
--- lock. Which job holds the lock is therefore NOT observable from the lock; the
--- preempt flag is raised by any blocked foreground job (it cannot tell who holds
--- it), and the daemon's background task yields by polling that flag.
+-- Index coordination and short publication transactions have distinct owners.
 module Muninn.AdvisoryLock where
-
+import Muninn.OwnedState as O
+import Muninn.WorkQueue as Q
+import Muninn.FairScheduling as Scheduling
+import Muninn.CatalogInputs as I
+import Muninn.RequestIdentity as Identity
+import Muninn.ReceiptLedger as Ledger
+import Muninn.ReceiptTypes as Receipt
+import Muninn.Types as T
+import Muninn.Canonical as C
+import Muninn.RequestCodecs as Codec
+open import Data.Nat using (ℕ; _≤_; z≤n; s≤s)
+open import Data.String using (String)
 open import Data.Bool using (Bool; true; false)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl)
-open import Relation.Nullary using (¬_)
+open import Data.List using (List; []; _∷_; _++_)
+open import Data.List.Membership.Propositional using (_∈_)
+open import Data.Product using (_×_; _,_; proj₂)
+open import Data.Unit using (⊤; tt)
+open import Data.Maybe using (just)
+open import Data.Empty using (⊥; ⊥-elim)
+open import Relation.Nullary using (¬_; yes; no)
+open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl)
+module DB = O.DB
 
--- The task identity used by Muninn.IndexFsm.Indexing. NOT part of the lock.
-data HolderKind : Set where
-  Fg : HolderKind   -- foreground CLI job; never preempted
-  Bg : HolderKind   -- background daemon; yields to a waiting foreground job
+data HolderKind : Set where Fg Bg : HolderKind
+record Owner : Set where
+  constructor owner
+  field session : T.UUID
+        operation : I.OperationId
+        kind : HolderKind
 
--- The advisory lock. No holder identity, and no "held by a dead session" state:
--- the DB frees the lock at session end, so abandonment is indistinguishable from
--- a clean release and never produces a stale-held state.
 data Lock : Set where
   Free : Lock
-  Held : Lock
+  Held : Owner → Lock
 
--- The whole persisted coordination state: lock occupancy plus the single boolean
--- column. (Occupancy mirrors the advisory lock, which is the source of truth;
--- the model keeps it explicit so transitions are visible.)
+record TransactionOwner : Set where
+  constructor transactionOwner
+  field session transaction : T.UUID
+
+data PublicationLock : Set where
+  publicationFree : PublicationLock
+  publicationHeld : TransactionOwner → PublicationLock
+
 record Coord : Set where
-  constructor ⟨_,_⟩
-  field lock    : Lock
-        preempt : Bool   -- preempt_requested: a foreground job is waiting
+  constructor coord
+  field index : Lock
+        waiting : List I.OperationId
+        publication : PublicationLock
+        store : O.World
 
--- ─── Transitions ────────────────────────────────────────────────────────────────
+-- A request already queued or holding the lock is reused, not duplicated.
+notCurrent : Lock → I.OperationId → Set
+notCurrent Free request = ⊤
+notCurrent (Held holder) request = Owner.operation holder ≢ request
 
-data LockStep : Coord → Coord → Set where
-  -- A foreground job acquires a free lock (its blocking pg_advisory_lock returns).
-  -- Acquiring clears the waiter flag.
-  fgAcquire : ∀ {p} → LockStep ⟨ Free , p ⟩ ⟨ Held , false ⟩
+-- Session loss releases both locks belonging to that session. An interrupted
+-- interactive owner returns to the head of its waiting queue; its stored work
+-- stays intact. Background recovery uses the existing durable work record.
+closePublication : T.UUID → PublicationLock → PublicationLock
+closePublication session publicationFree = publicationFree
+closePublication session (publicationHeld held) with C.compare Codec.uuid session (TransactionOwner.session held)
+... | yes _ = publicationFree
+... | no _ = publicationHeld held
 
-  -- The daemon acquires a free lock — ONLY when no foreground job is waiting.
-  -- This guard (preempt = false in the source) is the structural encoding of
-  -- "the daemon does not grab the lock while a foreground job waits".
-  bgAcquire : LockStep ⟨ Free , false ⟩ ⟨ Held , false ⟩
+closeIndex : T.UUID → Lock → Lock
+closeIndex session Free = Free
+closeIndex session (Held held) with C.compare Codec.uuid session (Owner.session held)
+... | yes _ = Free
+... | no _ = Held held
 
-  -- A blocked foreground job raises the flag, then blocks on pg_advisory_lock.
-  -- It cannot tell who holds the lock, so the flag is raised against any holder;
-  -- only the daemon's background task acts on it (a foreground holder ignores it
-  -- and the flag is cleared when the waiter acquires).
-  fgRequest : LockStep ⟨ Held , false ⟩ ⟨ Held , true ⟩
+restoreWaiter : T.UUID → Lock → List I.OperationId → List I.OperationId
+restoreWaiter session Free waiting = waiting
+restoreWaiter session (Held held) waiting with C.compare Codec.uuid session (Owner.session held) | Owner.kind held
+... | yes _ | Fg = Owner.operation held ∷ waiting
+... | _ | _ = waiting
 
-  -- The holder finishes and releases (pg_advisory_unlock). The daemon's yield is
-  -- this same edge, taken because it saw preempt = true.
-  release   : ∀ {p} → LockStep ⟨ Held , p ⟩ ⟨ Free , p ⟩
+sessionEnded : T.UUID → Coord → Coord
+sessionEnded session (coord index waiting publication store) =
+  coord (closeIndex session index) (restoreWaiter session index waiting) (closePublication session publication) store
 
-  -- ENVIRONMENT: the owning session dies and the DB frees the lock.
-  -- State-identical to `release` — that IS the crash story: abandonment and
-  -- release coincide, so there is no recovery state and no takeover logic.
-  die       : ∀ {p} → LockStep ⟨ Held , p ⟩ ⟨ Free , p ⟩
+-- Notifications are hints; the durable queue is checked after either kind of
+-- wakeup. The fallback interval is configurable, with the existing default.
+fallbackDefaultSeconds : ℕ
+fallbackDefaultSeconds = 10
+record WakePolicy : Set where
+  field fallbackSeconds : ℕ
+        positive : 1 ≤ fallbackSeconds
+defaultWakePolicy : WakePolicy
+defaultWakePolicy = record { fallbackSeconds = fallbackDefaultSeconds; positive = s≤s z≤n }
+-- One database-backed installation setting is shared by every family. The
+-- configuration operation replaces this installation value, not each family.
+record InstallationSettings : Set where
+  field wakePolicy : WakePolicy
 
--- Reflexive-transitive closure, for reachability statements.
-data _↠_ : Coord → Coord → Set where
-  done : ∀ {c} → c ↠ c
-  _∷_  : ∀ {a b c} → LockStep a b → b ↠ c → a ↠ c
+defaultInstallationSettings : InstallationSettings
+defaultInstallationSettings = record { wakePolicy = defaultWakePolicy }
+-- A poll is due only after the configured interval. Delivery and scheduler
+-- availability are environmental conditions, never a hard completion bound.
+data Wake (policy : WakePolicy) : Set where
+  notification : Wake policy
+  fallbackPoll : (elapsed : ℕ) → WakePolicy.fallbackSeconds policy ≤ elapsed → Wake policy
+
+data Action (policy : WakePolicy) : Set where
+  request cancel : I.OperationId → Action policy
+  foregroundAcquire backgroundAcquire : T.UUID → I.OperationId → Action policy
+  release : Owner → Action policy
+  yield : Owner → Action policy
+  recover : I.OperationId → Action policy
+  wake : Wake policy → Action policy
+  sessionLost : T.UUID → Action policy
+  beginPublication commitPublication abortPublication : TransactionOwner → Action policy
+
+-- Submitting a request emits a notification after the durable queue update.
+-- Repeating that hint on a retry is harmless; the queue remains authoritative.
+notifications : ∀ {policy} → Action policy → List I.OperationId
+notifications (request requestId) = requestId ∷ []
+notifications (cancel requestId) = []
+notifications (foregroundAcquire session requestId) = []
+notifications (backgroundAcquire session requestId) = []
+notifications (release held) = []
+notifications (yield held) = []
+notifications (recover requestId) = []
+notifications (wake event) = []
+notifications (sessionLost session) = []
+notifications (beginPublication transaction) = []
+notifications (commitPublication transaction) = []
+notifications (abortPublication transaction) = []
+
+data Step (policy : WakePolicy) : Action policy → Coord → Coord → Set where
+  requestOnce : ∀ {index waiting publication store} requestId meaning
+    (names : Receipt.Names requestId meaning) work slot receiptOwner →
+    Ledger.find requestId store ≡ just (Ledger.found slot receiptOwner (Receipt.active meaning names work)) →
+    ¬ (requestId ∈ waiting) → notCurrent index requestId →
+    Step policy (request requestId) (coord index waiting publication store) (coord index (waiting ++ (requestId ∷ [])) publication store)
+  requestAlreadyWaiting : ∀ {index waiting publication store} requestId → requestId ∈ waiting →
+    Step policy (request requestId) (coord index waiting publication store) (coord index waiting publication store)
+  requestAlreadyRunning : ∀ {waiting publication store} held →
+    Step policy (request (Owner.operation held)) (coord (Held held) waiting publication store) (coord (Held held) waiting publication store)
+  cancelWaiting : ∀ {index publication store} prefix requestId suffix meaning
+    (names : Receipt.Names requestId meaning) result slot receiptOwner →
+    Ledger.find requestId store ≡ just (Ledger.found slot receiptOwner (Receipt.finished meaning names result)) →
+    Step policy (cancel requestId) (coord index (prefix ++ (requestId ∷ suffix)) publication store)
+      (coord index (prefix ++ suffix) publication store)
+  acquireFirst : ∀ {publication store} session requestId rest →
+    Step policy (foregroundAcquire session requestId) (coord Free (requestId ∷ rest) publication store)
+      (coord (Held (owner session requestId Fg)) rest publication store)
+  acquireBackground : ∀ {publication store} session requestId →
+    Step policy (backgroundAcquire session requestId) (coord Free [] publication store)
+      (coord (Held (owner session requestId Bg)) [] publication store)
+  -- A completed request can release without requeueing only after its durable
+  -- receipt records completion. Otherwise yield or crash recovery keeps it live.
+  finished : ∀ {waiting publication store} held meaning
+    (names : Receipt.Names (Owner.operation held) meaning) result slot receiptOwner →
+    Ledger.find (Owner.operation held) store ≡ just (Ledger.found slot receiptOwner (Receipt.finished meaning names result)) →
+    Step policy (release held) (coord (Held held) waiting publication store) (coord Free waiting publication store)
+  yielded : ∀ {publication store} session requestId waiting slot ownerId versions info →
+    DB.lookup slot store ≡ just (O.recordOf ownerId (O.acceptedWork versions info)) →
+    Q.Info.id info ≡ requestId → Q.Info.phase info ≡ Q.running →
+    Step policy (yield (owner session requestId Bg)) (coord (Held (owner session requestId Bg)) waiting publication store)
+      (coord Free waiting publication (Scheduling.yield store slot ownerId versions info))
+  -- If the owning session vanished, recover the actual running work as queued.
+  recoverWork : ∀ {index waiting publication store} requestId slot ownerId versions info →
+    notCurrent index requestId →
+    DB.lookup slot store ≡ just (O.recordOf ownerId (O.acceptedWork versions info)) →
+    Q.Info.id info ≡ requestId → Q.Info.phase info ≡ Q.running →
+    Step policy (recover requestId) (coord index waiting publication store)
+      (coord index waiting publication (Scheduling.yield store slot ownerId versions info))
+  woken : ∀ kind state → Step policy (wake kind) state state
+  lost : ∀ session state → Step policy (sessionLost session) state (sessionEnded session state)
+  startPublication : ∀ {index waiting store} transaction →
+    Step policy (beginPublication transaction) (coord index waiting publicationFree store)
+      (coord index waiting (publicationHeld transaction) store)
+  publish : ∀ {index waiting store after} transaction (operation : DB.Transaction ⊤) →
+    DB.evaluate operation store ≡ DB.committed tt after →
+    Ledger.ReceiptFrame store after → O.Admissible after →
+    Step policy (commitPublication transaction) (coord index waiting (publicationHeld transaction) store)
+      (coord index waiting publicationFree after)
+  discard : ∀ {index waiting store} transaction (operation : DB.Transaction ⊤) →
+    DB.evaluate operation store ≡ DB.aborted tt →
+    Step policy (abortPublication transaction) (coord index waiting (publicationHeld transaction) store)
+      (coord index waiting publicationFree store)
+
+-- Every family selects transitions using the same installation value. The
+-- runtime configuration adapter must obtain that value from the database.
+module Installation (settings : InstallationSettings) where
+  policy : WakePolicy
+  policy = InstallationSettings.wakePolicy settings
+  Transition : Action policy → Coord → Coord → Set
+  Transition = Step policy
+
+-- Single ownership, ordered interactive admission, and crash preservation are
+-- independent of timing or of the choice of wakeup mechanism.
+holds : Lock → Owner → Set
+holds Free actor = ⊥
+holds (Held current) actor = actor ≡ current
+exclusive : ∀ lock first second → holds lock first → holds lock second → first ≡ second
+exclusive Free first second () secondHolds
+exclusive (Held holder) .holder .holder refl refl = refl
+
+firstWaiterAcquires : ∀ {policy publication store session requestId first rest result} →
+  Step policy (foregroundAcquire session requestId) (coord Free (first ∷ rest) publication store) result → requestId ≡ first
+firstWaiterAcquires (acquireFirst session ._ rest) = refl
+
+crashPreservesStore : ∀ session state → Coord.store (sessionEnded session state) ≡ Coord.store state
+crashPreservesStore session (coord index waiting publication store) = refl
+
+crashKeepsFirstWaiter : ∀ session operation waiting publication store →
+  Coord.waiting (sessionEnded session (coord (Held (owner session operation Fg)) waiting publication store)) ≡ operation ∷ waiting
+crashKeepsFirstWaiter session operation waiting publication store with C.compare Codec.uuid session session
+... | yes _ = refl
+... | no different = ⊥-elim (different refl)
+
+-- Yield writes the existing queued work while retaining a distinct receipt.
+yieldPreservesReceipt : ∀ world slot receiptSlot ownerId receiptOwner versions info receipt →
+  DB.lookup slot world ≡ just (O.recordOf ownerId (O.acceptedWork versions info)) →
+  DB.lookup receiptSlot world ≡ just (O.recordOf receiptOwner (O.receipt receipt)) →
+  DB.lookup receiptSlot (Scheduling.yield world slot ownerId versions info) ≡ just (O.recordOf receiptOwner (O.receipt receipt))
+yieldPreservesReceipt = Scheduling.yieldKeepsReceipt
+
+-- Releasing a dead session does not remove committed work; a foreground
+-- request is put back before later waiters, ready for a new session.
+deadOwnerReleases : ∀ session requestId kind → closeIndex session (Held (owner session requestId kind)) ≡ Free
+deadOwnerReleases session requestId kind with C.compare Codec.uuid session session
+... | yes _ = refl
+... | no different = ⊥-elim (different refl)
+
+deadTransactionReleases : ∀ session transaction →
+  closePublication session (publicationHeld (transactionOwner session transaction)) ≡ publicationFree
+deadTransactionReleases session transaction with C.compare Codec.uuid session session
+... | yes _ = refl
+... | no different = ⊥-elim (different refl)
+
+data Reach (policy : WakePolicy) : Coord → Coord → Set where
+  done : ∀ {state} → Reach policy state state
+  _∷_ : ∀ {before middle after action} → Step policy action before middle → Reach policy middle after → Reach policy before after
 infixr 5 _∷_
 
--- ─── Safety properties (all structural — refl / absurd) ──────────────────────────
--- Mutual exclusion is by construction: `Coord` has a single `lock` field with
--- one value, so two simultaneous holders are unrepresentable. (No staleness
--- heuristic that could admit a second writer, unlike the heartbeat threshold.)
-
--- When a foreground job is waiting and the lock is free, the ONLY enabled move is
--- a (foreground) acquire — `bgAcquire`'s preempt = false source guard excludes it,
--- so the daemon cannot grab the lock ahead of the waiter. This is the core of
--- foreground priority: the waiter cannot be jumped.
-freeWithWaiterOnlyFg : ∀ {c} → LockStep ⟨ Free , true ⟩ c → c ≡ ⟨ Held , false ⟩
-freeWithWaiterOnlyFg fgAcquire = refl
-
--- No stuck lock: every held state can become free (release; and, unbidden, die).
-noStuckLock : ∀ {p} → LockStep ⟨ Held , p ⟩ ⟨ Free , p ⟩
-noStuckLock = release
-
--- The forced handoff path exists: "held, foreground waiting" reaches "held by the
--- foreground" via yield-then-acquire. With freeWithWaiterOnlyFg (no one can jump
--- the waiter) the path is also forced.
-handoff : ⟨ Held , true ⟩ ↠ ⟨ Held , false ⟩
-handoff = release ∷ fgAcquire ∷ done
-
--- Crash during the handoff is harmless: die reaches the same waiting-free state,
--- whence only the foreground can acquire.
-handoffSurvivesCrash : ⟨ Held , true ⟩ ↠ ⟨ Held , false ⟩
-handoffSurvivesCrash = die ∷ fgAcquire ∷ done
-
--- ─── Trust base for PROGRESS (liveness) ──────────────────────────────────────────
---
--- The lemmas above are SAFETY. PROGRESS — "a waiting foreground job *eventually*
--- acquires" — rests on three guarantees outside this relational model, and a
--- finite Step relation cannot express "eventually" (just as the heartbeat model
--- documented PREEMPT_POLL ≪ HEARTBEAT_PULSE in a comment rather than proving it):
---
---   1. The database frees a session's advisory locks when the session ends
---      (so `die` is real and immediate).
---   2. A dead daemon is restarted by its supervisor (launchd KeepAlive /
---      systemd Restart=on-failure), so the Bg actor reappears.
---   3. The blocking acquire is fair: a queued foreground waiter is scheduled to
---      fire fgAcquire once the lock is free, rather than starving.
+-- When the background worker reaches a safe yield point, the first waiting
+-- interactive request can acquire, with its earlier checkpoint retained.
+handoffPossible : ∀ policy waiting publication store session requestId first slot ownerId versions info nextSession →
+  DB.lookup slot store ≡ just (O.recordOf ownerId (O.acceptedWork versions info)) →
+  Q.Info.id info ≡ requestId → Q.Info.phase info ≡ Q.running →
+  Reach policy (coord (Held (owner session requestId Bg)) (first ∷ waiting) publication store)
+    (coord (Held (owner nextSession first Fg)) waiting publication (Scheduling.yield store slot ownerId versions info))
+handoffPossible policy waiting publication store session requestId first slot ownerId versions info nextSession located identity running =
+  yielded session requestId (first ∷ waiting) slot ownerId versions info located identity running ∷
+  acquireFirst nextSession first waiting ∷ done

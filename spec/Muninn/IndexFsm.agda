@@ -3,7 +3,7 @@
 -- application/AGE pair readiness, and snapshot retention during Git operations.
 module Muninn.IndexFsm where
 
-open import Muninn.AdvisoryLock using (HolderKind; Fg; Bg)
+open import Muninn.AdvisoryLock using (HolderKind; Fg; Bg; fallbackDefaultSeconds)
 open import Muninn.Types using (EmbeddingState; Embedded; Pending; Absent)
 open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool using (Bool; true; false)
@@ -112,23 +112,22 @@ blockedSnapshotIsExplicitlyStale Operating snapshot current operationBlocked = r
 blockedSnapshotIsExplicitlyStale Conflicted snapshot current conflictBlocked = refl
 
 -- ─── The daemon's per-poll decision while holding the lock as Bg ─────────────────
--- Every PREEMPT_POLL seconds the background reindex task checks the preempt flag.
--- If a foreground job is waiting it yields (unlocks); otherwise it keeps indexing.
+-- A notification or fallback poll asks the background task to inspect its
+-- durable waiting queue. It yields when an interactive request is waiting.
 
 PREEMPT_POLL : ℕ
-PREEMPT_POLL = 10   -- seconds; bounds how long a foreground job waits for a yield
+PREEMPT_POLL = fallbackDefaultSeconds  -- default fallback, not a deadline
 
 data BgDecision : Set where
-  Yield    : BgDecision   -- abort, unlock, hand the lock to the waiting foreground job
+  Yield    : BgDecision   -- preserve work, release the lock, and hand it to the waiter
   Continue : BgDecision   -- keep indexing
 
 bgPollDecision : (preemptRequested : Bool) → BgDecision
 bgPollDecision true  = Yield
 bgPollDecision false = Continue
 
--- Foreground priority (PROVEN): whenever a foreground job is waiting, the
--- background holder's poll decision is necessarily Yield. With PREEMPT_POLL this
--- bounds the foreground wait to one poll interval.
+-- A successful observation selects Yield. Handoff time also depends on the
+-- database, scheduling and the holder reaching a safe point.
 foregroundPriority : ∀ {b} → b ≡ true → bgPollDecision b ≡ Yield
 foregroundPriority refl = refl
 

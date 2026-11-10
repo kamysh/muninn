@@ -620,3 +620,16 @@ round visits each already-waiting background job even when new jobs arrive;
 completed jobs leave the queue. Progress requires the selected work to be
 productive and scheduler capacity to become available. The Rust scheduler and
 its dispatch integration remain correspondence obligations.
+
+## Index and publication coordination
+
+`AdvisoryLock` identifies the indexing session and request, preserves accepted
+work across a yield or session loss, and gives waiting interactive requests the
+lock in order. Publication has a separate transaction owner and commits only an
+admissible store while retaining receipts. Notifications and a configurable
+polling fallback request inspection of the durable queue; one installation-wide
+database-backed setting chooses the fallback, which defaults to ten seconds. Neither that interval nor a session-loss event implies a fixed
+handoff deadline. Progress requires the database to detect ended sessions,
+wakeups or fallback polls to be delivered, and runnable workers to reach a safe
+point. FIFO coordination, wakeup delivery and this timing configuration remain
+runtime correspondence obligations; the existing Rust uses a single flag.

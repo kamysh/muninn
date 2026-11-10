@@ -4,9 +4,9 @@
 --
 -- The mutex itself is a PostgreSQL session-scoped advisory lock, modelled in
 -- Muninn.AdvisoryLock (re-exported here). Liveness is the session: the DB frees
--- the lock when the holding process dies, so there is no heartbeat, no staleness
--- window, and mutual exclusion is structural (a single Lock value) rather than a
--- postulated invariant that a staleness threshold could violate.
+-- the lock when it detects that the holding session has ended. Detection may be
+-- delayed; no fixed crash-detection or handoff deadline is assumed. Mutual
+-- exclusion follows from a single explicitly identified lock owner.
 --
 -- This module adds the repo-level guards the implementation upholds around the
 -- lock, plus the watcher-eviction invariant.
