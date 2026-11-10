@@ -121,3 +121,9 @@ import Muninn.DirectoryConversion
 -- Existing unregistration and complete forget-all outcomes (#34).
 import Muninn.RemovalStore
 import Muninn.RepositoryRemoval
+
+-- Explicit start and durable work controls (#35).
+import Muninn.WorkQueue
+import Muninn.IndexControl
+import Muninn.WorkControlStore
+import Muninn.FirstStart

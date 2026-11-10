@@ -87,7 +87,7 @@ record Candidate : Set where
 familyInfo : Candidate → O.RegistrationInfo
 familyInfo proposed = record
   { id = Identity.FamilyBinding.id (Candidate.family proposed); identity = just (Candidate.family proposed); retired = false; legacyReadable = false
-  ; indexingEnabled = false; creationCompleted = false; missingSince = nothing; metadata = "" }
+  ; indexingEnabled = false; creationCompleted = false; paused = false; missingSince = nothing; metadata = "" }
 
 checkoutInfo : Candidate → O.CheckoutInfo
 checkoutInfo proposed = record

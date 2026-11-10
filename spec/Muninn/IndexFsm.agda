@@ -26,7 +26,7 @@ data GitBlocked : GitState → Set where
 data IndexState : Set where
   Unindexed : IndexState
   Indexing : HolderKind → IndexState
-  Indexed Watching Stale : IndexState
+  Indexed Watching Stale Paused : IndexState
 
 data BatchOutcome : Set where
   AllSucceeded SomeSucceeded : BatchOutcome
@@ -45,7 +45,9 @@ data Step : Bool → SchemaState → GitState → IndexState → Bool → IndexS
   bgReindexStale : Step true Ready Settled Stale true (Indexing Bg)
   finish : ∀ {k} → BatchOutcome → Step true Ready Settled (Indexing k) true Indexed
   fail : ∀ {s g k} → Step true s g (Indexing k) true Stale
-  interrupt : ∀ {s g} → Step true s g (Indexing Fg) true Stale
+  interrupt : ∀ {s g} → Step true s g (Indexing Fg) true Paused
+  explicitResumeFg : Step true Ready Settled Paused true (Indexing Fg)
+  explicitResumeBg : Step true Ready Settled Paused true (Indexing Bg)
   yield : ∀ {s g} → Step true s g (Indexing Bg) true Stale
   suspend : ∀ {s g k} → GitBlocked g → Step true s g (Indexing k) true Stale
   attachWatcher : Step true Ready Settled Indexed true Watching
@@ -63,6 +65,8 @@ blockedCannotStart () cliReindexStale
 blockedCannotStart () autoDiscovered
 blockedCannotStart () bgReindex
 blockedCannotStart () bgReindexStale
+blockedCannotStart () explicitResumeFg
+blockedCannotStart () explicitResumeBg
 
 indexingRequiresReadySchema : ∀ {b s g before after k} →
   Step b s g before after (Indexing k) → s ≡ Ready
@@ -72,6 +76,8 @@ indexingRequiresReadySchema cliReindexStale = refl
 indexingRequiresReadySchema autoDiscovered = refl
 indexingRequiresReadySchema bgReindex = refl
 indexingRequiresReadySchema bgReindexStale = refl
+indexingRequiresReadySchema explicitResumeFg = refl
+indexingRequiresReadySchema explicitResumeBg = refl
 
 -- Git gates publication separately from job phase. Per-file unreadable work
 -- is handled by CheckoutReconciliation before forming the settled candidate;

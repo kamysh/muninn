@@ -556,3 +556,13 @@ checkout-only payload have been removed; reindex remains rebuilding. An active
 removal receipt gates current-reader admission and content publication without
 inventing a new registration state. A generic question before acceptance does
 not pretend that work has already been saved.
+
+## Durable indexing controls
+
+[Work control](WORK-CONTROL.md) documents `WorkQueue`, `IndexControl`,
+`WorkControlStore` and `FirstStart`: explicit authorization, accepted work
+independent of MCP connections, current-work Ctrl-C pause, family resume, and
+cancellation with durable cleanup. `ContentPublication` rechecks the worker
+generation and pause state in its committing transaction. These are formal
+product contracts; the Rust durable-job and administration adapters remain
+implementation obligations.

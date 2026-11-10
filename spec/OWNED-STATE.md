@@ -12,7 +12,7 @@ cache delegation and output streams; test fixtures were excluded from ownership.
 
 | Storage or code | Logical records in `OwnedState` |
 | --- | --- |
-| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, typed immutable `creationIntent`; database family ID, optional physical binding, retirement, legacy readability, absence-start timestamp, indexing authorization and creation completion are explicit fields |
+| `migrations/public/001_init.sql`, `families.sql`, `retired_paths.sql`: `public.repos` | `registration`, typed immutable `creationIntent`; database family ID, optional physical binding, retirement, legacy readability, absence-start timestamp, indexing authorization, creation completion and family pause are explicit fields |
 | `migrations/repo/checkouts.sql`, `missing_checkouts.sql`: `checkouts` | `checkout`; database ID/incarnation, optional physical binding, retirement, pause, Git suspension and the absence-start timestamp are explicit fields; publication has its own current-view contract |
 | `migrations/repo/configuration.sql`: `policy_defaults`, `policy_versions`, `family_policy` | `defaults`, `policyVersion`, `currentPolicy`; pointers require the corresponding immutable version/default record |
 | `migrations/public/001_init.sql`: `knowledge` | `note`, `notePosting`, `noteVector`; the generated text and optional vector are independently visible to outcomes |
@@ -49,7 +49,7 @@ readers instead describe live capabilities; the model does not require persistin
 a crashed reader or adding a reader table when PostgreSQL snapshot lifetimes
 provide the same guarantee. This PR specifies the state, not its physical layout.
 
-Accepted work retains the file versions it requires. An active reader declares
+Accepted work retains the file versions it requires. Its typed job, parent request, input, phase and generation are defined in `WorkQueue`; saved continuations also name their parent request. [Work control](WORK-CONTROL.md) defines explicit start, disconnect, pause/resume and cancellation over the actual world. An active reader declares
 the exact records it uses. Its operation contract must establish that this list
 is complete. Cleanup captures and idle continuations retain weak incarnation
 identities, not strong references: an already absent record is valid progress,

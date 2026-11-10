@@ -60,7 +60,7 @@ the agreed corrective conversation is still missing (#20, #48).
 | `add PATH --json [--input -]` | `writes.rs`: registration with frozen creation policy (#32, #49) |
 | `start PATH [--json] [--input -]` | `writes.rs`: guarded explicit first-start authorization and indexing (#35, #49) |
 | `reindex PATH`, `reindex --all`, `reindex PATH --detach` | Foreground work, fleet iteration or handoff to daemon; compatible work reuse (#29, #35) |
-| `pause PATH`, `resume PATH` | Saved indexing authorization/control (#35) |
+| `pause PATH`, `resume PATH` | `WorkControlStore` preserves authorization and saved work; current Rust uses registry pause/preemption flags (#35) |
 | `remove PATH [--yes]` | `removal.rs`, `store::delete_repo`: existing family unregistration and code-index deletion (#34) |
 | `status`, `status PATH` | Fleet/detail status and truthful progress (#47) |
 | `usage [--days N]` | Saved MCP usage query (#47) |
@@ -124,3 +124,14 @@ Exact adapters and mechanical coverage remain #48 and #52.
 The closed catalog must also name missing corrective conversation, operation-ID,
 continuation and background-work adapters. Missing implementation must be explicit;
 neither a raw script entry nor a permissive fallback establishes coverage.
+
+### Work-control contract (#35)
+
+`FirstStart` binds authorization to the actual family/current policy and saves
+accepted work with its checkpoint. `IndexControl` gates indexing commits on
+actual durable work, phase and generation. `WorkControlStore` specifies current
+request pause, family pause/resume and cancellation linked to the existing
+bounded cleanup/finalization protocol. Current CLI Ctrl-C exits with code 130;
+the agreed behavior is a durable pause with the explicit resume command.
+Cancellation is an agreed administration intent, not an existing CLI leaf or
+new MCP wire name. See [the work-control contract](WORK-CONTROL.md).

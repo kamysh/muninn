@@ -25,6 +25,7 @@ import Muninn.PolicyRuleAdmission as Admission
 import Muninn.GitIgnore as Git
 import Data.String as String
 import Muninn.RepositoryIdentity as Repository
+import Muninn.WorkQueue as Queue
 import Muninn.Types as Types
 import Muninn.Worktree as Worktree
 import Data.List.Relation.Unary.All as All
@@ -53,7 +54,7 @@ record RegistrationInfo : Set where
   constructor registrationInfo
   field id : Worktree.FamilyId
         identity : Maybe Repository.FamilyBinding
-        retired legacyReadable indexingEnabled creationCompleted : Bool
+        retired legacyReadable indexingEnabled creationCompleted paused : Bool
         missingSince : Maybe ℕ
         metadata : String
 
@@ -117,10 +118,10 @@ data Body : Set where
   structuralSnapshot : ℕ → List ℕ → List ℕ → String → Body
   legacy : (path : String) → Git.Answer path → String → Body -- saved Git default, remaining payload
   staging : ℕ → String → Body
-  acceptedWork : List ℕ → String → Body
+  acceptedWork : List ℕ → Queue.Info → Body
   cleanupWork : Input.OperationId → List ℕ → String → Body
   activeReader : List Reference → String → Body
-  continuation : List ℕ → String → Body
+  continuation : List ℕ → Queue.Continuation → Body
   receipt : Receipt.Entry → Body
   graphResource : Maybe ℕ → Bool → String → Body -- selected checkout, current read use
   migration usage bootstrap modelCache coordination schemaResource logFile bootstrapStage : String → Body

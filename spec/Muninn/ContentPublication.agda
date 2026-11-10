@@ -6,6 +6,7 @@ module Muninn.ContentPublication where
 import Muninn.ContentViews as Content
 import Muninn.ExclusionOutcomes as E
 import Muninn.OwnedState as O
+import Muninn.IndexControl as IndexControl
 import Muninn.StoredPolicy as Policy
 import Muninn.PublishedViews as Views
 import Muninn.ReceiptLedger as Ledger
@@ -247,6 +248,8 @@ module Family (family policyPointer : ℕ) where
 
     record Prepared : Set where
       field
+        workerFamilySlot workerSlot claim : ℕ
+        workerAllowed : IndexControl.Worker.allowed family workerFamilySlot workerSlot id claim before ≡ true
         body : Ledger.Effect
         result continuation : String
         changed : O.World
@@ -257,14 +260,16 @@ module Family (family policyPointer : ℕ) where
 
     module Run (prepared : Prepared) where
       open Prepared prepared
-      work = Guard.effect body continuation
+      module Worker = IndexControl.Worker family workerFamilySlot workerSlot id claim
+      work = Guard.effect (Worker.effect body continuation) continuation
       nextProgress = R.nextWork progress (R.versions progress) result
       after = DB.write receiptSlot (Ledger.recordAt {id = id} owner (R.active input names nextProgress)) changed
       change = Ledger.checkpoint (R.versions progress)
       request = Ledger.update id input (R.generation progress) change work
 
       guardedPerforms : DB.evaluate (Ledger.Effect.transaction work) before ≡ DB.committed result changed
-      guardedPerforms = trans (Guard.ready (Ledger.Effect.transaction body) continuation before (Stored.Saved.pointerAt current) notRemoving) performs
+      guardedPerforms = trans (Guard.ready (Ledger.Effect.transaction (Worker.effect body continuation)) continuation before (Stored.Saved.pointerAt current) notRemoving)
+        (trans (Worker.ready (Ledger.Effect.transaction body) continuation before workerAllowed) performs)
 
       commits : DB.execute request before ≡ (Ledger.resume receiptSlot nextProgress , after)
       commits = Ledger.committedUpdate id input names change work receiptSlot owner progress before result changed found guardedPerforms
