@@ -61,6 +61,12 @@ class CatalogCheck(unittest.TestCase):
             with self.assertRaises(ValueError):
                 check.formal(changed)
 
+    def test_permissive_decoder_fallback_is_rejected(self):
+        changed = self.agda.replace('decodeTool _ = nothing', 'decodeTool _ = just searchHybrid', 1)
+        self.assertNotEqual(changed, self.agda)
+        with self.assertRaises(ValueError):
+            check.formal(changed)
+
     def test_unsupported_raw_string(self):
         with self.assertRaises(ValueError):
             check.tokens('let value = r#"opaque"#;')

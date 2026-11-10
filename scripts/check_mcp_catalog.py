@@ -147,6 +147,10 @@ def formal(source):
     declared = [constructor for constructor, _ in declarations]
     check('formal constructors', constructors, declared)
     decoders = re.findall(r'^decodeTool\s+"([^"\\]+)"\s*=\s*just\s+(\w+)\s*$', source, re.M)
+    decoder_clauses = re.findall(r'^decodeTool\s+(.+)$', source, re.M)
+    decoder_clauses = [clause for clause in decoder_clauses if not clause.startswith(':')]
+    if sum(clause.strip() == '_ = nothing' for clause in decoder_clauses) != 1 or len(decoder_clauses) != len(decoders) + 1:
+        raise ValueError('formal decoder must reject every unknown name')
     check('formal decoder', [name + ':' + constructor for constructor, name in declarations],
           [name + ':' + constructor for name, constructor in decoders])
     intents = re.findall(r'^mcpIntent\s+(\w+)\s*=\s*[^\n]+$', source, re.M)
