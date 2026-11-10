@@ -133,11 +133,28 @@ pruneConfigured (settings usageEnabled false dir retention interval) codec cutof
 pruneConfigured (settings usageEnabled true dir zero interval) codec cutoff world = world
 pruneConfigured (settings usageEnabled true dir (suc retention) interval) codec cutoff world = pruneLogs codec cutoff world
 
-countToolSince : Codec → String → ℕ → O.World → Maybe ℕ
-countToolSince codec selected cutoff [] = just zero
-countToolSince codec selected cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest) with Codec.decode codec payload
+classifyTool : Codec → String → ℕ → (ℕ × O.Record) → Maybe Bool
+classifyTool codec selected cutoff (slot , O.recordOf owner (O.usage payload)) with Codec.decode codec payload
 ... | nothing = nothing
 ... | just item with Usage.tool item Data.String.≟ selected | cutoff ≤? Usage.recordedAt item
-...   | yes _ | yes _ = map suc (countToolSince codec selected cutoff rest)
-...   | _ | _ = countToolSince codec selected cutoff rest
-countToolSince codec selected cutoff ((slot , O.recordOf owner other) ∷ rest) = countToolSince codec selected cutoff rest
+...   | yes _ | yes _ = just true
+...   | _ | _ = just false
+classifyTool codec selected cutoff (slot , O.recordOf owner other) = just false
+
+countToolSince : Codec → String → ℕ → O.World → Maybe ℕ
+countToolSince codec selected cutoff [] = just zero
+countToolSince codec selected cutoff (row ∷ rest) with classifyTool codec selected cutoff row
+... | nothing = nothing
+... | just false = countToolSince codec selected cutoff rest
+... | just true = map suc (countToolSince codec selected cutoff rest)
+
+noPartialToolCount : ∀ codec selected cutoff world slot owner payload →
+  (slot , O.recordOf owner (O.usage payload)) ∈ world →
+  Codec.decode codec payload ≡ nothing → countToolSince codec selected cutoff world ≡ nothing
+noPartialToolCount codec selected cutoff ((slot , O.recordOf owner (O.usage payload)) ∷ rest)
+  .slot .owner .payload (here refl) missing rewrite missing = refl
+noPartialToolCount codec selected cutoff (first ∷ rest) slot actual bad (there later) missing
+  with classifyTool codec selected cutoff first
+... | nothing = refl
+... | just false = noPartialToolCount codec selected cutoff rest slot actual bad later missing
+... | just true rewrite noPartialToolCount codec selected cutoff rest slot actual bad later missing = refl
