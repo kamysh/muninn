@@ -164,3 +164,9 @@ and its numerical, corpus, text and selection modules. They require actual
 eligible rows, complete source universes, stored-coordinate precision evidence,
 truthful coverage and the appropriate exact/approximate outcome certificate.
 See [retrieval](RETRIEVAL.md) for the English-provider and runtime boundary.
+
+`HybridRanking` is the common reference pipeline for `searchCode hybrid`.
+Legacy `Search` defaults/contributions delegate to `HybridNumbers`; a runtime
+adapter must satisfy the selected-view modality contracts and return the
+computed hybrid response, not call an isolated fusion helper as a substitute.
+See [hybrid ranking](HYBRID-RANKING.md) for the exact/approximate boundary.

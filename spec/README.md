@@ -600,3 +600,11 @@ binary64 scoring. Exact mode requires global completeness; approximate mode
 reports its weaker candidate guarantee. All responses preserve numerical and
 page bounds and expose actual semantic coverage. Source-provider and final
 dispatch correspondence remain the existing series obligations.
+
+## Complete hybrid ranking
+
+[Hybrid ranking](HYBRID-RANKING.md) combines actual text/vector modality
+candidates with the agreed fusion formula, current-policy vendor weights and
+per-query vendor weighting. Its selection pipeline proves membership,
+deterministic output and page bounds, with no per-file suppression.
+Pagination and runtime correspondence remain their existing obligations.

@@ -5,6 +5,7 @@ module Muninn.Search where
 
 open import Muninn.Float
 import Muninn.RetrievalNumerics as Numeric
+import Muninn.HybridNumbers as Hybrid
 open import Muninn.Types
 open import Muninn.Worktree using (Views; Checkout; CheckoutResult; Baselines; FileEntry)
 open import Muninn.Storage using (World; viewsOf)
@@ -29,32 +30,21 @@ record Similarity : Set where
 -- Reciprocal Rank Fusion score at position rank (0-based).
 --   rrfScore(rank) = 1 / (60 + rank)
 -- k = 60 is the standard RRF constant that dampens the influence of high ranks.
-private
-  k   : Float
-  k   = fromℕF 60
-  one : Float
-  one = fromℕF 1
-
+-- Legacy helpers delegate to the result pipeline authority.
 rrfScore : ℕ → Float
-rrfScore rank = one /F (k +F fromℕF rank)
+rrfScore rank = Hybrid.contribution (just rank)
 
 -- ─── Tier-aware ranking ───────────────────────────────────────────────────────
 -- Tier-2 (vendored) chunks have their fused RRF score scaled down so first-party
 -- code generally wins, while a strong vendor match (with nothing first-party
--- competing) can still surface. Fixed constant — no config knob.
+-- competing) can still surface. Default; query overrides are defined by HybridRanking.
 vendorWeight : Float
-vendorWeight = fromℕF 3 /F fromℕF 10   -- 0.3
+vendorWeight = Hybrid.defaultMultiplier
 
 -- Down-weight a fused score by tier.
 tieredScore : Tier → Float → Float
 tieredScore Tier1 s = s
 tieredScore Tier2 s = s *F vendorWeight
-
--- Per-file cap: at most this many chunks from any single file may appear in the
--- merged result. Defeats the "one vendor file floods the top-N" failure mode and
--- improves first-party diversity. Fixed constant — no config knob.
-perFileCap : ℕ
-perFileCap = 3
 
 -- The hybrid search result list must contain no more entries than the limit.
 HybridResultBound : (limit : ℕ) → List SearchResult → Set
@@ -69,17 +59,6 @@ record ScopedSearchResult (views : Views) (checkout : Checkout) : Set where
 ScopedHybridResultBound : ∀ views checkout → ℕ →
   List (ScopedSearchResult views checkout) → Set
 ScopedHybridResultBound views checkout limit results = length results ≤ limit
-
--- Per-file bound: no single file contributes more than perFileCap results.
--- countFile counts results whose chunk shares the given file path's value.
-countFile : String → List SearchResult → ℕ
-countFile fp [] = zero
-countFile fp (r ∷ rs) with primStringEquality fp (FilePath.value (Chunk.filePath (SearchResult.chunk r)))
-... | true  = suc (countFile fp rs)
-... | false = countFile fp rs
-
-PerFileBound : List SearchResult → Set
-PerFileBound results = ∀ (fp : String) → countFile fp results ≤ perFileCap
 
 -- Eligible vendor matches use the same complete retrieval universe.
 -- Retrieval.Semantic exactTop/fills require actual matching identities in

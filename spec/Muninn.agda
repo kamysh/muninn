@@ -155,3 +155,7 @@ import Muninn.RetrievalText
 import Muninn.RetrievalSelection
 
 import Muninn.Retrieval
+
+-- Complete selected-view hybrid fusion without per-file suppression (#40).
+import Muninn.HybridNumbers
+import Muninn.HybridRanking

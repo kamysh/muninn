@@ -60,7 +60,6 @@ data Precision : Set where
 
 record RankingOverrides : Set where
   field vendorWeight : Maybe Float
-        perFileLimit : Maybe ℕ
 
 record SearchInput : Set where
   field location : Locator

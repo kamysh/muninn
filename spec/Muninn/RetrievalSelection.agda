@@ -24,7 +24,8 @@ lexical (x ∷ xs) (y ∷ ys) with toℕ x ≟ toℕ y
 ... | yes _ = lexical xs ys
 ... | no _ = does (toℕ x ≤? toℕ y)
 
-module For (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.FilePath) (score : Candidate → N.Rank) where
+module By (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.FilePath)
+  (numerator denominator : Candidate → ℕ) where
   same : Candidate → Candidate → Bool
   same first second = does (key first ≟ key second) ∧ does (T.FilePath.value (path first) String.≟ T.FilePath.value (path second))
   tie : Candidate → Candidate → Bool
@@ -32,10 +33,10 @@ module For (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.F
   ... | yes _ = lexical (toList (T.FilePath.value (path first))) (toList (T.FilePath.value (path second)))
   ... | no _ = does (key first ≤? key second)
   before : Candidate → Candidate → Bool
-  before first second with (N.Rank.numerator (score first) * N.Rank.denominator (score second)) ≟
-    (N.Rank.numerator (score second) * N.Rank.denominator (score first))
+  before first second with (numerator first * denominator second) ≟
+    (numerator second * denominator first)
   ... | yes _ = tie first second
-  ... | no _ = N.before (score first) (score second)
+  ... | no _ = does ((numerator second * denominator first) ≤? (numerator first * denominator second))
   insert : Candidate → List Candidate → List Candidate
   insert first [] = first ∷ []
   insert first (second ∷ rest) with before first second
@@ -73,6 +74,22 @@ module For (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.F
   pageBound : ∀ limit rows → length (page limit rows) ≤ limit
   pageBound limit rows = takeBound limit (ordered rows)
 
+  insertFirst : ∀ first rows → first ∈ insert first rows
+  insertFirst first [] = here refl
+  insertFirst first (second ∷ rows) with before first second
+  ... | true = here refl
+  ... | false = there (insertFirst first rows)
+  insertOld : ∀ first rows result → result ∈ rows → result ∈ insert first rows
+  insertOld first (second ∷ rows) result present with before first second
+  ... | true = there present
+  ... | false with present
+  ...   | here refl = here refl
+  ...   | there later = there (insertOld first rows result later)
+  orderedComplete : ∀ rows result → result ∈ rows → result ∈ ordered rows
+  orderedComplete (first ∷ rows) .first (here refl) = insertFirst first (ordered rows)
+  orderedComplete (first ∷ rows) result (there later) = insertOld first (ordered rows) result (orderedComplete rows result later)
+
+
   Present : Candidate → List Candidate → Set
   Present candidate rows = Data.List.Relation.Unary.Any.Any (λ row → same candidate row ≡ true) rows
   count : Candidate → List Candidate → ℕ
@@ -89,3 +106,6 @@ module For (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.F
             before candidate result ≡ true → Present candidate results
           fills : length results < limit → ∀ candidate → candidate ∈ universe → Present candidate results
           unique : ∀ candidate → count candidate results ≤ 1
+
+module For (Candidate : Set) (key : Candidate → ℕ) (path : Candidate → T.FilePath) (score : Candidate → N.Rank) where
+  open By Candidate key path (λ c → N.Rank.numerator (score c)) (λ c → N.Rank.denominator (score c)) public

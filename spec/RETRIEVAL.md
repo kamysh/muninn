@@ -100,7 +100,7 @@ apply to every matching candidate, including vendor code; the vacuous
 
 ## Remaining existing work
 
-Hybrid fusion, vendor weighting and per-file diversity remain #40. Pagination
+Hybrid fusion and vendor weighting remain #40; there is no per-file result quota. Pagination
 and saved view lifetimes remain #41. The closed proof-requiring dispatcher,
 provider correspondence and implementation harness remain #51–#54. This slice
 changes only the authoritative Agda specification and documentation, with no
