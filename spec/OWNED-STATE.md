@@ -18,7 +18,7 @@ cache delegation and output streams; test fixtures were excluded from ownership.
 | `migrations/public/001_init.sql`: `knowledge` | `note`, `notePosting`, `noteVector`; the generated text and optional vector are independently visible to outcomes |
 | `migrations/repo/worktrees.sql`: `file_versions` | `fileVersion` |
 | Same migration: `base_files`, `file_deltas`, `worktree_base` | `baseBinding`, `deltaBinding`, `basePointer`; a delta explicitly distinguishes a deletion from a version reference |
-| `migrations/repo/001_chunks.sql`, `worktrees.sql`: `chunks` and its generated `ts_vector` / optional `embedding` | `chunk`, `posting`, `vector`; each kind remains independently observable even when SQL stores them in one row |
+| `migrations/repo/001_chunks.sql`, `worktrees.sql`: `chunks` and its generated `ts_vector` / optional `embedding` | `chunk`, `posting`, typed `vector` preparation/usable data; each kind remains independently observable even when SQL stores them in one row |
 | `migrations/repo/structural_snapshots.sql`: `checkout_structural_snapshots` | `structuralSnapshot`, its `symbol` records and its `edge` records |
 | `crates/core/src/store.rs:81-168`, `graph.rs:98-113,235-345` | `graphResource`, `symbol`, `edge`; includes primary and older linked-checkout AGE graphs, all four vertex and edge labels, and AGE-owned schema resources |
 | `crates/core/src/store.rs:17-28,68-74`, `db.rs:184-205`, `family_store/preparation.rs` | `schemaResource`, `migration`; public and family migration receipts remain distinct from AGE readiness |
@@ -147,3 +147,8 @@ defaults reference. The current pointer, version and defaults resolve from the
 same owned world; see [stored-policy resolution](STORED-POLICY.md). Existing
 ownership/reference laws do not alone establish immutable policy histories or
 external locator-to-owner routing.
+
+Vector payloads now follow [staged vector publication](STAGED-VECTORS.md):
+exact source/profile identity and validated coordinates, with normal pending
+and waiting metadata. The existing chunk reference and kind hierarchy remain;
+this refinement does not require a new physical table.

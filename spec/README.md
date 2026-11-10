@@ -566,3 +566,12 @@ cancellation with durable cleanup. `ContentPublication` rechecks the worker
 generation and pause state in its committing transaction. These are formal
 product contracts; the Rust durable-job and administration adapters remain
 implementation obligations.
+
+## Staged vector readiness
+
+[Staged vector publication](STAGED-VECTORS.md) replaces eager-first-party
+embedding with text/symbol availability independent of vectors. `VectorData`,
+`StagedVectors`, `TextPublication` and `VectorPublication` define validated
+stored vectors, exact compatible reuse, truthful per-chunk/family coverage,
+and receipt-sealed preservation of published text while vectors are prepared.
+This is an approved behavior change; the Rust pipeline remains unchanged.

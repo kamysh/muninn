@@ -127,3 +127,9 @@ import Muninn.WorkQueue
 import Muninn.IndexControl
 import Muninn.WorkControlStore
 import Muninn.FirstStart
+
+-- Text/symbol availability independent of vector preparation (#36).
+import Muninn.VectorData
+import Muninn.StagedVectors
+import Muninn.TextPublication
+import Muninn.VectorPublication

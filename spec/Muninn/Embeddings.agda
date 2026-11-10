@@ -5,13 +5,15 @@
 module Muninn.Embeddings where
 
 open import Muninn.Types
+import Muninn.VectorData as Vector
 open import Muninn.Float                                       using (Float)
 open import Data.Nat  using (ℕ)
 open import Data.List using (List; length)
 open import Data.Maybe using (Maybe; nothing; just)
 open import Data.Unit using (⊤; tt)
+open import Data.Empty using (⊥)
 open import Data.List.Membership.Propositional using (_∈_)
-open import Relation.Binary.PropositionalEquality using (_≡_)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data EmbeddingBackend : Set where
   Voyage : EmbeddingBackend   -- voyage-code-3       (1024 dims)
@@ -33,25 +35,18 @@ RepoDimMatchesBackend repo backend =
 
 -- ─── Stored Embedding Validity ────────────────────────────────────────────────
 
--- If a chunk carries an embedding vector its length must exactly equal the
--- repo's registered dimension.  This closes two bugs:
---   1. Empty embeddings (length 0) silently stored and later causing vector
---      distance failures — the repo dim is always ≥ 384, so length 0 ≢ dim.
---   2. Dimension mismatch from a backend switch being silently accepted by the
---      incremental watcher but rejected at query time.
--- Helper: dispatch on presence/absence of an embedding.
--- Pattern matching on the LHS avoids the NoParseForLHS restriction on `with`
--- inside type-valued functions.
+-- State and payload must agree. Text remains valid while vectors are pending
+-- or need attention. Usable vectors are nonempty, finite, nonzero and match
+-- the registered dimension; family/profile association is checked on owned rows.
 private
-  EmbeddingConstraint : Maybe (List Float) → Repo → Set
-  EmbeddingConstraint nothing    _    = ⊤
-  EmbeddingConstraint (just emb) repo = length emb ≡ Repo.embeddingDim repo
+  EmbeddingConstraint : EmbeddingState → Maybe (List Float) → Repo → Set
+  EmbeddingConstraint Pending nothing repo = ⊤
+  EmbeddingConstraint Absent nothing repo = ⊤
+  EmbeddingConstraint Embedded (just values) repo = Vector.Valid (Repo.embeddingDim repo) values
+  EmbeddingConstraint _ _ _ = ⊥
 
 ValidStoredEmbedding : Chunk → Repo → Set
-ValidStoredEmbedding c repo = EmbeddingConstraint (Chunk.embedding c) repo
+ValidStoredEmbedding c repo = EmbeddingConstraint (Chunk.embeddingState c) (Chunk.embedding c) repo
 
--- Every chunk in a repo's store satisfies ValidStoredEmbedding.
--- Enforced at write time by both the full index path and the watcher.
 ConsistentRepoEmbeddings : List Chunk → Repo → Set
-ConsistentRepoEmbeddings chunks repo =
-  ∀ (c : Chunk) → c ∈ chunks → ValidStoredEmbedding c repo
+ConsistentRepoEmbeddings chunks repo = ∀ c → c ∈ chunks → ValidStoredEmbedding c repo

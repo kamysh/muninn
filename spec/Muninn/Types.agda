@@ -27,9 +27,8 @@ record LineRange : Set where
   field start : ℕ
         end   : ℕ
 
--- The tier a chunk belongs to. First-party source is indexed at full weight and
--- embedded eagerly; vendored dependency code is down-weighted in search and
--- embedded lazily by the daemon. See Muninn.Config.classify.
+-- Tier controls ranking and file classification. Both tiers publish text and
+-- symbols before vectors are ready. See Muninn.StagedVectors.
 data Tier : Set where
   Tier1 : Tier   -- first-party source
   Tier2 : Tier   -- vendored dependency
@@ -37,8 +36,8 @@ data Tier : Set where
 -- A chunk's embedding lifecycle state.
 data EmbeddingState : Set where
   Embedded : EmbeddingState   -- vector present
-  Pending  : EmbeddingState   -- Tier-2 chunk awaiting daemon backfill (full-text only)
-  Absent   : EmbeddingState   -- embedder returned empty (distinct from Pending)
+  Pending  : EmbeddingState   -- valid vectors still needed; either tier
+  Absent   : EmbeddingState   -- vector preparation needs attention; text remains usable
 
 -- A contiguous slice of a source file with an optional embedding vector.
 record Chunk : Set where
@@ -68,9 +67,3 @@ record Repo : Set where
 record SearchResult : Set where
   field chunk : Chunk
         score : Float
-
--- A Tier-1 chunk is always eagerly embedded: only Tier 2 may defer (Pending).
--- The foreground indexer must uphold this — it never leaves a first-party chunk
--- awaiting backfill.
-Tier1NeverPending : Chunk → Set
-Tier1NeverPending c = Chunk.tier c ≡ Tier1 → Chunk.embeddingState c ≢ Pending

@@ -7,6 +7,7 @@ import Muninn.Worktree as W
 import Muninn.ArtifactIdentity as Identity
 import Muninn.CanonicalChunks as Chunks
 import Muninn.CompletedWork as Completed
+import Muninn.VectorData as Vector
 import Muninn.Catalog as Catalog
 import Muninn.CatalogInputs as Input
 open import Muninn.Float using (Float)
@@ -104,7 +105,7 @@ module Analyses (model : AnalysisModel) (family : W.FamilyId) where
 module Embeddings (family : W.FamilyId) where
   Valid : EmbeddingInput → List Float → Set
   Valid input vector = EmbeddingInput.family input ≡ family ×
-    length vector ≡ W.EmbeddingKey.dimension (EmbeddingInput.profile input)
+    Vector.Valid (W.EmbeddingKey.dimension (EmbeddingInput.profile input)) vector
 
   -- Reply association is with the exact submitted profile/input. The provider
   -- effect adapter must establish this indexed response (#37/#52).

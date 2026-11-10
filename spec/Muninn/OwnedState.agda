@@ -26,6 +26,7 @@ import Muninn.GitIgnore as Git
 import Data.String as String
 import Muninn.RepositoryIdentity as Repository
 import Muninn.WorkQueue as Queue
+import Muninn.VectorData as Vectors
 import Muninn.Types as Types
 import Muninn.Worktree as Worktree
 import Data.List.Relation.Unary.All as All
@@ -111,7 +112,8 @@ data Body : Set where
   baseBinding : (version : ℕ) (path : String) → Git.Answer path → Body
   deltaBinding : (selected : ℕ) (version : Maybe ℕ) (path : String) → SelectionFor version path → Body
   basePointer : ℕ → Body
-  chunk posting vector : ℕ → String → Body
+  chunk posting : ℕ → String → Body
+  vector : ℕ → Vectors.State → Body
   symbol : ℕ → String → String → Body -- version, source path, payload
   edge : ℕ → ℕ → String → Body
   publishedView : ℕ → ℕ → Body

@@ -135,3 +135,13 @@ bounded cleanup/finalization protocol. Current CLI Ctrl-C exits with code 130;
 the agreed behavior is a durable pause with the explicit resume command.
 Cancellation is an agreed administration intent, not an existing CLI leaf or
 new MCP wire name. See [the work-control contract](WORK-CONTROL.md).
+
+### Staged text/vector publication (#36)
+
+`pipeline.rs` currently embeds first-party chunks eagerly and defers vendor
+chunks. The approved `TextPublication`/`VectorPublication` contracts permit
+text and symbol publication before vectors for both tiers. `StagedVectors`
+derives coverage from actual stored associations and requires reuse of compatible
+completed vectors; `VectorData` certifies usable coordinates. See
+[staged vector publication](STAGED-VECTORS.md) for the current Rust gap and
+provider/pipeline/search correspondence boundaries.

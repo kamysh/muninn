@@ -163,17 +163,14 @@ configureNeverSkipsOwed : ∀ {A : Set} {c} →
 configureNeverSkipsOwed {c = true} = refl
 configureNeverSkipsOwed {c = false} = refl
 
--- ─── Chunk-level embedding backfill (daemon, Bg) ──────────────────────────────
--- Distinct from the repo-level IndexState FSM above: this is the per-chunk
--- embedding lifecycle. The foreground indexer leaves a Tier-2 chunk Pending
--- (full-text indexed, no vector); the always-present daemon (Bg) embeds it later.
--- The ONLY transition is Pending → Embedded: backfill never touches an already
--- Embedded or Absent chunk, and (not modelled as state here) never changes the
--- chunk's tier or content. Tier-1 chunks are embedded eagerly and so never enter
--- this relation (see Muninn.Types.Tier1NeverPending).
+-- Chunk-level vector preparation is independent of text/symbol publication
+-- and applies to both tiers. Waiting for usable provider output is normal work;
+-- a matching completed value is reused, and an embedded value is immutable.
 data EmbedStep : EmbeddingState → EmbeddingState → Set where
   backfill : EmbedStep Pending Embedded
+  awaitContext : EmbedStep Pending Absent
+  continuePreparation : EmbedStep Absent Pending
+  reuseCompleted : EmbedStep Absent Embedded
 
--- Backfill only advances out of Pending: there is no step from Embedded/Absent.
-backfillOnlyFromPending : ¬ EmbedStep Embedded Embedded
-backfillOnlyFromPending ()
+embeddedIsStable : ∀ after → ¬ EmbedStep Embedded after
+embeddedIsStable after ()
