@@ -25,6 +25,8 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.SymlinkTraversal
+import Muninn.SymlinkSelection
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public
