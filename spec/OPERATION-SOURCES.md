@@ -124,6 +124,22 @@ rule modals. It returns an optional draft; `main.rs:314-387` owns persistence an
 database preparation. Terminal editing inputs and effectful save/start requests
 must both be covered; a UI key is not automatically a database operation.
 
+## Mechanical daemon job and scheduling check
+
+`scripts/check_daemon_catalog.py` compares all formal job source assignments
+with `DAEMON-COVERAGE.json`, verifies recorded definitions, and inventories
+the reviewed call identities in the daemon, watcher and logging entry points.
+It checks the initial scan, notification listeners, closed-channel guard and
+60-second fallback; `DaemonWake` models notifications and fallback polls
+producing the same finite scan. This is separate from the 10-second lock-handoff
+fallback. The existing `FairScheduling` and `AdvisoryLock` modules specify
+checkpoint-preserving handoff.
+
+The checker detects changes in the recorded source forms, not every possible
+effect hidden behind a library call. Four formal adapters remain marked
+incomplete. Proof-carrying dispatch and complete Rust effect correspondence
+remain in #51 and #52; matching source sites does not prove behavior.
+
 ## Startup, background and maintenance work
 
 | Entry point | Work and independent outcome area |
