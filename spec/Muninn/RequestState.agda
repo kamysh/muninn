@@ -213,6 +213,22 @@ module Model (Reply : Set)
     commitKnown : ∀ {id meaning result prior} → Authorized (completion id meaning result) (complete meaning ∷ prior)
     replayKnown : ∀ {id meaning result prior} → Authorized (replayRequest id meaning result) (complete meaning ∷ prior)
 
+  -- Completion is intentionally absent: each operation must supply its own
+  -- transition and independent outcome, rather than arbitrary data changes.
+  data SafeEvent : Event → Set where
+    safeAdmission : ∀ {id meaning} → SafeEvent (admission id meaning)
+    safeResumption : ∀ {id meaning} → SafeEvent (resumption id meaning)
+    safeReplay : ∀ {id meaning result} → SafeEvent (replayRequest id meaning result)
+
+  noGenericCompletion : ∀ {id meaning result} → ¬ SafeEvent (completion id meaning result)
+  noGenericCompletion ()
+
+  safeStepPreservesData : ∀ {Data : Set} {event} {before after : State Data} →
+    SafeEvent event → Step event before after → State.dataState after ≡ State.dataState before
+  safeStepPreservesData safeAdmission (admit matching absent) = refl
+  safeStepPreservesData safeResumption (resume receipt) = refl
+  safeStepPreservesData safeReplay (replayStep receipt) = refl
+
   data ConversationEvent : Set where
     dialogueEvent : D.Event Information → ConversationEvent
     requestEvent : Event → ConversationEvent
@@ -222,7 +238,7 @@ module Model (Reply : Set)
     dialogueStep : ∀ {event before after} → D.Step event before after →
       ConversationStep (dialogueEvent event) before after
     requestStep : ∀ {event task known completed before after} →
-      Authorized event known → Step event before after →
+      Authorized event known → SafeEvent event → Step event before after →
       ConversationStep (requestEvent event)
         (D.conversation task known completed before D.working)
         (D.conversation task known completed after D.working)
@@ -233,19 +249,19 @@ module Model (Reply : Set)
     D.Conversation.phase before ≡ D.awaiting prompt →
     D.Conversation.world after ≡ D.Conversation.world before
   awaitingDoesNotChangeRequestState (dialogueStep step) waiting = D.conversationDoesNotChangeWorld step
-  awaitingDoesNotChangeRequestState (requestStep known step) ()
+  awaitingDoesNotChangeRequestState (requestStep known safe step) ()
 
   incompleteContextCannotRun : ∀ {Task Progress Data : Set}
     {event task info prior completed world after} →
     ¬ ConversationStep {Task} {Progress} {Data} (requestEvent event)
       (D.conversation task (context info ∷ prior) completed world D.working) after
-  incompleteContextCannotRun (requestStep () step)
+  incompleteContextCannotRun (requestStep () safe step)
 
   emptyContextCannotRun : ∀ {Task Progress Data : Set}
     {event task completed world after} →
     ¬ ConversationStep {Task} {Progress} {Data} (requestEvent event)
       (D.conversation task [] completed world D.working) after
-  emptyContextCannotRun (requestStep () step)
+  emptyContextCannotRun (requestStep () safe step)
 
   admissionRequiresMatchingId : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (admission id meaning) before after → requestId meaning ≡ just id
