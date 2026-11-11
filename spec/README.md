@@ -32,7 +32,7 @@ not solely by the model's type check.
 | `GraphMembership` | Selected-view symbol/edge membership and endpoint visibility; no compiler name-resolution proof |
 | `Config`, `Policy`, `Registration` | Bootstrap/policy separation, frozen defaults, revision guards, registration intent/retry and authorization preservation |
 | `IndexFsm`, `Index`, `Cli` | First-start and subsequent-work gates, retained views during blocked Git operations and abstract command intents |
-| `Types`, `Embeddings`, `Search`, `Knowledge` | Chunk/vector validity, search bounds/ranking and knowledge-scoping contracts |
+| `Types`, `Embeddings`, `Knowledge` | Chunk/vector validity and knowledge-scoping contracts |
 | `AdvisoryLock`, `Concurrency` | Index exclusion/preemption and watcher coordination contracts |
 
 `FileMap.movingBasePreservesWorktree` and `movingBaseKeepsMinimalDelta` state
@@ -50,7 +50,6 @@ model or silently change the application during a documentation edit:
 | --- | --- | --- |
 | Graph ownership | `Storage.SchemaAssignment` maps a family to a `SchemaPair`; `sameFamilySameSchemaPair` covers both roles | Application schema is family-owned; Git checkout graphs are separate AGE namespaces |
 | Curated knowledge | `Knowledge` models family-scoped notes | `public.knowledge` and MCP knowledge tools use exact repository-path strings |
-| Freshness | `Search` models response freshness/suspension | MCP code-search responses contain result lists without that metadata |
 | Removal | `Cli` distinguishes abstract directory/family intents | Legacy `remove PATH` resolves a registered locator and deletes the family's code index; Git discovery handles checkout retirement |
 
 Other abstract fields/constructors should be traced to their concrete runtime
