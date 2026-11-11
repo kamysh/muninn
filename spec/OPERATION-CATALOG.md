@@ -10,7 +10,10 @@ Each entry maps to an outcome area in the catalog. These are ownership labels,
 not proofs that an operation implements its outcome. The proof-carrying
 dispatcher and mechanical runtime coverage remain #48–#52. The runtime currently
 does not require the modeled durable ID for every write; that correspondence is
-also outstanding.
+also outstanding. Family policy inputs include the approved selected-file and
+structural-analysis size settings, while global inputs include their defaults,
+the interactive-worker reservation and the handoff polling interval. These
+settings are not all configurable in the current runtime.
 
 ## Current MCP tools
 

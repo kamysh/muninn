@@ -33,17 +33,25 @@ record PolicyTarget : Set where
   field target : FamilyTarget
         expectedRevision : ℕ
 
+record FileLimits : Set where
+  field selectedBytes : ℕ
+        structuralBytes : ℕ
+
 record PolicyDraft : Set where
   field name : String
         index : IndexConfig
+        limits : FileLimits
         watcher : WatcherConfig
         embeddings : EmbeddingSelection
 
 record GlobalSettings : Set where
   field bootstrap : BootstrapConfig
         defaultIndex : IndexConfig
+        defaultLimits : FileLimits
         defaultWatcher : WatcherConfig
         defaultEmbeddings : EmbeddingSelection
+        interactiveSlots : ℕ
+        handoffPollSeconds : ℕ
 
 data SearchMode : Set where
   fulltext semantic hybrid : SearchMode
