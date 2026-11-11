@@ -45,6 +45,12 @@ The [operation catalog](OPERATION-CATALOG.md) inventories current and planned
 entry points without modeling search algorithms or unsaved editor drafts.
 The dispatcher and runtime coverage remain separate obligations.
 
+`Dialogue` models clarification and response steps without changing the task,
+completed work or modeled world, and retains prior information for later turns.
+Its guidance carries an explanation and next action. The dispatcher must still
+connect actual requests and prerequisites to these transitions; nonempty text
+alone does not prove that an explanation is useful. Issue #20 remains open.
+
 ## Known model/runtime gaps
 
 These are unresolved correspondence obligations, not authorization to weaken the

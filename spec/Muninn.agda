@@ -25,6 +25,7 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.Dialogue
 import Muninn.OperationCatalog
 
 open import Muninn.Float        public
