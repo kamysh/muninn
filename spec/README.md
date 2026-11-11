@@ -319,7 +319,10 @@ is tied to a stored vector for the actual chunk, or to saved guidance when work
 is waiting. A saved request result is distinct from verified cleanup or complete
 semantic coverage. `UsageReports` describes the current usage and log fields,
 the seven-day default log retention, and counts derived from stored rows. Log
-retention does not expire database usage records.
+retention does not expire database usage records. Usage rows have structured
+fields, matching the table rather than an invented encoded-text format. The
+mapping to PostgreSQL types and the command's two separate queries remain
+runtime correspondence work.
 
 The model restricts pruning to identified Muninn-owned logs, but the current
 Rust implementation can prune other files in its configured directory. Mapping

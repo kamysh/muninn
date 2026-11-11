@@ -29,6 +29,7 @@ import Muninn.WorkQueue as Queue
 import Muninn.VectorData as Vectors
 import Muninn.Types as Types
 import Muninn.Worktree as Worktree
+import Muninn.UsageTypes as UsageTypes
 import Data.List.Relation.Unary.All as All
 
 data Owner : Set where
@@ -127,7 +128,8 @@ data Body : Set where
   continuation : List ℕ → Queue.Continuation → Body
   receipt : Receipt.Entry → Body
   graphResource : Maybe ℕ → Bool → String → Body -- selected checkout, current read use
-  migration usage bootstrap modelCache coordination schemaResource logFile bootstrapStage : String → Body
+  usage : UsageTypes.Usage → Body
+  migration bootstrap modelCache coordination schemaResource logFile bootstrapStage : String → Body
 
 kind : Body → Kind
 kind (registration _) = registrationK
