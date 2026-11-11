@@ -1,6 +1,6 @@
 {-# OPTIONS --safe #-}
 -- Muninn/Types.agda
--- Core domain types: identifiers, chunks, repos, and search results.
+-- Core domain types: identifiers, chunks, and repositories.
 module Muninn.Types where
 
 open import Muninn.Float
@@ -63,11 +63,6 @@ record Repo : Set where
                                                -- (the lock itself is a session advisory lock, not a column)
         paused            : Bool               -- `muninn pause` set this; the daemon skips paused
                                                -- repos (no reindex, no watcher) without dropping data
-
--- A single result returned by a search query.
-record SearchResult : Set where
-  field chunk : Chunk
-        score : Float
 
 -- A Tier-1 chunk is always eagerly embedded: only Tier 2 may defer (Pending).
 -- The foreground indexer must uphold this — it never leaves a first-party chunk
