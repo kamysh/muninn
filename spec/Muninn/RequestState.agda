@@ -105,7 +105,7 @@ module Model (Reply : Set)
 
   -- Mismatch and used-ID outcomes start a corrective conversation.
   data Decision : Set where
-    accept continue askForId askForContext askNewId alreadyUsed : Decision
+    accept continue askForId askForContext idsDiffer askNewId alreadyUsed : Decision
     replay : Reply → Decision
 
   decide : Meaning → Maybe Entry → Decision
@@ -125,7 +125,10 @@ module Model (Reply : Set)
     "Provide a request ID for this change." [] (λ ()) (λ ()))
   guidanceFor askForContext = just (D.makeGuidance
     "I do not have the details of this request."
-    "Tell me what change you want, including the repository and relevant settings." [] (λ ()) (λ ()))
+    "Tell me what you want to do, including the relevant details." [] (λ ()) (λ ()))
+  guidanceFor idsDiffer = just (D.makeGuidance
+    "The request contains two different request IDs."
+    "Use the same request ID throughout this request." [] (λ ()) (λ ()))
   guidanceFor askNewId = just (D.makeGuidance
     "This request ID belongs to a different change."
     "Use a new request ID for the new change." [] (λ ()) (λ ()))
@@ -141,7 +144,7 @@ module Model (Reply : Set)
   decideRequest (just id) (just meaning) ledger with requestId meaning
   ... | nothing = askForId
   ... | just embedded with sameId id embedded
-  ...   | no _ = askNewId
+  ...   | no _ = idsDiffer
   ...   | yes _ = decide meaning (ledger id)
 
   missingIdRequestsContext : ∀ meaning ledger →
