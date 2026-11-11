@@ -349,3 +349,11 @@ module Model (Reply : Set)
     State.ledger before id ≡ just used → Steps before after → State.ledger after id ≡ just used
   usedMarkerPermanent found done = found
   usedMarkerPermanent found (more first rest) = usedMarkerPermanent (usedMarkerPreserved found first) rest
+
+  completedIsNotActive : ∀ {meaning result} → ¬ (just (completed meaning result) ≡ just (active meaning))
+  completedIsNotActive ()
+
+  completedCannotCommitAgain : ∀ {Data : Set} {before after : State Data} {id meaning oldResult newResult} →
+    State.ledger before id ≡ just (completed meaning oldResult) →
+    ¬ Step (completion id meaning newResult) before after
+  completedCannotCommitAgain found (commit receipt) = completedIsNotActive (trans (sym found) receipt)
