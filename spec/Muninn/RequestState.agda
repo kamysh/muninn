@@ -1,0 +1,332 @@
+{-# OPTIONS --safe #-}
+-- Durable request identity and the conversation after a repeated request.
+module Muninn.RequestState where
+
+open import Data.Maybe using (Maybe; just; nothing)
+open import Data.List using (List; []; _∷_)
+open import Data.String using (String)
+open import Data.Product using (_,_)
+import Muninn.CatalogInputs as C
+import Muninn.OperationCatalog as O
+import Muninn.Dialogue as D
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
+open import Relation.Nullary using (Dec; yes; no; ¬_)
+open import Data.Empty using (⊥-elim)
+
+-- A meaning is the canonical operation together with its complete typed input.
+-- Transport adapters normalize into these values; their correspondence is separate.
+Id : Set
+Id = C.OperationId
+
+data Meaning : Set where
+  userMeaning : (intent : C.Intent) → C.IntentInput intent → Meaning
+  jobMeaning : (job : C.Job) → C.JobInput job → Meaning
+
+-- Equivalent adapters use the same canonical intent and typed input.
+normalized : O.Request → Maybe Meaning
+normalized (O.user adapter input) = just (userMeaning (O.canonicalIntent adapter) input)
+normalized (O.background job input) = just (jobMeaning job input)
+normalized (O.control event input) = nothing
+
+requestId : Meaning → Maybe Id
+requestId (userMeaning C.replaceGlobal input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.applyPolicy input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.register input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.start input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.reindex input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.pause input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.resume input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.cancel input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.unregister input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.forget input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.recreateIndex input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.convertDirectory input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.writeNote input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.deleteNote input) = just (C.Mutation.operationId input)
+requestId (userMeaning C.inspectGlobal input) = nothing
+requestId (userMeaning C.inspectPolicy input) = nothing
+requestId (userMeaning C.checkPolicy input) = nothing
+requestId (userMeaning C.preflight input) = nothing
+requestId (userMeaning C.status input) = nothing
+requestId (userMeaning C.usage input) = nothing
+requestId (userMeaning C.searchStructure input) = nothing
+requestId (userMeaning C.searchNotes input) = nothing
+requestId (userMeaning C.listNotes input) = nothing
+requestId (userMeaning C.continueRequest input) = nothing
+requestId (userMeaning (C.searchCode mode) input) = nothing
+requestId (jobMeaning C.preparePublic (id , config)) = just id
+requestId (jobMeaning C.prepareFamily input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.prepareGraph (family , checkout)) = just (C.FamilyJob.operationId family)
+requestId (jobMeaning C.fleetScan input) = just input
+requestId (jobMeaning C.discoverCheckouts input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.observeCheckout input) = just (C.FamilyJob.operationId (C.CheckoutJob.parent input))
+requestId (jobMeaning C.reconcileFamily input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.reconcileCheckout input) = just (C.FamilyJob.operationId (C.CheckoutJob.parent input))
+requestId (jobMeaning C.watchBatch (family , paths)) = just (C.FamilyJob.operationId family)
+requestId (jobMeaning C.analyzeFile input) = just (C.FamilyJob.operationId (C.CheckoutJob.parent (C.FileJob.parent input)))
+requestId (jobMeaning C.publishCheckout input) = just (C.FamilyJob.operationId (C.CheckoutJob.parent input))
+requestId (jobMeaning C.embedCode (family , version)) = just (C.FamilyJob.operationId family)
+requestId (jobMeaning C.embedNote (family , note)) = just (C.FamilyJob.operationId family)
+requestId (jobMeaning C.reclaimExcluded input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.reclaimRetired input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.handoff input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.recoverOperation input) = just input
+requestId (jobMeaning C.appendLog (id , text)) = just id
+requestId (jobMeaning C.pruneLogs (id , duration)) = just id
+requestId (jobMeaning C.flushDiagnostics input) = just input
+
+module Model (Reply : Set)
+  (sameId : (a b : Id) → Dec (a ≡ b))
+  (sameMeaning : (a b : Meaning) → Dec (a ≡ b)) where
+
+  data Entry : Set where
+    active : Meaning → Entry
+    completed : Meaning → Reply → Entry
+    used : Entry
+
+  Ledger : Set
+  Ledger = Id → Maybe Entry
+
+  update : Id → Entry → Ledger → Ledger
+  update id entry before selected with sameId id selected
+  ... | yes _ = just entry
+  ... | no _ = before selected
+
+  updateAt : ∀ id entry before → update id entry before id ≡ just entry
+  updateAt id entry before with sameId id id
+  ... | yes _ = refl
+  ... | no distinct = ⊥-elim (distinct refl)
+
+  updateOther : ∀ id entry before other → ¬ (id ≡ other) →
+    update id entry before other ≡ before other
+  updateOther id entry before other distinct with sameId id other
+  ... | yes same = ⊥-elim (distinct same)
+  ... | no _ = refl
+
+  -- Mismatch and used-ID outcomes start a corrective conversation.
+  data Decision : Set where
+    accept continue askForId askForContext askNewId alreadyUsed : Decision
+    replay : Reply → Decision
+
+  decide : Meaning → Maybe Entry → Decision
+  decide meaning nothing = accept
+  decide meaning (just (active original)) with sameMeaning meaning original
+  ... | yes _ = continue
+  ... | no _ = askNewId
+  decide meaning (just (completed original result)) with sameMeaning meaning original
+  ... | yes _ = replay result
+  ... | no _ = askNewId
+  decide meaning (just used) = alreadyUsed
+
+  -- Guidance asks for the missing information rather than ending the task.
+  guidanceFor : Decision → Maybe D.Guidance
+  guidanceFor askForId = just (D.makeGuidance
+    "A request ID is needed to continue this change safely."
+    "Provide a request ID for this change." [] (λ ()) (λ ()))
+  guidanceFor askForContext = just (D.makeGuidance
+    "I do not have the details of this request."
+    "Tell me what change you want, including the repository and relevant settings." [] (λ ()) (λ ()))
+  guidanceFor askNewId = just (D.makeGuidance
+    "This request ID belongs to a different change."
+    "Use a new request ID for the new change." [] (λ ()) (λ ()))
+  guidanceFor alreadyUsed = just (D.makeGuidance
+    "This request ID was used, but its detailed result is no longer available."
+    "Check what was already done before submitting a new request with a new ID." [] (λ ()) (λ ()))
+  guidanceFor _ = nothing
+
+  -- Missing identity or meaning is resolved in conversation before admission.
+  decideRequest : Maybe Id → Maybe Meaning → Ledger → Decision
+  decideRequest nothing meaning ledger = askForId
+  decideRequest (just id) nothing ledger = askForContext
+  decideRequest (just id) (just meaning) ledger with requestId meaning
+  ... | nothing = askForId
+  ... | just embedded with sameId id embedded
+  ...   | no _ = askNewId
+  ...   | yes _ = decide meaning (ledger id)
+
+  missingIdRequestsContext : ∀ meaning ledger →
+    decideRequest nothing meaning ledger ≡ askForId
+  missingIdRequestsContext meaning ledger = refl
+
+  repeatActive : ∀ meaning → decide meaning (just (active meaning)) ≡ continue
+  repeatActive meaning with sameMeaning meaning meaning
+  ... | yes _ = refl
+  ... | no distinct = ⊥-elim (distinct refl)
+
+  repeatCompleted : ∀ meaning result →
+    decide meaning (just (completed meaning result)) ≡ replay result
+  repeatCompleted meaning result with sameMeaning meaning meaning
+  ... | yes _ = refl
+  ... | no distinct = ⊥-elim (distinct refl)
+
+  changedMeaningAsks : ∀ meaning original result → ¬ (meaning ≡ original) →
+    decide meaning (just (completed original result)) ≡ askNewId
+  changedMeaningAsks meaning original result distinct with sameMeaning meaning original
+  ... | yes same = ⊥-elim (distinct same)
+  ... | no _ = refl
+
+  retiredIdAsks : ∀ meaning → decide meaning (just used) ≡ alreadyUsed
+  retiredIdAsks meaning = refl
+
+  record State (Data : Set) : Set where
+    constructor state
+    field dataState : Data
+          ledger : Ledger
+
+  -- The generic conversation keeps both task context and the request ledger.
+  askAboutRequest : ∀ {Data Task Fact Progress : Set} {id meaning prompt}
+    {task : Task} {known : List Fact} {completed : Progress} {world : State Data} →
+    guidanceFor (decideRequest id meaning (State.ledger world)) ≡ just prompt →
+    D.Step (D.ask prompt) (D.conversation task known completed world D.working)
+      (D.conversation task known completed world (D.awaiting prompt))
+  askAboutRequest {prompt = prompt} found = D.askStep prompt
+
+  data Event : Set where
+    admission : Id → Meaning → Event
+    resumption : Id → Meaning → Event
+    completion replayRequest : Id → Meaning → Reply → Event
+    retirement : Id → Event
+
+  -- The receipt and the operation outcome are committed in one transition.
+  -- Each operation still needs its own independent outcome proof.
+  data Step {Data : Set} : Event → State Data → State Data → Set where
+    admit : ∀ {dataState ledger id meaning} → requestId meaning ≡ just id → ledger id ≡ nothing →
+      Step (admission id meaning) (state dataState ledger) (state dataState (update id (active meaning) ledger))
+    resume : ∀ {dataState ledger id meaning} → ledger id ≡ just (active meaning) →
+      Step (resumption id meaning) (state dataState ledger) (state dataState ledger)
+    commit : ∀ {before after ledger id meaning result} → ledger id ≡ just (active meaning) →
+      Step (completion id meaning result) (state before ledger) (state after (update id (completed meaning result) ledger))
+    replayStep : ∀ {dataState ledger id meaning result} → ledger id ≡ just (completed meaning result) →
+      Step (replayRequest id meaning result) (state dataState ledger) (state dataState ledger)
+    retire : ∀ {dataState ledger id meaning result} → ledger id ≡ just (completed meaning result) →
+      Step (retirement id) (state dataState ledger) (state dataState (update id used ledger))
+
+  -- Only the latest completed meaning can execute. Earlier context stays
+  -- available for the next clarification and cannot revive an old request.
+  data Information : Set where
+    complete : Meaning → Information
+    context : String → Information
+
+  data Authorized : Event → List Information → Set where
+    admitKnown : ∀ {id meaning prior} → Authorized (admission id meaning) (complete meaning ∷ prior)
+    resumeKnown : ∀ {id meaning prior} → Authorized (resumption id meaning) (complete meaning ∷ prior)
+    commitKnown : ∀ {id meaning result prior} → Authorized (completion id meaning result) (complete meaning ∷ prior)
+    replayKnown : ∀ {id meaning result prior} → Authorized (replayRequest id meaning result) (complete meaning ∷ prior)
+
+  data ConversationEvent : Set where
+    dialogueEvent : D.Event Information → ConversationEvent
+    requestEvent : Event → ConversationEvent
+
+  data ConversationStep {Task Progress Data : Set} : ConversationEvent →
+    D.Conversation Task Information Progress (State Data) → D.Conversation Task Information Progress (State Data) → Set where
+    dialogueStep : ∀ {event before after} → D.Step event before after →
+      ConversationStep (dialogueEvent event) before after
+    requestStep : ∀ {event task known completed before after} →
+      Authorized event known → Step event before after →
+      ConversationStep (requestEvent event)
+        (D.conversation task known completed before D.working)
+        (D.conversation task known completed after D.working)
+
+  awaitingDoesNotChangeRequestState : ∀ {Task Progress Data : Set}
+    {event before after prompt} →
+    ConversationStep {Task} {Progress} {Data} event before after →
+    D.Conversation.phase before ≡ D.awaiting prompt →
+    D.Conversation.world after ≡ D.Conversation.world before
+  awaitingDoesNotChangeRequestState (dialogueStep step) waiting = D.conversationDoesNotChangeWorld step
+  awaitingDoesNotChangeRequestState (requestStep known step) ()
+
+  incompleteContextCannotRun : ∀ {Task Progress Data : Set}
+    {event task info prior completed world after} →
+    ¬ ConversationStep {Task} {Progress} {Data} (requestEvent event)
+      (D.conversation task (context info ∷ prior) completed world D.working) after
+  incompleteContextCannotRun (requestStep () step)
+
+  emptyContextCannotRun : ∀ {Task Progress Data : Set}
+    {event task completed world after} →
+    ¬ ConversationStep {Task} {Progress} {Data} (requestEvent event)
+      (D.conversation task [] completed world D.working) after
+  emptyContextCannotRun (requestStep () step)
+
+  admissionRequiresMatchingId : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    Step (admission id meaning) before after → requestId meaning ≡ just id
+  admissionRequiresMatchingId (admit matchingId absent) = matchingId
+
+  resumePreservesState : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    Step (resumption id meaning) before after → after ≡ before
+  resumePreservesState (resume receipt) = refl
+
+  replayPreservesState : ∀ {Data : Set} {before after : State Data} {id meaning result} →
+    Step (replayRequest id meaning result) before after → after ≡ before
+  replayPreservesState (replayStep receipt) = refl
+
+  commitKeepsReceipt : ∀ {Data : Set} {before after : State Data} {id meaning result} →
+    Step (completion id meaning result) before after →
+    State.ledger after id ≡ just (completed meaning result)
+  commitKeepsReceipt (commit {ledger = ledger} {id = id} {meaning = meaning} {result = result} activeReceipt) =
+    updateAt id (completed meaning result) ledger
+
+  committedCanReplay : ∀ {Data : Set} {before after : State Data} {id meaning result} →
+    Step (completion id meaning result) before after →
+    Step (replayRequest id meaning result) after after
+  committedCanReplay step = replayStep (commitKeepsReceipt step)
+
+  replayReturnsSaved : ∀ {Data : Set} {before after : State Data} {id meaning result} →
+    Step (replayRequest id meaning result) before after →
+    decide meaning (State.ledger before id) ≡ replay result
+  replayReturnsSaved {meaning = meaning} {result = result} (replayStep receipt) rewrite receipt =
+    repeatCompleted meaning result
+
+  admissionKeepsOther : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    Step (admission id meaning) before after → ∀ other → ¬ (id ≡ other) →
+    State.ledger after other ≡ State.ledger before other
+  admissionKeepsOther (admit {ledger = ledger} {id = id} {meaning = meaning} matchingId absent) other distinct =
+    updateOther id (active meaning) ledger other distinct
+
+  completionKeepsOther : ∀ {Data : Set} {before after : State Data} {id meaning result} →
+    Step (completion id meaning result) before after → ∀ other → ¬ (id ≡ other) →
+    State.ledger after other ≡ State.ledger before other
+  completionKeepsOther (commit {ledger = ledger} {id = id} {meaning = meaning} {result = result} activeReceipt) other distinct =
+    updateOther id (completed meaning result) ledger other distinct
+
+  retirementKeepsMarker : ∀ {Data : Set} {before after : State Data} {id} →
+    Step (retirement id) before after → State.ledger after id ≡ just used
+  retirementKeepsMarker (retire {ledger = ledger} {id = id} receipt) = updateAt id used ledger
+
+  justCannotBeNothing : ∀ {entry : Entry} → ¬ (just entry ≡ nothing)
+  justCannotBeNothing ()
+
+  usedIdCannotBeAdmitted : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    State.ledger before id ≡ just used → ¬ Step (admission id meaning) before after
+  usedIdCannotBeAdmitted found (admit matchingId absent) = justCannotBeNothing (trans (sym found) absent)
+
+  usedIsNotActive : ∀ {meaning} → ¬ (just used ≡ just (active meaning))
+  usedIsNotActive ()
+
+  usedIsNotCompleted : ∀ {meaning result} → ¬ (just used ≡ just (completed meaning result))
+  usedIsNotCompleted ()
+
+  usedMarkerPreserved : ∀ {Data : Set} {before after : State Data} {id event} →
+    State.ledger before id ≡ just used → Step event before after → State.ledger after id ≡ just used
+  usedMarkerPreserved {id = target} found (admit {ledger = ledger} {id = changed} {meaning = meaning} matching absent)
+    with sameId changed target
+  ... | yes refl = ⊥-elim (justCannotBeNothing (trans (sym found) absent))
+  ... | no distinct = found
+  usedMarkerPreserved found (resume receipt) = found
+  usedMarkerPreserved {id = target} found (commit {ledger = ledger} {id = changed} {meaning = meaning} {result = result} receipt)
+    with sameId changed target
+  ... | yes refl = ⊥-elim (usedIsNotActive (trans (sym found) receipt))
+  ... | no distinct = found
+  usedMarkerPreserved found (replayStep receipt) = found
+  usedMarkerPreserved {id = target} found (retire {ledger = ledger} {id = changed} receipt)
+    with sameId changed target
+  ... | yes refl = ⊥-elim (usedIsNotCompleted (trans (sym found) receipt))
+  ... | no distinct = found
+
+  data Steps {Data : Set} : State Data → State Data → Set where
+    done : ∀ {current} → Steps current current
+    more : ∀ {event before middle after} → Step event before middle → Steps middle after → Steps before after
+
+  usedMarkerPermanent : ∀ {Data : Set} {before after : State Data} {id} →
+    State.ledger before id ≡ just used → Steps before after → State.ledger after id ≡ just used
+  usedMarkerPermanent found done = found
+  usedMarkerPermanent found (more first rest) = usedMarkerPermanent (usedMarkerPreserved found first) rest
