@@ -131,3 +131,15 @@ scan decisions, non-starvation behind blocked records, strict productive progres
 and preservation of saved checkpoints outside the captured IDs.
 See [the workset contract and environment assumptions](WORKSETS.md). This does
 not yet implement the exclusion worker or prove Rust/SQL correspondence.
+
+## Complete owned-state inventory
+
+`Muninn.OwnedState` represents each owned record category, including pending
+work and control state, with explicit owner placement, unique identities and
+typed strong references. It proves preservation of other owners and of whole
+world admissibility when removing an unreferenced record.
+
+See [the source inventory and model boundary](OWNED-STATE.md) for every current
+storage category, agreed state still absent from Rust, weak-reference semantics
+and remaining operation-specific obligations. This is an ownership/reference
+foundation, not the completed product state machine or a runtime cleanup fix.
