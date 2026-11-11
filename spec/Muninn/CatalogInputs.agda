@@ -143,7 +143,7 @@ record FileJob : Set where
         version : Maybe VersionId
 
 JobInput : Job → Set
-JobInput preparePublic = BootstrapConfig
+JobInput preparePublic = OperationId × BootstrapConfig
 JobInput prepareFamily = FamilyJob
 JobInput prepareGraph = FamilyJob × Maybe CheckoutId
 JobInput fleetScan = OperationId
@@ -160,9 +160,9 @@ JobInput reclaimExcluded = FamilyJob
 JobInput reclaimRetired = FamilyJob
 JobInput handoff = FamilyJob
 JobInput recoverOperation = OperationId
-JobInput appendLog = String
-JobInput pruneLogs = ℕ
-JobInput flushDiagnostics = ⊤
+JobInput appendLog = OperationId × String
+JobInput pruneLogs = OperationId × ℕ
+JobInput flushDiagnostics = OperationId
 
 
 -- Preserve the complete notification payload for its handler. Parsing and
