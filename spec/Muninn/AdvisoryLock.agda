@@ -9,15 +9,8 @@
 -- drop). So there is NO "held-but-stale" state — the case the heartbeat model
 -- had to detect and override is unrepresentable here (see `Lock`).
 --
--- The only persisted state is one boolean, `preempt`. The advisory lock itself is
--- a session resource, not a column, and it records NO holder identity — the
--- implementation has no `lock_holder` column and `pg_advisory_lock` does not
--- track a "kind". So the lock here is a bare Free/Held, matching reality.
--- `HolderKind` is retained only for the *task* identity in Muninn.IndexFsm
--- (the CLI indexes as Fg, the daemon as Bg — known by code path), not for the
--- lock. Which job holds the lock is therefore NOT observable from the lock; the
--- preempt flag is raised by any blocked foreground job (it cannot tell who holds
--- it), and the daemon's background task yields by polling that flag.
+-- This is a coarse occupancy projection. Session and request identity, FIFO
+-- handoff and the distinct publication lock are specified by LockOwnership.
 module Muninn.AdvisoryLock where
 
 open import Data.Bool using (Bool; true; false)

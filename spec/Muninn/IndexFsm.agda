@@ -104,11 +104,11 @@ blockedSnapshotIsExplicitlyStale Operating snapshot current operationBlocked = r
 blockedSnapshotIsExplicitlyStale Conflicted snapshot current conflictBlocked = refl
 
 -- ─── The daemon's per-poll decision while holding the lock as Bg ─────────────────
--- Every PREEMPT_POLL seconds the background reindex task checks the preempt flag.
+-- The background worker checks for requests after notifications or a configured polling interval.
 -- If a foreground job is waiting it yields (unlocks); otherwise it keeps indexing.
 
-PREEMPT_POLL : ℕ
-PREEMPT_POLL = 10   -- seconds; bounds how long a foreground job waits for a yield
+DEFAULT_PREEMPT_POLL : ℕ
+DEFAULT_PREEMPT_POLL = 10   -- default fallback polling interval in seconds
 
 data BgDecision : Set where
   Yield    : BgDecision   -- abort, unlock, hand the lock to the waiting foreground job
@@ -118,9 +118,8 @@ bgPollDecision : (preemptRequested : Bool) → BgDecision
 bgPollDecision true  = Yield
 bgPollDecision false = Continue
 
--- Foreground priority (PROVEN): whenever a foreground job is waiting, the
--- background holder's poll decision is necessarily Yield. With PREEMPT_POLL this
--- bounds the foreground wait to one poll interval.
+-- A waiting foreground request asks a background worker to yield. Actual
+-- handoff also depends on notification delivery, database access and scheduling.
 foregroundPriority : ∀ {b} → b ≡ true → bgPollDecision b ≡ Yield
 foregroundPriority refl = refl
 
