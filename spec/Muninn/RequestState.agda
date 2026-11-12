@@ -13,7 +13,9 @@ import Muninn.OperationCatalog as O
 import Muninn.Dialogue as D
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
 open import Relation.Nullary using (Dec; yes; no; ¬_)
-open import Data.Empty using (⊥-elim)
+open import Data.Empty using (⊥; ⊥-elim)
+open import Data.List.Membership.Propositional using (_∈_)
+open import Data.List.Relation.Unary.Any using (here; there)
 
 -- A meaning is the canonical operation together with its complete typed input.
 -- Transport adapters normalize into these values; their correspondence is separate.
@@ -59,7 +61,7 @@ requestId (userMeaning (C.searchCode mode) input) = nothing
 requestId (jobMeaning C.preparePublic (id , config)) = just id
 requestId (jobMeaning C.prepareFamily input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.prepareGraph (family , checkout)) = just (C.FamilyJob.operationId family)
-requestId (jobMeaning C.fleetScan input) = just input
+requestId (jobMeaning C.fleetScan input) = just (C.FleetJob.operationId input)
 requestId (jobMeaning C.discoverCheckouts input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.observeCheckout input) = just (C.FamilyJob.operationId (C.CheckoutJob.parent input))
 requestId (jobMeaning C.reconcileFamily input) = just (C.FamilyJob.operationId input)
@@ -107,7 +109,7 @@ requestOwner (userMeaning (C.searchCode mode) input) = nothing
 requestOwner (jobMeaning C.preparePublic (id , config)) = just (C.installationOwner)
 requestOwner (jobMeaning C.prepareFamily input) = just (C.repositoryOwner (C.FamilyJob.family input))
 requestOwner (jobMeaning C.prepareGraph (family , checkout)) = just (C.repositoryOwner (C.FamilyJob.family family))
-requestOwner (jobMeaning C.fleetScan input) = just (C.installationOwner)
+requestOwner (jobMeaning C.fleetScan input) = just (C.repositoriesOwner (C.FleetJob.families input))
 requestOwner (jobMeaning C.discoverCheckouts input) = just (C.repositoryOwner (C.FamilyJob.family input))
 requestOwner (jobMeaning C.observeCheckout input) = just (C.repositoryOwner (C.FamilyJob.family (C.CheckoutJob.parent input)))
 requestOwner (jobMeaning C.reconcileFamily input) = just (C.repositoryOwner (C.FamilyJob.family input))
@@ -124,10 +126,10 @@ requestOwner (jobMeaning C.appendLog (id , text)) = just (C.installationOwner)
 requestOwner (jobMeaning C.pruneLogs (id , duration)) = just (C.installationOwner)
 requestOwner (jobMeaning C.flushDiagnostics input) = just (C.installationOwner)
 
-reindexOwner : C.ReindexTarget → C.Owner
-reindexOwner (C.foregroundIndex target) = C.repositoryOwner (C.FamilyTarget.expectedFamily target)
-reindexOwner (C.detachedIndex target) = C.repositoryOwner (C.FamilyTarget.expectedFamily target)
-reindexOwner C.allRegistered = C.installationOwner
+reindexOwnerMatches : C.ReindexTarget → C.Owner → Set
+reindexOwnerMatches (C.foregroundIndex target) owner = owner ≡ C.repositoryOwner (C.FamilyTarget.expectedFamily target)
+reindexOwnerMatches (C.detachedIndex target) owner = owner ≡ C.repositoryOwner (C.FamilyTarget.expectedFamily target)
+reindexOwnerMatches C.allRegistered owner = Σ (List W.FamilyId) (λ families → owner ≡ C.repositoriesOwner families)
 
 -- The internal owner must agree with the typed target before admission.
 -- Registration additionally needs its resolved family binding from #32.
@@ -135,7 +137,7 @@ ownerMatches : Meaning → Set
 ownerMatches (userMeaning C.replaceGlobal input) = C.Mutation.owner input ≡ (C.installationOwner)
 ownerMatches (userMeaning C.applyPolicy input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.PolicyTarget.target (proj₁ (C.Mutation.input input)))))
 ownerMatches (userMeaning C.start input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.PolicyTarget.target (C.Mutation.input input))))
-ownerMatches (userMeaning C.reindex input) = C.Mutation.owner input ≡ (reindexOwner (C.Mutation.input input))
+ownerMatches (userMeaning C.reindex input) = reindexOwnerMatches (C.Mutation.input input) (C.Mutation.owner input)
 ownerMatches (userMeaning C.pause input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
 ownerMatches (userMeaning C.resume input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
 ownerMatches (userMeaning C.cancel input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (proj₁ (C.Mutation.input input))))
@@ -159,9 +161,40 @@ ownerMatches (userMeaning C.continueRequest input) = ⊤
 ownerMatches (userMeaning (C.searchCode mode) input) = ⊤
 ownerMatches (jobMeaning job input) = ⊤
 
+-- The list of affected families is receipt ownership, not request content.
+-- Its enumeration may differ after a retry and must not change request identity.
+canonicalOwner : C.Owner → C.Owner
+canonicalOwner (C.repositoriesOwner families) = C.repositoriesOwner []
+canonicalOwner owner = owner
+
+canonical : Meaning → Meaning
+canonical (userMeaning C.reindex input) = userMeaning C.reindex (record
+  { operationId = C.Mutation.operationId input
+  ; owner = canonicalOwner (C.Mutation.owner input)
+  ; input = C.Mutation.input input })
+canonical (userMeaning intent input) = userMeaning intent input
+canonical (jobMeaning C.fleetScan input) = jobMeaning C.fleetScan (record
+  { operationId = C.FleetJob.operationId input ; families = [] })
+canonical (jobMeaning job input) = jobMeaning job input
+
+-- Repository enumeration is not part of the operation submitted by a client.
+canonicalFleetOwnership : ∀ first second →
+  C.FleetJob.operationId first ≡ C.FleetJob.operationId second →
+  canonical (jobMeaning C.fleetScan first) ≡ canonical (jobMeaning C.fleetScan second)
+canonicalFleetOwnership first second same rewrite same = refl
+
+canonicalReindexOwnership : ∀ first second families others →
+  C.Mutation.operationId first ≡ C.Mutation.operationId second →
+  C.Mutation.input first ≡ C.Mutation.input second →
+  C.Mutation.owner first ≡ C.repositoriesOwner families →
+  C.Mutation.owner second ≡ C.repositoriesOwner others →
+  canonical (userMeaning C.reindex first) ≡ canonical (userMeaning C.reindex second)
+canonicalReindexOwnership first second families others id input owner₁ owner₂
+  rewrite id | input | owner₁ | owner₂ = refl
+
 module Model (Reply : Set)
   (sameId : (a b : Id) → Dec (a ≡ b))
-  (sameMeaning : (a b : Meaning) → Dec (a ≡ b)) where
+  (sameMeaning : (a b : Meaning) → Dec (canonical a ≡ canonical b)) where
 
   data Entry : Set where
     active : Meaning → Entry
@@ -172,6 +205,52 @@ module Model (Reply : Set)
   entryOwner (active meaning) = requestOwner meaning
   entryOwner (completed meaning result) = requestOwner meaning
   entryOwner used = nothing
+
+  -- Forgetting any family mentioned by a receipt removes the whole detailed
+  -- receipt. The used marker retains neither its owner nor its contents.
+  belongs : W.FamilyId → C.Owner → Set
+  belongs family C.installationOwner = ⊥
+  belongs family (C.repositoryOwner target) = family ≡ target
+  belongs family (C.repositoriesOwner targets) = family ∈ targets
+
+  member? : ((a b : W.FamilyId) → Dec (a ≡ b)) →
+    (family : W.FamilyId) → (targets : List W.FamilyId) → Dec (family ∈ targets)
+  member? same family [] = no (λ ())
+  member? same family (target ∷ targets) with same family target
+  ... | yes equal = yes (here equal)
+  ... | no different with member? same family targets
+  ...   | yes found = yes (there found)
+  ...   | no absent = no λ { (here equal) → different equal ; (there found) → absent found }
+
+  belongs? : ((a b : W.FamilyId) → Dec (a ≡ b)) →
+    (family : W.FamilyId) → (owner : C.Owner) → Dec (belongs family owner)
+  belongs? same family C.installationOwner = no (λ ())
+  belongs? same family (C.repositoryOwner target) = same family target
+  belongs? same family (C.repositoriesOwner targets) = member? same family targets
+
+  forgetEntry : ((a b : W.FamilyId) → Dec (a ≡ b)) → W.FamilyId → Entry → Entry
+  forgetEntry same family entry with entryOwner entry
+  ... | nothing = entry
+  ... | just owner with belongs? same family owner
+  ...   | yes _ = used
+  ...   | no _ = entry
+
+  forgottenReceiptIsMarker : ∀ same family entry owner → entryOwner entry ≡ just owner →
+    belongs family owner → forgetEntry same family entry ≡ used
+  forgottenReceiptIsMarker same family entry owner owned member with entryOwner entry | owned
+  ... | .(just owner) | refl with belongs? same family owner
+  ...   | yes _ = refl
+  ...   | no absent = ⊥-elim (absent member)
+
+  unrelatedReceiptPreserved : ∀ same family entry owner → entryOwner entry ≡ just owner →
+    ¬ belongs family owner → forgetEntry same family entry ≡ entry
+  unrelatedReceiptPreserved same family entry owner owned unrelated with entryOwner entry | owned
+  ... | .(just owner) | refl with belongs? same family owner
+  ...   | yes member = ⊥-elim (unrelated member)
+  ...   | no _ = refl
+
+  forgetKeepsUsedMarker : ∀ same family → forgetEntry same family used ≡ used
+  forgetKeepsUsedMarker same family = refl
 
   Ledger : Set
   Ledger = Id → Maybe Entry
@@ -251,7 +330,7 @@ module Model (Reply : Set)
   ... | yes _ = refl
   ... | no distinct = ⊥-elim (distinct refl)
 
-  changedMeaningAsks : ∀ meaning original result → ¬ (meaning ≡ original) →
+  changedMeaningAsks : ∀ meaning original result → ¬ (canonical meaning ≡ canonical original) →
     decide meaning (just (completed original result)) ≡ askNewId
   changedMeaningAsks meaning original result distinct with sameMeaning meaning original
   ... | yes same = ⊥-elim (distinct same)
