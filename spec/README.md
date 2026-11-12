@@ -140,6 +140,10 @@ other request receipts. The worker must check current policy and references
 before deleting; this module does not prove worker convergence or correspondence
 with Rust or database transactions.
 
+## Index work control
+
+`IndexWorkControl` separates registration from explicit first-start authorization. It describes accepted work surviving client disconnection, pause (including Ctrl-C) and resume preserving progress, and cancellation removing the work while keeping committed results. The cleanup is modeled as part of cancellation; correspondence to runtime effects remains a separate obligation.
+
 ## Continuation state
 
 `Muninn.Continuation` describes an idle continuation, a running call, a
