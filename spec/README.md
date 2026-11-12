@@ -144,6 +144,10 @@ other request receipts. The worker must check current policy and references
 before deleting; this module does not prove worker convergence or correspondence
 with Rust or database transactions.
 
+## Compatible work reuse
+
+`ReusePolicy` identifies analysis by exact bytes and versioned settings, and vectors by exact input and profile. Completed compatible work is reused; source spans are unique half-open byte intervals. Ordinary indexing retains saved work, while an explicit clean rebuild clears only the selected family. The cache-to-storage correspondence remains under #52.
+
 ## Staged text and vectors
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
