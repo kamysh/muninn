@@ -24,10 +24,6 @@ data Owner : Set where
   installationOwner : Owner
   repositoryOwner : FamilyId → Owner
 
-record OwnedOperation : Set where
-  field operationId : OperationId
-        owner : Owner
-
 record Mutation (A : Set) : Set where
   field operationId : OperationId
         owner : Owner
@@ -138,7 +134,7 @@ IntentInput continueRequest = ContinueInput
 data Job : Set where
   preparePublic prepareFamily prepareGraph fleetScan discoverCheckouts observeCheckout : Job
   reconcileFamily reconcileCheckout watchBatch analyzeFile publishCheckout embedCode embedNote : Job
-  reclaimExcluded reclaimRetired handoff recoverOperation appendLog pruneLogs flushDiagnostics : Job
+  reclaimExcluded reclaimRetired handoff appendLog pruneLogs flushDiagnostics : Job
 
 record FamilyJob : Set where
   field operationId : OperationId
@@ -170,7 +166,6 @@ JobInput embedNote = FamilyJob × KnowledgeId
 JobInput reclaimExcluded = FamilyJob
 JobInput reclaimRetired = FamilyJob
 JobInput handoff = FamilyJob
-JobInput recoverOperation = OwnedOperation
 JobInput appendLog = OperationId × String
 JobInput pruneLogs = OperationId × ℕ
 JobInput flushDiagnostics = OperationId
