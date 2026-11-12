@@ -152,6 +152,10 @@ with Rust or database transactions.
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
 
+## Lock ownership and handoff
+
+`LockOwnership` distinguishes the session and request holding the indexing lock from the owner of a publication transaction. Interactive requests acquire in queue order; release, preemption and session loss preserve committed work. Notifications and a configurable ten-second polling fallback do not imply a handoff deadline. The database and scheduler must provide the corresponding observations and execution.
+
 ## Fair scheduling
 
 `FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.
