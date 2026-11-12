@@ -56,7 +56,7 @@ observationKeepsSession observations access before = cong₂ (λ bootstrap ctx �
 waitingPrompt : D.Prompt
 waitingPrompt = D.prompt
   (D.text 'I' " cannot reach the database right now, so I cannot check the saved work for this request.")
-  (D.text 'R' "estore database access, then continue with the same request ID. I will check its saved work before continuing.") []
+  (D.text 'I' " will reconnect automatically and continue the operation when access returns. Check the database connection if it remains unavailable.") []
 
 module Protocol
   (Environment : Set)

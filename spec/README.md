@@ -381,6 +381,8 @@ and lifecycle integration remain under #84.
 
 ## Database access and request resumption
 
+`DatabaseStartup` models automatic reconnection and operation restart after transactional rollback. It retains configured bootstrap data and requires application migration and AGE graph readiness before an operation runs. The model does not establish correspondence with real migration boundaries or connection drivers.
+
 `DatabaseResumption` keeps known conversations responsive without a database
 transaction while access is unavailable, then resumes or replays actual saved
 work through the current shared receipt. It preserves context and bootstrap
