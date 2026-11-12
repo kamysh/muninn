@@ -35,6 +35,7 @@ import Muninn.RequestState
 import Muninn.Dialogue
 import Muninn.OperationCatalog
 import Muninn.DatabaseResumption
+import Muninn.DatabaseStartup
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.GeneralRecovery
