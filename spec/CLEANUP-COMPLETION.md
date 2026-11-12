@@ -24,6 +24,8 @@ dialogue, shared transaction semantics and interruption/convergence obligations
 remain because they prevent incorrect writes and require work to reach its goal.
 
 The worker must execute bounded deletion/projection batches and continue until
-the completion condition holds. Existing readers may finish safely, and needed
+the completion condition holds. [CleanupLoop](CLEANUP-LOOP.md) connects the
+modeled operations to that condition once pending use is released. Existing
+readers may finish safely, and needed
 shared data must remain available. The runtime worker and its integration remain
 unfinished under #84. These Agda proofs are not a runtime cleanup fix.
