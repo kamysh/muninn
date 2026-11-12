@@ -131,6 +131,10 @@ to make a proof pass. A behavior or architecture change needs explicit agreement
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
 
+## File-size admission
+
+`FileLimits` specifies raw-byte limits and text-only coverage when structural analysis is unavailable. `IndexFileLimits` models a batch of already-selected files: files within the family limit proceed while oversized files receive guidance. The selection predicate is supplied by the separate selection specification; integration with the implementation remains to be verified.
+
 ## Exclusion acceptance
 
 `Muninn.ExclusionAcceptance` commits the new family policy, a fixed workset
