@@ -124,6 +124,14 @@ These are local execution laws once a transaction can execute against the given
 world. Database outages and waiting for external input belong in the application
 protocol; this interface alone does not establish eventual service availability.
 
+## Fixed-workset progress
+
+`Muninn.Workset` supplies a finite-manifest cleanup kernel with proof-carrying
+scan decisions, non-starvation behind blocked records, strict productive progress
+and preservation of saved checkpoints outside the captured IDs.
+See [the workset contract and environment assumptions](WORKSETS.md). This does
+not yet implement the exclusion worker or prove Rust/SQL correspondence.
+
 ## Complete owned-state inventory
 
 `Muninn.OwnedState` represents each owned record category, including pending
@@ -320,8 +328,8 @@ The shared admissibility invariant now prevents strong references to readers,
 cleanup tasks, accepted work, continuations and receipts. Admission checks the
 same predicate; private records' no-incoming-reference guard is derived.
 Cleanup captures carry the same typed request ID as their accepting receipt.
-See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Verified task removal and
-the full lifecycle remain under #84.
+See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Full lifecycle integration
+remains under #84.
 
 ## Verified cleanup-task completion
 

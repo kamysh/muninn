@@ -28,6 +28,7 @@ import Muninn.Connection
 import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
+import Muninn.Workset
 import Muninn.PublicationVisibility
 import Muninn.ViewPublication
 import Muninn.CurrentReader
