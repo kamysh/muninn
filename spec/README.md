@@ -160,6 +160,10 @@ with Rust or database transactions.
 
 `ProfileRecreation` treats a profile change as an atomic replacement of derived data. It preserves repository identity, settings and curated notes, removes the affected code and note vectors, and leaves other families unchanged. A repeat after completion preserves rebuilt data. Storage and implementation correspondence remain separate obligations.
 
+## First-search readiness
+
+`FirstSearch` retains the query and selected checkout across reconnection, arranges authorized indexing when no view is available, and continues once a view is ready. Coverage distinguishes unavailable, stale, partial, Git-suspended and observed-current states. Result evidence requires the selected stored view and the admitted family selection rules. The Git and filesystem observations must correspond to actual external state.
+
 ## Continuation state
 
 `Muninn.Continuation` describes an idle continuation, a running call, a

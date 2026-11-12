@@ -29,6 +29,7 @@ import Muninn.Connection
 import Muninn.ExclusionAcceptance
 import Muninn.IndexFileLimits
 import Muninn.Continuation
+import Muninn.FirstSearch
 import Muninn.StagedContent
 import Muninn.ReusePolicy
 import Muninn.IndexWorkControl
