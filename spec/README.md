@@ -159,6 +159,10 @@ with Rust or database transactions.
 
 `LockOwnership` distinguishes the session and request holding the indexing lock from the owner of a publication transaction. Interactive requests acquire in queue order; release, preemption and session loss preserve committed work. Notifications and a configurable ten-second polling fallback do not imply a handoff deadline. The database and scheduler must provide the corresponding observations and execution.
 
+## Repository identity and registration
+
+`RepositoryIdentity` distinguishes database identities from locations and Git/filesystem identity evidence. Confirmed moves preserve identity, uncertain associations require context, and explicit directory-to-Git conversion retains the registration. `RepositoryRegistration` models atomic registration, retry and isolation of other families. Runtime correspondence remains separate.
+
 ## Fair scheduling
 
 `FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.

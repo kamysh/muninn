@@ -36,6 +36,8 @@ import Muninn.IndexWorkControl
 import Muninn.FairScheduling
 import Muninn.StatusReport
 import Muninn.LockOwnership
+import Muninn.RepositoryRegistration
+import Muninn.RepositoryIdentity
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
 import Muninn.ProfileRecreation
