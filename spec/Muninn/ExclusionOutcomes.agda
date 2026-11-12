@@ -189,76 +189,82 @@ module Model (excluded : List String → String → Bool) where
   excludedCannotAppear selection whereAt blocked visible with trans (sym visible) blocked
   ... | ()
 
+  registeredValue : Rule → O.Record → Bool
+  registeredValue selection (O.recordOf owner (O.registration info)) = sameOwner owner (targetOwner selection) ∧ not (O.RegistrationInfo.retired info)
+  registeredValue selection _ = false
+
   familyRegistered : Rule → O.World → Bool
-  familyRegistered selection = anyRow registered
-    where
-    registered : ℕ → O.Record → Bool
-    registered key (O.recordOf owner (O.registration info)) = sameOwner owner (targetOwner selection) ∧ not (O.RegistrationInfo.retired info)
-    registered key _ = false
+  familyRegistered selection = anyRow (λ key value → registeredValue selection value)
+
+  legacyValue : Rule → O.Record → Bool
+  legacyValue selection (O.recordOf owner (O.registration info)) = sameOwner owner (targetOwner selection) ∧
+    (not (O.RegistrationInfo.retired info) ∧ O.RegistrationInfo.legacyReadable info)
+  legacyValue selection _ = false
 
   legacyReadable : Rule → O.World → Bool
-  legacyReadable selection = anyRow readable
-    where
-    readable : ℕ → O.Record → Bool
-    readable key (O.recordOf owner (O.registration info)) = sameOwner owner (targetOwner selection) ∧
-      (not (O.RegistrationInfo.retired info) ∧ O.RegistrationInfo.legacyReadable info)
-    readable key _ = false
+  legacyReadable selection = anyRow (λ key value → legacyValue selection value)
+
+  liveValue : Rule → O.Record → Bool
+  liveValue selection (O.recordOf owner (O.checkout info)) = sameOwner owner (targetOwner selection) ∧ checkoutAvailable info
+  liveValue selection _ = false
+
+  checkoutObservation : Rule → Maybe O.Record → Bool
+  checkoutObservation selection (just value) = liveValue selection value
+  checkoutObservation selection nothing = false
 
   checkoutLive : Rule → O.World → ℕ → Bool
-  checkoutLive selection world key with DB.lookup key world
-  ... | just (O.recordOf owner (O.checkout info)) = sameOwner owner (targetOwner selection) ∧ checkoutAvailable info
-  ... | _ = false
+  checkoutLive selection world key = checkoutObservation selection (DB.lookup key world)
 
   anyCheckoutLive : Rule → O.World → Bool
-  anyCheckoutLive selection = anyRow live
-    where
-    live : ℕ → O.Record → Bool
-    live key (O.recordOf owner (O.checkout info)) = sameOwner owner (targetOwner selection) ∧ checkoutAvailable info
-    live key _ = false
+  anyCheckoutLive selection = anyRow (λ key value → liveValue selection value)
+
+  deltaValue : O.Owner → ℕ → String → O.Record → Bool
+  deltaValue owner selected path (O.recordOf storedOwner (O.deltaBinding checkout version storedPath)) =
+    sameOwner owner storedOwner ∧ (sameNat selected checkout ∧ does (path String.≟ storedPath))
+  deltaValue owner selected path _ = false
 
   hasDelta : O.Owner → ℕ → String → O.World → Bool
-  hasDelta owner selected path = anyRow matches
-    where
-    matches : ℕ → O.Record → Bool
-    matches key (O.recordOf storedOwner (O.deltaBinding checkout version storedPath)) =
-      sameOwner owner storedOwner ∧ (sameNat selected checkout ∧ does (path String.≟ storedPath))
-    matches key _ = false
+  hasDelta owner selected path = anyRow (λ key value → deltaValue owner selected path value)
+
+  bindingValue : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
+  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) =
+    sameOwner owner storedOwner ∧ (does (path String.≟ storedPath) ∧
+      (sameNat version storedVersion ∧ not (hasDelta owner selected path world)))
+  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) = false
+  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) =
+    sameOwner owner storedOwner ∧ (sameNat checkout selected ∧
+      (does (path String.≟ storedPath) ∧ sameNat version storedVersion))
+  bindingValue selection world owner selected path version _ = false
 
   versionAtPath : Rule → O.World → O.Owner → ℕ → String → ℕ → Bool
   versionAtPath selection world owner selected path version =
     checkoutLive selection world selected ∧
-      (included selection owner path ∧ anyRow matches world)
-    where
-    matches : ℕ → O.Record → Bool
-    matches key (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) =
-      sameOwner owner storedOwner ∧ (does (path String.≟ storedPath) ∧
-        (sameNat version storedVersion ∧ not (hasDelta owner selected path world)))
-    matches key (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) = false
-    matches key (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) =
-      sameOwner owner storedOwner ∧ (sameNat checkout selected ∧
-        (does (path String.≟ storedPath) ∧ sameNat version storedVersion))
-    matches key _ = false
+      (included selection owner path ∧ anyRow (λ key value → bindingValue selection world owner selected path version value) world)
+
+  checkoutVersionValue : Rule → O.World → O.Owner → String → ℕ → ℕ → O.Record → Bool
+  checkoutVersionValue selection world owner path version key (O.recordOf storedOwner (O.checkout info)) =
+    sameOwner owner storedOwner ∧ versionAtPath selection world owner key path version
+  checkoutVersionValue selection world owner path version key _ = false
 
   versionPublishedAtPath : Rule → O.World → O.Owner → String → ℕ → Bool
-  versionPublishedAtPath selection world owner path version = anyRow inCheckout world
-    where
-    inCheckout : ℕ → O.Record → Bool
-    inCheckout key (O.recordOf storedOwner (O.checkout info)) =
-      sameOwner owner storedOwner ∧ versionAtPath selection world owner key path version
-    inCheckout key _ = false
+  versionPublishedAtPath selection world owner path version = anyRow (checkoutVersionValue selection world owner path version) world
+
+  symbolObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
+  symbolObservation selection world owner selected (just (O.recordOf storedOwner (O.symbol version path payload))) =
+    sameOwner owner storedOwner ∧ versionAtPath selection world owner selected path version
+  symbolObservation selection world owner selected _ = false
 
   symbolVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
-  symbolVisible selection world owner selected key with DB.lookup key world
-  ... | just (O.recordOf storedOwner (O.symbol version path payload)) =
-    sameOwner owner storedOwner ∧ versionAtPath selection world owner selected path version
-  ... | _ = false
+  symbolVisible selection world owner selected key = symbolObservation selection world owner selected (DB.lookup key world)
 
-  edgeVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
-  edgeVisible selection world owner selected key with DB.lookup key world
-  ... | just (O.recordOf storedOwner (O.edge source target payload)) =
+  edgeObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
+  edgeObservation selection world owner selected (just (O.recordOf storedOwner (O.edge source target payload))) =
     sameOwner owner storedOwner ∧ (symbolVisible selection world owner selected source ∧
       symbolVisible selection world owner selected target)
-  ... | _ = false
+  edgeObservation selection world owner selected _ = false
+
+  edgeVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
+  edgeVisible selection world owner selected key = edgeObservation selection world owner selected (DB.lookup key world)
 
   -- A needed snapshot may contain both included and excluded members. Keeping
   -- its header does NOT make every old member permanently needed.
@@ -287,10 +293,13 @@ module Model (excluded : List String → String → Bool) where
   rootedRole selection world (graphContainer (just selected) inUse) = inUse ∧ (familyRegistered selection world ∧ checkoutLive selection world selected)
   rootedRole selection world (attached parent gate) = false
 
+  rootedFrom : Rule → O.World → O.Owner → Role → Bool
+  rootedFrom selection world owner role with ownerEqual owner (targetOwner selection)
+  ... | yes same = rootedRole selection world role
+  ... | no different = true
+
   rooted : Rule → O.World → O.Record → Bool
-  rooted selection world value with ownerEqual (O.owner value) (targetOwner selection)
-  ... | yes _ = rootedRole selection world (classify (O.body value))
-  ... | no _ = true
+  rooted selection world value = rootedFrom selection world (O.owner value) (classify (O.body value))
 
   data Mode : Set where permanent temporary : Mode
 
