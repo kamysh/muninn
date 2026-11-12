@@ -62,6 +62,24 @@ filesystem, Git, path-encoding and complete-scan correspondence remains an
 implementation obligation, including integration with the Git-backed selection
 work in #26 and the correspondence work in #52.
 
+`Dialogue` models clarification and response steps without changing the task,
+completed work or modeled world, and retains prior information for later turns.
+Its guidance carries an explanation and next action. The dispatcher must still
+connect actual requests and prerequisites to these transitions; nonempty text
+alone does not prove that an explanation is useful. Issue #20 remains open.
+
+`RequestState` uses the closed catalog and complete typed operation inputs for
+request identity. Admitted changes include an internally resolved owner that
+must match the typed target; compact used-ID markers retain no owner or request
+content. Registration still needs its resolved family binding (#32). It models
+admission, continuation and committed receipts, and connects clarification to
+the conversation state.
+The modeled request cannot execute with incomplete latest context or while an
+answer is pending, and the generic receipt path cannot complete arbitrary data
+changes. The later dispatcher must establish that reconstructed inputs express
+the original task and each operation meets its independent outcome; adapter
+normalization and Rust correspondence also remain outstanding (#51–#52).
+
 ## Known model/runtime gaps
 
 These are unresolved correspondence obligations, not authorization to weaken the
