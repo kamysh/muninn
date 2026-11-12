@@ -18,8 +18,19 @@ open import Muninn.Knowledge using (KnowledgeId)
 record OperationId : Set where
   field value : UUID
 
+-- Resolved internally before an operation is admitted; this is not a new
+-- CLI or MCP argument. It lets repository removal find its detailed receipts.
+data Owner : Set where
+  installationOwner : Owner
+  repositoryOwner : FamilyId → Owner
+
+record OwnedOperation : Set where
+  field operationId : OperationId
+        owner : Owner
+
 record Mutation (A : Set) : Set where
   field operationId : OperationId
+        owner : Owner
         input : A
 
 data Locator : Set where
@@ -159,7 +170,7 @@ JobInput embedNote = FamilyJob × KnowledgeId
 JobInput reclaimExcluded = FamilyJob
 JobInput reclaimRetired = FamilyJob
 JobInput handoff = FamilyJob
-JobInput recoverOperation = OperationId
+JobInput recoverOperation = OwnedOperation
 JobInput appendLog = OperationId × String
 JobInput pruneLogs = OperationId × ℕ
 JobInput flushDiagnostics = OperationId
