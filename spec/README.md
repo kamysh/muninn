@@ -328,5 +328,16 @@ The shared admissibility invariant now prevents strong references to readers,
 cleanup tasks, accepted work, continuations and receipts. Admission checks the
 same predicate; private records' no-incoming-reference guard is derived.
 Cleanup captures carry the same typed request ID as their accepting receipt.
-See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Verified task removal and
-the full lifecycle remain under #84.
+See [private bookkeeping](PRIVATE-BOOKKEEPING.md). Full lifecycle integration
+remains under #84.
+
+## Verified cleanup-task completion
+
+`CleanupFinalization` checks the actual saved workset, then removes its private
+task and updates its existing receipt atomically. The original request stays
+active while sibling tasks remain and finishes only after its last task.
+Productive cleanup constructs readiness; unresolved work keeps the whole store
+and continues the conversation. Retry, indexed-data preservation and
+compact-marker retention are proved.
+See [task completion](CLEANUP-FINALIZATION.md). Policy selection, fresh-view
+production and full lifecycle scheduling remain under #84.
