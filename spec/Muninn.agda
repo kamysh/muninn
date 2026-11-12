@@ -25,6 +25,7 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.Workset

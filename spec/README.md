@@ -305,3 +305,11 @@ reservation set and uses it inside the shared reader and task transactions.
 The existing admission guards, durable captures and receipt retry guarantees
 remain. See [record allocation](RECORD-ALLOCATION.md). Current-view production
 and lifecycle integration remain under #84.
+
+## Database access and request resumption
+
+`DatabaseResumption` keeps known conversations responsive without a database
+transaction while access is unavailable, then resumes or replays actual saved
+work through the current shared receipt. It preserves context and bootstrap
+credentials across connection observations. See [database resumption](DATABASE-RESUMPTION.md).
+Initial bootstrap, migrations and full runtime integration remain under #46.
