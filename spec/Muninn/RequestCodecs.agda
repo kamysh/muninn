@@ -154,23 +154,29 @@ policyTarget = transport
   (λ (x0 , x1) → record { target = x0; expectedRevision = x1 })
   (λ r → refl) (pair familyTarget nat)
 
-policyDraft : Codec (PolicyDraft)
+fileLimits : Codec FileLimits
+fileLimits = transport
+  (λ r → FileLimits.selectedBytes r , FileLimits.structuralBytes r)
+  (λ { (selected , structural) → record { selectedBytes = selected; structuralBytes = structural } })
+  (λ r → refl) (pair nat nat)
+
+policyDraft : Codec PolicyDraft
 policyDraft = transport
-  (λ r → (PolicyDraft.name r , (PolicyDraft.index r , (PolicyDraft.watcher r , PolicyDraft.embeddings r))))
-  (λ (x0 , (x1 , (x2 , x3))) → record { name = x0; index = x1; watcher = x2; embeddings = x3 })
-  (λ r → refl) (pair string (pair index (pair watcher embedding)))
+  (λ r → PolicyDraft.name r , (PolicyDraft.index r , (PolicyDraft.limits r , (PolicyDraft.watcher r , PolicyDraft.embeddings r))))
+  (λ { (name , (indexValue , (limits , (watcherValue , embeddings)))) → record { name = name; index = indexValue; limits = limits; watcher = watcherValue; embeddings = embeddings } })
+  (λ r → refl) (pair string (pair index (pair fileLimits (pair watcher embedding))))
 
-globalSettings : Codec (GlobalSettings)
+globalSettings : Codec GlobalSettings
 globalSettings = transport
-  (λ r → (GlobalSettings.bootstrap r , (GlobalSettings.defaultIndex r , (GlobalSettings.defaultWatcher r , GlobalSettings.defaultEmbeddings r))))
-  (λ (x0 , (x1 , (x2 , x3))) → record { bootstrap = x0; defaultIndex = x1; defaultWatcher = x2; defaultEmbeddings = x3 })
-  (λ r → refl) (pair bootstrap (pair index (pair watcher embedding)))
+  (λ r → GlobalSettings.bootstrap r , (GlobalSettings.defaultIndex r , (GlobalSettings.defaultLimits r , (GlobalSettings.defaultWatcher r , (GlobalSettings.defaultEmbeddings r , (GlobalSettings.interactiveSlots r , GlobalSettings.handoffPollSeconds r))))))
+  (λ { (boot , (idx , (limits , (watch , (embed , (slots , poll)))))) → record { bootstrap = boot; defaultIndex = idx; defaultLimits = limits; defaultWatcher = watch; defaultEmbeddings = embed; interactiveSlots = slots; handoffPollSeconds = poll } })
+  (λ r → refl) (pair bootstrap (pair index (pair fileLimits (pair watcher (pair embedding (pair nat nat))))))
 
-noteInput : Codec (NoteInput)
+noteInput : Codec NoteInput
 noteInput = transport
-  (λ r → (NoteInput.target r , (NoteInput.id r , (NoteInput.origin r , (NoteInput.title r , (NoteInput.body r , (NoteInput.tags r , NoteInput.relatedFiles r)))))))
-  (λ (x0 , (x1 , (x2 , (x3 , (x4 , (x5 , x6)))))) → record { target = x0; id = x1; origin = x2; title = x3; body = x4; tags = x5; relatedFiles = x6 })
-  (λ r → refl) (pair familyTarget (pair (optional knowledgeId) (pair (optional path) (pair string (pair string (pair (list string) (list path)))))))
+  (λ r → NoteInput.target r , (NoteInput.id r , (NoteInput.origin r , (NoteInput.scope r , (NoteInput.title r , (NoteInput.body r , (NoteInput.tags r , NoteInput.relatedFiles r)))))))
+  (λ { (target , (id , (origin , (scope , (title , (body , (tags , files))))))) → record { target = target; id = id; origin = origin; scope = scope; title = title; body = body; tags = tags; relatedFiles = files } })
+  (λ r → refl) (pair familyTarget (pair (optional knowledgeId) (pair (optional path) (pair (optional checkoutId) (pair string (pair string (pair (list string) (list path))))))))
 
 reindexTarget : Codec ReindexTarget
 encode reindexTarget (foregroundIndex x0) = sequence (natural 0 ∷ encode familyTarget x0 ∷ [])
@@ -184,16 +190,23 @@ roundTrip reindexTarget (foregroundIndex x0) rewrite roundTrip familyTarget x0 =
 roundTrip reindexTarget (detachedIndex x0) rewrite roundTrip familyTarget x0 = refl
 roundTrip reindexTarget (allRegistered) = refl
 
-removalTarget : Codec RemovalTarget
-encode removalTarget (familyIndex x0) = sequence (natural 0 ∷ encode familyTarget x0 ∷ [])
-encode removalTarget (checkoutIndex x0 x1) = sequence (natural 1 ∷ encode familyTarget x0 ∷ encode checkoutId x1 ∷ [])
-decode removalTarget (sequence (natural 0 ∷ v0 ∷ [])) = Maybe.map (familyIndex) (decode familyTarget v0)
-decode removalTarget (sequence (natural 1 ∷ v0 ∷ v1 ∷ [])) with decode familyTarget v0 | decode checkoutId v1
-... | just x0 | just x1 = just (checkoutIndex x0 x1)
-... | _ | _ = nothing
-decode removalTarget _ = nothing
-roundTrip removalTarget (familyIndex x0) rewrite roundTrip familyTarget x0 = refl
-roundTrip removalTarget (checkoutIndex x0 x1) rewrite roundTrip familyTarget x0 | roundTrip checkoutId x1 = refl
+owner : Codec Owner
+encode owner installationOwner = sequence (natural 0 ∷ [])
+encode owner (repositoryOwner id) = sequence (natural 1 ∷ encode familyId id ∷ [])
+encode owner (repositoriesOwner ids) = sequence (natural 2 ∷ encode (list familyId) ids ∷ [])
+decode owner (sequence (natural 0 ∷ [])) = just installationOwner
+decode owner (sequence (natural 1 ∷ value ∷ [])) = Maybe.map repositoryOwner (decode familyId value)
+decode owner (sequence (natural 2 ∷ value ∷ [])) = Maybe.map repositoriesOwner (decode (list familyId) value)
+decode owner _ = nothing
+roundTrip owner installationOwner = refl
+roundTrip owner (repositoryOwner id) rewrite roundTrip familyId id = refl
+roundTrip owner (repositoriesOwner ids) rewrite roundTrip (list familyId) ids = refl
+
+fleetJob : Codec FleetJob
+fleetJob = transport
+  (λ r → FleetJob.operationId r , FleetJob.families r)
+  (λ { (id , families) → record { operationId = id; families = families } })
+  (λ r → refl) (pair operationId (list familyId))
 
 familyJob : Codec (FamilyJob)
 familyJob = transport
@@ -221,6 +234,6 @@ usageInput = transport
 
 mutationInput : ∀ {A} → Codec A → Codec (Mutation A)
 mutationInput c = transport
-  (λ r → Mutation.operationId r , Mutation.input r)
-  (λ { (id , input) → record { operationId = id; input = input } })
-  (λ r → refl) (pair operationId c)
+  (λ r → Mutation.operationId r , (Mutation.owner r , Mutation.input r))
+  (λ { (id , (scope , input)) → record { operationId = id; owner = scope; input = input } })
+  (λ r → refl) (pair operationId (pair owner c))

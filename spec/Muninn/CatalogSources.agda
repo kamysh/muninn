@@ -133,12 +133,12 @@ controlCoverage initializeMcp protocol = sourceRecorded (site mcpMain "handle_re
 controlCoverage listTools input = sourceRecorded (site mcpMain "handle_request")
 controlCoverage notification input = sourceRecorded (site mcpMain "handle_request")
 controlCoverage openEditor (editor , location) = sourceRecorded (editorSite editor)
+controlCoverage interrupt id = sourceRecorded (site cliMain "main")
 
 coverage : Request → Coverage
 coverage (user adapter input) = userCoverage adapter
 coverage (background job input) = jobCoverage job
 coverage (control event input) = controlCoverage event input
-coverage (localUi input) = sourceRecorded (editorSite (UiInput.editor input))
 
 -- Owners name the independent contract work, not operation-supplied goals.
 outcomeIssues : OutcomeOwner → List ℕ

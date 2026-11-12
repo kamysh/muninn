@@ -14,7 +14,7 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong)
 import Relation.Nullary
 
 data MutationKind : Set where
-  kReplaceGlobal kApplyPolicy kRegister kStart kReindex kPause kResume kCancel kRemoveIndex kForget kRecreateIndex kConvertDirectory kWriteNote kDeleteNote : MutationKind
+  kReplaceGlobal kApplyPolicy kRegister kStart kReindex kPause kResume kCancel kUnregister kForget kRecreateIndex kConvertDirectory kWriteNote kDeleteNote : MutationKind
 
 intent : MutationKind → Intent
 intent kReplaceGlobal = replaceGlobal
@@ -25,7 +25,7 @@ intent kReindex = reindex
 intent kPause = pause
 intent kResume = resume
 intent kCancel = cancel
-intent kRemoveIndex = removeIndex
+intent kUnregister = unregister
 intent kForget = forget
 intent kRecreateIndex = recreateIndex
 intent kConvertDirectory = convertDirectory
@@ -50,7 +50,7 @@ userMeaning reindex input = just (mutation kReindex input)
 userMeaning pause input = just (mutation kPause input)
 userMeaning resume input = just (mutation kResume input)
 userMeaning cancel input = just (mutation kCancel input)
-userMeaning removeIndex input = just (mutation kRemoveIndex input)
+userMeaning unregister input = just (mutation kUnregister input)
 userMeaning forget input = just (mutation kForget input)
 userMeaning recreateIndex input = just (mutation kRecreateIndex input)
 userMeaning convertDirectory input = just (mutation kConvertDirectory input)
@@ -83,7 +83,7 @@ classifiedWithoutLoss kReindex input = refl
 classifiedWithoutLoss kPause input = refl
 classifiedWithoutLoss kResume input = refl
 classifiedWithoutLoss kCancel input = refl
-classifiedWithoutLoss kRemoveIndex input = refl
+classifiedWithoutLoss kUnregister input = refl
 classifiedWithoutLoss kForget input = refl
 classifiedWithoutLoss kRecreateIndex input = refl
 classifiedWithoutLoss kConvertDirectory input = refl
@@ -94,7 +94,6 @@ normalize : Catalog.Request → Maybe Meaning
 normalize (Catalog.user adapter input) = userMeaning (Catalog.canonicalIntent adapter) input
 normalize (Catalog.background job input) = just (durableJob job input)
 normalize (Catalog.control event input) = nothing
-normalize (Catalog.localUi input) = nothing
 
 -- Read/control/UI requests do not acquire permanent used-ID markers.
 -- Work arranged by those requests has a separately registered job identity.
@@ -115,16 +114,16 @@ encode meaning (mutation kReindex x0) = sequence (text "mutation kReindex" ∷ e
 encode meaning (mutation kPause x0) = sequence (text "mutation kPause" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kResume x0) = sequence (text "mutation kResume" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kCancel x0) = sequence (text "mutation kCancel" ∷ encode (mutationInput (pair familyTarget operationId)) x0 ∷ [])
-encode meaning (mutation kRemoveIndex x0) = sequence (text "mutation kRemoveIndex" ∷ encode (mutationInput removalTarget) x0 ∷ [])
+encode meaning (mutation kUnregister x0) = sequence (text "mutation kUnregister" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kForget x0) = sequence (text "mutation kForget" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kRecreateIndex x0) = sequence (text "mutation kRecreateIndex" ∷ encode (mutationInput (pair familyTarget embedding)) x0 ∷ [])
 encode meaning (mutation kConvertDirectory x0) = sequence (text "mutation kConvertDirectory" ∷ encode (mutationInput familyTarget) x0 ∷ [])
 encode meaning (mutation kWriteNote x0) = sequence (text "mutation kWriteNote" ∷ encode (mutationInput noteInput) x0 ∷ [])
 encode meaning (mutation kDeleteNote x0) = sequence (text "mutation kDeleteNote" ∷ encode (mutationInput (pair familyTarget knowledgeId)) x0 ∷ [])
-encode meaning (durableJob preparePublic x0) = sequence (text "durableJob preparePublic" ∷ encode bootstrap x0 ∷ [])
+encode meaning (durableJob preparePublic x0) = sequence (text "durableJob preparePublic" ∷ encode (pair operationId bootstrap) x0 ∷ [])
 encode meaning (durableJob prepareFamily x0) = sequence (text "durableJob prepareFamily" ∷ encode familyJob x0 ∷ [])
 encode meaning (durableJob prepareGraph x0) = sequence (text "durableJob prepareGraph" ∷ encode (pair familyJob (optional checkoutId)) x0 ∷ [])
-encode meaning (durableJob fleetScan x0) = sequence (text "durableJob fleetScan" ∷ encode operationId x0 ∷ [])
+encode meaning (durableJob fleetScan x0) = sequence (text "durableJob fleetScan" ∷ encode fleetJob x0 ∷ [])
 encode meaning (durableJob discoverCheckouts x0) = sequence (text "durableJob discoverCheckouts" ∷ encode familyJob x0 ∷ [])
 encode meaning (durableJob observeCheckout x0) = sequence (text "durableJob observeCheckout" ∷ encode checkoutJob x0 ∷ [])
 encode meaning (durableJob reconcileFamily x0) = sequence (text "durableJob reconcileFamily" ∷ encode familyJob x0 ∷ [])
@@ -139,9 +138,9 @@ encode meaning (durableJob reclaimRetired x0) = sequence (text "durableJob recla
 encode meaning (durableJob handoff x0) = sequence (text "durableJob handoff" ∷ encode familyJob x0 ∷ [])
 encode meaning (durableJob recoverOperation x0) = sequence (text "durableJob recoverOperation" ∷ encode operationId x0 ∷ [])
 encode meaning (durableJob recordUsage x0) = sequence (text "durableJob recordUsage" ∷ encode usageInput x0 ∷ [])
-encode meaning (durableJob appendLog x0) = sequence (text "durableJob appendLog" ∷ encode string x0 ∷ [])
-encode meaning (durableJob pruneLogs x0) = sequence (text "durableJob pruneLogs" ∷ encode nat x0 ∷ [])
-encode meaning (durableJob flushDiagnostics x0) = sequence (text "durableJob flushDiagnostics" ∷ encode unit x0 ∷ [])
+encode meaning (durableJob appendLog x0) = sequence (text "durableJob appendLog" ∷ encode (pair operationId string) x0 ∷ [])
+encode meaning (durableJob pruneLogs x0) = sequence (text "durableJob pruneLogs" ∷ encode (pair operationId nat) x0 ∷ [])
+encode meaning (durableJob flushDiagnostics x0) = sequence (text "durableJob flushDiagnostics" ∷ encode operationId x0 ∷ [])
 decode meaning (sequence (text "mutation kReplaceGlobal" ∷ v0 ∷ [])) = Maybe.map (mutation kReplaceGlobal) (decode (mutationInput globalSettings) v0)
 decode meaning (sequence (text "mutation kApplyPolicy" ∷ v0 ∷ [])) = Maybe.map (mutation kApplyPolicy) (decode (mutationInput (pair policyTarget policyDraft)) v0)
 decode meaning (sequence (text "mutation kRegister" ∷ v0 ∷ [])) = Maybe.map (mutation kRegister) (decode (mutationInput (pair locator policyDraft)) v0)
@@ -150,16 +149,16 @@ decode meaning (sequence (text "mutation kReindex" ∷ v0 ∷ [])) = Maybe.map (
 decode meaning (sequence (text "mutation kPause" ∷ v0 ∷ [])) = Maybe.map (mutation kPause) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kResume" ∷ v0 ∷ [])) = Maybe.map (mutation kResume) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kCancel" ∷ v0 ∷ [])) = Maybe.map (mutation kCancel) (decode (mutationInput (pair familyTarget operationId)) v0)
-decode meaning (sequence (text "mutation kRemoveIndex" ∷ v0 ∷ [])) = Maybe.map (mutation kRemoveIndex) (decode (mutationInput removalTarget) v0)
+decode meaning (sequence (text "mutation kUnregister" ∷ v0 ∷ [])) = Maybe.map (mutation kUnregister) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kForget" ∷ v0 ∷ [])) = Maybe.map (mutation kForget) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kRecreateIndex" ∷ v0 ∷ [])) = Maybe.map (mutation kRecreateIndex) (decode (mutationInput (pair familyTarget embedding)) v0)
 decode meaning (sequence (text "mutation kConvertDirectory" ∷ v0 ∷ [])) = Maybe.map (mutation kConvertDirectory) (decode (mutationInput familyTarget) v0)
 decode meaning (sequence (text "mutation kWriteNote" ∷ v0 ∷ [])) = Maybe.map (mutation kWriteNote) (decode (mutationInput noteInput) v0)
 decode meaning (sequence (text "mutation kDeleteNote" ∷ v0 ∷ [])) = Maybe.map (mutation kDeleteNote) (decode (mutationInput (pair familyTarget knowledgeId)) v0)
-decode meaning (sequence (text "durableJob preparePublic" ∷ v0 ∷ [])) = Maybe.map (durableJob preparePublic) (decode bootstrap v0)
+decode meaning (sequence (text "durableJob preparePublic" ∷ v0 ∷ [])) = Maybe.map (durableJob preparePublic) (decode (pair operationId bootstrap) v0)
 decode meaning (sequence (text "durableJob prepareFamily" ∷ v0 ∷ [])) = Maybe.map (durableJob prepareFamily) (decode familyJob v0)
 decode meaning (sequence (text "durableJob prepareGraph" ∷ v0 ∷ [])) = Maybe.map (durableJob prepareGraph) (decode (pair familyJob (optional checkoutId)) v0)
-decode meaning (sequence (text "durableJob fleetScan" ∷ v0 ∷ [])) = Maybe.map (durableJob fleetScan) (decode operationId v0)
+decode meaning (sequence (text "durableJob fleetScan" ∷ v0 ∷ [])) = Maybe.map (durableJob fleetScan) (decode fleetJob v0)
 decode meaning (sequence (text "durableJob discoverCheckouts" ∷ v0 ∷ [])) = Maybe.map (durableJob discoverCheckouts) (decode familyJob v0)
 decode meaning (sequence (text "durableJob observeCheckout" ∷ v0 ∷ [])) = Maybe.map (durableJob observeCheckout) (decode checkoutJob v0)
 decode meaning (sequence (text "durableJob reconcileFamily" ∷ v0 ∷ [])) = Maybe.map (durableJob reconcileFamily) (decode familyJob v0)
@@ -174,9 +173,9 @@ decode meaning (sequence (text "durableJob reclaimRetired" ∷ v0 ∷ [])) = May
 decode meaning (sequence (text "durableJob handoff" ∷ v0 ∷ [])) = Maybe.map (durableJob handoff) (decode familyJob v0)
 decode meaning (sequence (text "durableJob recoverOperation" ∷ v0 ∷ [])) = Maybe.map (durableJob recoverOperation) (decode operationId v0)
 decode meaning (sequence (text "durableJob recordUsage" ∷ v0 ∷ [])) = Maybe.map (durableJob recordUsage) (decode usageInput v0)
-decode meaning (sequence (text "durableJob appendLog" ∷ v0 ∷ [])) = Maybe.map (durableJob appendLog) (decode string v0)
-decode meaning (sequence (text "durableJob pruneLogs" ∷ v0 ∷ [])) = Maybe.map (durableJob pruneLogs) (decode nat v0)
-decode meaning (sequence (text "durableJob flushDiagnostics" ∷ v0 ∷ [])) = Maybe.map (durableJob flushDiagnostics) (decode unit v0)
+decode meaning (sequence (text "durableJob appendLog" ∷ v0 ∷ [])) = Maybe.map (durableJob appendLog) (decode (pair operationId string) v0)
+decode meaning (sequence (text "durableJob pruneLogs" ∷ v0 ∷ [])) = Maybe.map (durableJob pruneLogs) (decode (pair operationId nat) v0)
+decode meaning (sequence (text "durableJob flushDiagnostics" ∷ v0 ∷ [])) = Maybe.map (durableJob flushDiagnostics) (decode operationId v0)
 decode meaning _ = nothing
 roundTrip meaning (mutation kReplaceGlobal x0) rewrite roundTrip (mutationInput globalSettings) x0 = refl
 roundTrip meaning (mutation kApplyPolicy x0) rewrite roundTrip (mutationInput (pair policyTarget policyDraft)) x0 = refl
@@ -186,16 +185,16 @@ roundTrip meaning (mutation kReindex x0) rewrite roundTrip (mutationInput reinde
 roundTrip meaning (mutation kPause x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kResume x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kCancel x0) rewrite roundTrip (mutationInput (pair familyTarget operationId)) x0 = refl
-roundTrip meaning (mutation kRemoveIndex x0) rewrite roundTrip (mutationInput removalTarget) x0 = refl
+roundTrip meaning (mutation kUnregister x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kForget x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kRecreateIndex x0) rewrite roundTrip (mutationInput (pair familyTarget embedding)) x0 = refl
 roundTrip meaning (mutation kConvertDirectory x0) rewrite roundTrip (mutationInput familyTarget) x0 = refl
 roundTrip meaning (mutation kWriteNote x0) rewrite roundTrip (mutationInput noteInput) x0 = refl
 roundTrip meaning (mutation kDeleteNote x0) rewrite roundTrip (mutationInput (pair familyTarget knowledgeId)) x0 = refl
-roundTrip meaning (durableJob preparePublic x0) rewrite roundTrip bootstrap x0 = refl
+roundTrip meaning (durableJob preparePublic x0) rewrite roundTrip (pair operationId bootstrap) x0 = refl
 roundTrip meaning (durableJob prepareFamily x0) rewrite roundTrip familyJob x0 = refl
 roundTrip meaning (durableJob prepareGraph x0) rewrite roundTrip (pair familyJob (optional checkoutId)) x0 = refl
-roundTrip meaning (durableJob fleetScan x0) rewrite roundTrip operationId x0 = refl
+roundTrip meaning (durableJob fleetScan x0) rewrite roundTrip fleetJob x0 = refl
 roundTrip meaning (durableJob discoverCheckouts x0) rewrite roundTrip familyJob x0 = refl
 roundTrip meaning (durableJob observeCheckout x0) rewrite roundTrip checkoutJob x0 = refl
 roundTrip meaning (durableJob reconcileFamily x0) rewrite roundTrip familyJob x0 = refl
@@ -210,9 +209,9 @@ roundTrip meaning (durableJob reclaimRetired x0) rewrite roundTrip familyJob x0 
 roundTrip meaning (durableJob handoff x0) rewrite roundTrip familyJob x0 = refl
 roundTrip meaning (durableJob recoverOperation x0) rewrite roundTrip operationId x0 = refl
 roundTrip meaning (durableJob recordUsage x0) rewrite roundTrip usageInput x0 = refl
-roundTrip meaning (durableJob appendLog x0) rewrite roundTrip string x0 = refl
-roundTrip meaning (durableJob pruneLogs x0) rewrite roundTrip nat x0 = refl
-roundTrip meaning (durableJob flushDiagnostics x0) rewrite roundTrip unit x0 = refl
+roundTrip meaning (durableJob appendLog x0) rewrite roundTrip (pair operationId string) x0 = refl
+roundTrip meaning (durableJob pruneLogs x0) rewrite roundTrip (pair operationId nat) x0 = refl
+roundTrip meaning (durableJob flushDiagnostics x0) rewrite roundTrip operationId x0 = refl
 
 -- Equality of canonical content implies equality of the complete typed input.
 contentFaithful : ∀ {first second} →

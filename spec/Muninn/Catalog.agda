@@ -68,7 +68,7 @@ cliIntent reindexAll = reindex
 cliIntent reindexDetached = reindex
 cliIntent pausePath = pause
 cliIntent resumePath = resume
-cliIntent removeConfirmed = removeIndex
+cliIntent removeConfirmed = unregister
 cliIntent statusFleet = status
 cliIntent statusPath = status
 cliIntent usageDays = usage
@@ -89,7 +89,7 @@ tuiIntent saveGlobalSettings = replaceGlobal
 -- Approved administration scope, with NO new wire names assigned here.
 data McpAdministration : Set where
   inspect check apply inventory registerFamily startFamily reindexFamily pauseFamily : McpAdministration
-  resumeFamily cancelWork inspectStatus removeDerived forgetRepository recreateDerived convert : McpAdministration
+  resumeFamily cancelWork inspectStatus unregisterFamily forgetRepository recreateDerived convert : McpAdministration
 
 adminIntent : McpAdministration → Intent
 adminIntent inspect = inspectPolicy
@@ -103,7 +103,7 @@ adminIntent pauseFamily = pause
 adminIntent resumeFamily = resume
 adminIntent cancelWork = cancel
 adminIntent inspectStatus = status
-adminIntent removeDerived = removeIndex
+adminIntent unregisterFamily = unregister
 adminIntent forgetRepository = forget
 adminIntent recreateDerived = recreateIndex
 adminIntent convert = convertDirectory
@@ -127,7 +127,6 @@ data Request : Set where
   user : (adapter : UserAdapter) → IntentInput (canonicalIntent adapter) → Request
   background : (job : Job) → JobInput job → Request
   control : (event : Control) → ControlInput event → Request
-  localUi : UiInput → Request
 
 data OutcomeOwner : Set where
   connection configuration selection registration indexing removal retrieval structure : OutcomeOwner
@@ -146,7 +145,7 @@ intentOwner reindex = indexing
 intentOwner pause = indexing
 intentOwner resume = indexing
 intentOwner cancel = indexing
-intentOwner removeIndex = removal
+intentOwner unregister = removal
 intentOwner forget = removal
 intentOwner recreateIndex = artifacts
 intentOwner convertDirectory = registration
@@ -192,12 +191,12 @@ controlOwner initializeMcp = interface
 controlOwner listTools = interface
 controlOwner notification = interface
 controlOwner openEditor = interface
+controlOwner interrupt = indexing
 
 owner : Request → OutcomeOwner
 owner (user adapter input) = intentOwner (canonicalIntent adapter)
 owner (background job input) = jobOwner job
 owner (control event input) = controlOwner event
-owner (localUi input) = interface
 
 -- Changing transport cannot change the assigned independent outcome owner.
 sameIntentSameOutcomeOwner : ∀ first second input otherInput →

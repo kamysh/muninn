@@ -30,7 +30,7 @@ restore (N.mutation N.kReindex input) = C.user (C.plannedAdministration C.reinde
 restore (N.mutation N.kPause input) = C.user (C.plannedAdministration C.pauseFamily) input
 restore (N.mutation N.kResume input) = C.user (C.plannedAdministration C.resumeFamily) input
 restore (N.mutation N.kCancel input) = C.user (C.plannedAdministration C.cancelWork) input
-restore (N.mutation N.kRemoveIndex input) = C.user (C.plannedAdministration C.removeDerived) input
+restore (N.mutation N.kUnregister input) = C.user (C.plannedAdministration C.unregisterFamily) input
 restore (N.mutation N.kForget input) = C.user (C.plannedAdministration C.forgetRepository) input
 restore (N.mutation N.kRecreateIndex input) = C.user (C.plannedAdministration C.recreateDerived) input
 restore (N.mutation N.kConvertDirectory input) = C.user (C.plannedAdministration C.convert) input
@@ -47,7 +47,7 @@ restorePreservesMeaning (N.mutation N.kReindex input) = refl
 restorePreservesMeaning (N.mutation N.kPause input) = refl
 restorePreservesMeaning (N.mutation N.kResume input) = refl
 restorePreservesMeaning (N.mutation N.kCancel input) = refl
-restorePreservesMeaning (N.mutation N.kRemoveIndex input) = refl
+restorePreservesMeaning (N.mutation N.kUnregister input) = refl
 restorePreservesMeaning (N.mutation N.kForget input) = refl
 restorePreservesMeaning (N.mutation N.kRecreateIndex input) = refl
 restorePreservesMeaning (N.mutation N.kConvertDirectory input) = refl
@@ -74,14 +74,13 @@ bindName id (N.durableJob job input) = just tt
 
 -- Continuation carries identity without resubmitting a new mutation payload.
 continuationInput : (intent : I.Intent) → I.IntentInput intent → Maybe I.OperationId
-continuationInput I.continueRequest id = just id
+continuationInput I.continueRequest input = just (I.ContinueInput.requestId input)
 continuationInput _ _ = nothing
 
 continuationId : C.Request → Maybe I.OperationId
 continuationId (C.user adapter input) = continuationInput (C.canonicalIntent adapter) input
 continuationId (C.background job input) = nothing
 continuationId (C.control event input) = nothing
-continuationId (C.localUi input) = nothing
 
 automaticId : C.Request → Maybe I.OperationId
 automaticId request with N.normalize request
@@ -217,7 +216,7 @@ newInputCannotReplaceWork ctx selected slot owner original names work different
 
 continuationRecoversWorkAfterContextLoss : ∀ id original names slot owner work statement world →
   L.find id world ≡ just (L.found slot owner (R.active original names work)) →
-  route (turn nothing (submission (C.user C.conversationContinuation id)) statement) world ≡
+  route (turn nothing (submission (C.user C.conversationContinuation (I.continueInput id nothing))) statement) world ≡
     within (D.fresh id statement)
       (knownWork (restoredTarget (D.fresh id statement) original names) slot owner work)
 continuationRecoversWorkAfterContextLoss id original names slot owner work statement world foundHere
@@ -227,7 +226,7 @@ continuationRecoversWorkAfterContextLoss id original names slot owner work state
 
 continuationRecoversResultAfterContextLoss : ∀ id original names slot owner result statement world →
   L.find id world ≡ just (L.found slot owner (R.finished original names result)) →
-  route (turn nothing (submission (C.user C.conversationContinuation id)) statement) world ≡
+  route (turn nothing (submission (C.user C.conversationContinuation (I.continueInput id nothing))) statement) world ≡
     within (D.fresh id statement) (historicalResult result)
 continuationRecoversResultAfterContextLoss id original names slot owner result statement world foundHere
   with L.sameId id id

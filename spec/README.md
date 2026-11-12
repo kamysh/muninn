@@ -41,6 +41,9 @@ mathematical models; they do not require physical persistent trees or copying
 unchanged chunks. A predicate requiring isolated assignments does not prove that
 a particular live SQL registry satisfies it.
 
+The [operation catalog](OPERATION-CATALOG.md) inventories current and planned
+entry points without modeling search algorithms or unsaved editor drafts.
+The dispatcher and runtime coverage remain separate obligations.
 ## Internal symlinks
 
 `SymlinkTraversal` resolves ordinary internal links one path component at a

@@ -5,7 +5,7 @@ module Muninn.ReceiptTypes where
 open import Muninn.CatalogInputs using (OperationId; Mutation; IntentInput)
 open import Muninn.RequestIdentity using (Meaning; mutation; durableJob; MutationKind; intent;
   kReplaceGlobal; kApplyPolicy; kRegister; kStart; kReindex; kPause; kResume;
-  kCancel; kRemoveIndex; kForget; kRecreateIndex; kConvertDirectory; kWriteNote; kDeleteNote)
+  kCancel; kUnregister; kForget; kRecreateIndex; kConvertDirectory; kWriteNote; kDeleteNote)
 open import Data.Nat using (ℕ; suc)
 open import Data.List using (List)
 open import Data.String using (String)
@@ -23,7 +23,7 @@ mutationId kReindex = Mutation.operationId
 mutationId kPause = Mutation.operationId
 mutationId kResume = Mutation.operationId
 mutationId kCancel = Mutation.operationId
-mutationId kRemoveIndex = Mutation.operationId
+mutationId kUnregister = Mutation.operationId
 mutationId kForget = Mutation.operationId
 mutationId kRecreateIndex = Mutation.operationId
 mutationId kConvertDirectory = Mutation.operationId

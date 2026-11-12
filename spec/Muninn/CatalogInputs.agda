@@ -3,24 +3,31 @@
 -- no transport can substitute a different input type for the same intent.
 module Muninn.CatalogInputs where
 
-open import Data.Nat using (ℕ; _≤_)
+open import Data.Nat using (ℕ)
 open import Data.String using (String)
 open import Data.List using (List)
 open import Data.Maybe using (Maybe)
-open import Data.Bool using (Bool)
+open import Data.Bool using (Bool; true; false)
 open import Data.Product using (_×_)
 open import Data.Unit using (⊤)
 open import Muninn.Types using (UUID; FilePath)
 open import Muninn.Worktree using (FamilyId; CheckoutId; VersionId)
 open import Muninn.Config using (BootstrapConfig; IndexConfig; WatcherConfig; EmbeddingSelection)
 open import Muninn.Knowledge using (KnowledgeId)
-open import Muninn.Float using (Float)
 
 record OperationId : Set where
   field value : UUID
 
+-- Resolved internally before an operation is admitted; this is not a new
+-- CLI or MCP argument. It lets repository removal find its detailed receipts.
+data Owner : Set where
+  installationOwner : Owner
+  repositoryOwner : FamilyId → Owner
+  repositoriesOwner : List FamilyId → Owner
+
 record Mutation (A : Set) : Set where
   field operationId : OperationId
+        owner : Owner
         input : A
 
 data Locator : Set where
@@ -34,54 +41,44 @@ record PolicyTarget : Set where
   field target : FamilyTarget
         expectedRevision : ℕ
 
+record FileLimits : Set where
+  field selectedBytes : ℕ
+        structuralBytes : ℕ
+
 record PolicyDraft : Set where
   field name : String
         index : IndexConfig
+        limits : FileLimits
         watcher : WatcherConfig
         embeddings : EmbeddingSelection
 
 record GlobalSettings : Set where
   field bootstrap : BootstrapConfig
         defaultIndex : IndexConfig
+        defaultLimits : FileLimits
         defaultWatcher : WatcherConfig
         defaultEmbeddings : EmbeddingSelection
-
-record Page : Set where
-  field size : ℕ
-        positive : 1 ≤ size
-        bounded : size ≤ 1000
-        continuation : Maybe UUID
+        interactiveSlots : ℕ
+        handoffPollSeconds : ℕ
 
 data SearchMode : Set where
   fulltext semantic hybrid : SearchMode
 
-data Precision : Set where
-  approximate exact : Precision
-
-record RankingOverrides : Set where
-  field vendorWeight : Maybe Float
-        perFileLimit : Maybe ℕ
-
+-- Search content is opaque here; the state machine only needs its location
+-- and must retain the request when work continues.
 record SearchInput : Set where
   field location : Locator
-        query : String
-        page : Page
-        precision : Precision
-        ranking : RankingOverrides
-
-data StructuralRelation : Set where
-  callers callees imports defines inheritors inherits : StructuralRelation
+        request : String
 
 record StructuralInput : Set where
   field location : Locator
-        symbol : String
-        relation : StructuralRelation
-        page : Page
+        request : String
 
 record NoteInput : Set where
   field target : FamilyTarget
         id : Maybe KnowledgeId
         origin : Maybe FilePath
+        scope : Maybe CheckoutId
         title body : String
         tags : List String
         relatedFiles : List FilePath
@@ -90,19 +87,20 @@ data ReindexTarget : Set where
   foregroundIndex detachedIndex : FamilyTarget → ReindexTarget
   allRegistered : ReindexTarget
 
-data RemovalTarget : Set where
-  familyIndex : FamilyTarget → RemovalTarget
-  checkoutIndex : FamilyTarget → CheckoutId → RemovalTarget
-
 data Editor : Set where
   globalEditor familyEditor : Editor
 
 data Binary : Set where
   cli mcp indexer : Binary
 
+record ContinueInput : Set where
+  constructor continueInput
+  field requestId : OperationId
+        message : Maybe String
+
 data Intent : Set where
   inspectGlobal replaceGlobal inspectPolicy checkPolicy applyPolicy preflight register : Intent
-  start reindex pause resume cancel removeIndex forget recreateIndex convertDirectory status usage : Intent
+  start reindex pause resume cancel unregister forget recreateIndex convertDirectory status usage : Intent
   searchCode : SearchMode → Intent
   searchStructure writeNote searchNotes deleteNote listNotes continueRequest : Intent
 
@@ -119,7 +117,7 @@ IntentInput reindex = Mutation ReindexTarget
 IntentInput pause = Mutation FamilyTarget
 IntentInput resume = Mutation FamilyTarget
 IntentInput cancel = Mutation (FamilyTarget × OperationId)
-IntentInput removeIndex = Mutation RemovalTarget
+IntentInput unregister = Mutation FamilyTarget
 IntentInput forget = Mutation FamilyTarget
 IntentInput recreateIndex = Mutation (FamilyTarget × EmbeddingSelection)
 IntentInput convertDirectory = Mutation FamilyTarget
@@ -128,16 +126,22 @@ IntentInput usage = ℕ
 IntentInput (searchCode mode) = SearchInput
 IntentInput searchStructure = StructuralInput
 IntentInput writeNote = Mutation NoteInput
-IntentInput searchNotes = FamilyTarget × String × Page
+IntentInput searchNotes = FamilyTarget × String
 IntentInput deleteNote = Mutation (FamilyTarget × KnowledgeId)
-IntentInput listNotes = FamilyTarget × Page
-IntentInput continueRequest = OperationId
+IntentInput listNotes = FamilyTarget × String
+IntentInput continueRequest = ContinueInput
 
 -- Finite jobs are distinct from the service loop that schedules them.
 data Job : Set where
   preparePublic prepareFamily prepareGraph fleetScan discoverCheckouts observeCheckout : Job
   reconcileFamily reconcileCheckout watchBatch analyzeFile publishCheckout embedCode embedNote : Job
   reclaimExcluded reclaimRetired handoff recoverOperation recordUsage appendLog pruneLogs flushDiagnostics : Job
+
+-- Fleet work may involve several families. The internal owner list identifies
+-- every family whose data the operation records; it is not a wire argument.
+record FleetJob : Set where
+  field operationId : OperationId
+        families : List FamilyId
 
 record FamilyJob : Set where
   field operationId : OperationId
@@ -159,10 +163,10 @@ record UsageInput : Set where
         resultCount : Maybe ℕ
 
 JobInput : Job → Set
-JobInput preparePublic = BootstrapConfig
+JobInput preparePublic = OperationId × BootstrapConfig
 JobInput prepareFamily = FamilyJob
 JobInput prepareGraph = FamilyJob × Maybe CheckoutId
-JobInput fleetScan = OperationId
+JobInput fleetScan = FleetJob
 JobInput discoverCheckouts = FamilyJob
 JobInput observeCheckout = CheckoutJob
 JobInput reconcileFamily = FamilyJob
@@ -177,12 +181,20 @@ JobInput reclaimRetired = FamilyJob
 JobInput handoff = FamilyJob
 JobInput recoverOperation = OperationId
 JobInput recordUsage = UsageInput
-JobInput appendLog = String
-JobInput pruneLogs = ℕ
-JobInput flushDiagnostics = ⊤
+JobInput appendLog = OperationId × String
+JobInput pruneLogs = OperationId × ℕ
+JobInput flushDiagnostics = OperationId
+
+
+-- Preserve the complete notification payload for its handler. Parsing and
+-- validation of the JSON text remain the transport adapter’s responsibility.
+record NotificationInput : Set where
+  constructor notificationInput
+  field method : String
+        parametersJson : String
 
 data Control : Set where
-  startup shutdown help version initializeMcp listTools notification openEditor : Control
+  startup shutdown help version initializeMcp listTools notification openEditor interrupt : Control
 
 ControlInput : Control → Set
 ControlInput startup = Binary
@@ -191,18 +203,6 @@ ControlInput help = Binary × List String
 ControlInput version = Binary
 ControlInput initializeMcp = String
 ControlInput listTools = ⊤
-ControlInput notification = String
+ControlInput notification = NotificationInput
 ControlInput openEditor = Editor × Maybe Locator
-
--- Local editing cannot carry an arbitrary database script. Effectful Save,
--- Check, Start and Refresh use their shared public intents above.
-data UiAction : Set where
-  openView editField advanced editMore rules defaults selectRule addRule close back : UiAction
-  loadCurrent keepDraft confirmSave confirmDiscard confirmLoad confirmKeep confirmRemove : UiAction
-  removeRule moveRule selectProvider editText selectSecret focus scroll helpModal : UiAction
-
-record UiInput : Set where
-  field editor : Editor
-        action : UiAction
-        selection : ℕ
-        text : String
+ControlInput interrupt = OperationId

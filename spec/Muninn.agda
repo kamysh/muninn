@@ -26,6 +26,7 @@ module Muninn where
 import Muninn.SymlinkTraversal
 import Muninn.SymlinkSelection
 import Muninn.Connection
+import Muninn.OperationCatalog
 import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery

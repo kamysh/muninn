@@ -237,7 +237,7 @@ module Protocol
   lostReplyDoesNotCreateNewWork : ∀ checkers id original names previousSlot previousOwner work statement
     env proposedSlot proposedOwner initial world →
     DB.execute (interact checkers
-      (Identity.turn nothing (Identity.submission (C.user C.conversationContinuation id)) statement)
+      (Identity.turn nothing (Identity.submission (C.user C.conversationContinuation (I.continueInput id nothing))) statement)
       env proposedSlot proposedOwner initial)
       (DB.write previousSlot (L.recordAt previousOwner (R.active original names work)) world) ≡
         (knownWork id original previousSlot work ,
@@ -245,7 +245,7 @@ module Protocol
   lostReplyDoesNotCreateNewWork checkers id original names previousSlot previousOwner work statement
     env proposedSlot proposedOwner initial world =
     knownWorkIsReused checkers
-      (Identity.turn nothing (Identity.submission (C.user C.conversationContinuation id)) statement)
+      (Identity.turn nothing (Identity.submission (C.user C.conversationContinuation (I.continueInput id nothing))) statement)
       env proposedSlot proposedOwner initial
       (DB.write previousSlot (L.recordAt previousOwner (R.active original names work)) world)
       (D.fresh id statement) (Identity.restoredTarget (D.fresh id statement) original names)
