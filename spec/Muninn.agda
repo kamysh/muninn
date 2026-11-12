@@ -26,6 +26,7 @@ module Muninn where
 
 import Muninn.Connection
 import Muninn.Database
+import Muninn.Recovery
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

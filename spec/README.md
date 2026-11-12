@@ -106,3 +106,20 @@ is not yet connected to every product operation, and it is not a proof that
 Rust, SQL or AGE effects implement these semantics. Closed operation dispatch,
 complete persistent-state coverage and implementation correspondence remain
 explicit obligations of the specification series.
+
+## Shared recovery contracts
+
+`Muninn.Recovery` uses the fixed database transaction semantics to define scripts,
+all committed prefixes, interruption and completion. Its general laws characterize
+the first atomic boundary, unchanged worlds after returning a result, and prefix
+composition. Tentative statement effects are never published before commit.
+
+The `Recoverable` interface requires preservation at every committed prefix, interruption/retry convergence
+and constructive termination proofs. The outcome and preservation relation are
+interface parameters fixed by the caller; an operation cannot supply weaker ones
+as record fields. This is a specification interface, not a runtime change or the
+completed closed dispatcher. Catalog integration remains a separate obligation.
+
+These are local execution laws once a transaction can execute against the given
+world. Database outages and waiting for external input belong in the application
+protocol; this interface alone does not establish eventual service availability.
