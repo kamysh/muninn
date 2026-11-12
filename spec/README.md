@@ -41,6 +41,24 @@ mathematical models; they do not require physical persistent trees or copying
 unchanged chunks. A predicate requiring isolated assignments does not prove that
 a particular live SQL registry satisfies it.
 
+## Internal symlinks
+
+`SymlinkTraversal` resolves ordinary internal links one path component at a
+time. Every intermediate expansion stays within the selected checkout.
+Termination is derived from a proof-only measure that decreases on each
+internal expansion; it does not prescribe runtime storage or a new service. `SymlinkSelection` applies Git and ordered rule-match
+observations independently to each visible path, preserves the underlying
+filesystem object identity, and proves that separately included paths remain
+visible. A complete logical scan covers every visible path that resolves to a
+file.
+
+The modules require a consistent filesystem observation and a valid decreasing
+measure; they do not derive either from filesystem operations. Git and rule
+observations must correspond to the checkout and its actual policy. The
+filesystem, Git, path-encoding and complete-scan correspondence remains an
+implementation obligation, including integration with the Git-backed selection
+work in #26 and the correspondence work in #52.
+
 ## Known model/runtime gaps
 
 These are unresolved correspondence obligations, not authorization to weaken the
