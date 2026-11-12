@@ -106,6 +106,7 @@ module For (Other OtherReply : Set)
       WriteAllowed before (C.Mutation.input request) resolved id →
       ValidKnowledgeItem (K.Note.item (noteFrom (C.Mutation.input request) id)) →
       K.Visible (noteFrom (C.Mutation.input request) id) (Resolved.checkout resolved) →
+      C.Mutation.owner request ≡ C.repositoryOwner (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request))) →
       ledger (C.Mutation.operationId request) ≡ just (R.active (writeMeaning request)) →
       Step (R.completion (C.Mutation.operationId request) (writeMeaning request) (saved id))
         (R.state before ledger)
@@ -118,6 +119,7 @@ module For (Other OtherReply : Set)
       (resolved : Resolved before target) →
       K.World.notes (RepositoryWorld.notes before) (C.FamilyTarget.expectedFamily target) id ≡ just old →
       K.Visible old (Resolved.checkout resolved) →
+      C.Mutation.owner request ≡ C.repositoryOwner (C.FamilyTarget.expectedFamily target) →
       ledger (C.Mutation.operationId request) ≡ just (R.active (deleteMeaning request)) →
       Step (R.completion (C.Mutation.operationId request) (deleteMeaning request) (deleted id))
         (R.state before ledger)
@@ -126,8 +128,8 @@ module For (Other OtherReply : Set)
 
   -- Each note transition is also the atomic receipt transition for that request.
   asReceiptStep : ∀ {event before after} → Step event before after → R.Step event before after
-  asReceiptStep (write resolved allowed valid visible receipt) = R.commit receipt
-  asReceiptStep (delete input resolved present visible receipt) = R.commit receipt
+  asReceiptStep (write resolved allowed valid visible owner receipt) = R.commit receipt
+  asReceiptStep (delete input resolved present visible owner receipt) = R.commit receipt
 
   -- Note completion enters through its own transition, never through the
   -- generic receipt relation. Prior context is retained in the conversation.
@@ -165,7 +167,7 @@ module For (Other OtherReply : Set)
     K.World.notes (RepositoryWorld.notes (R.State.dataState after))
       (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request))) id ≡
       just (noteFrom (C.Mutation.input request) id)
-  writeStoresNote (write {before = before} {request = request} {id = id} resolved allowed valid visible receipt) =
+  writeStoresNote (write {before = before} {request = request} {id = id} resolved allowed valid visible owner receipt) =
     Notes.recordedNote (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request)))
       id (noteFrom (C.Mutation.input request) id) (RepositoryWorld.notes before)
 
@@ -174,7 +176,7 @@ module For (Other OtherReply : Set)
     ∀ other key → ¬ (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request)) ≡ other) →
     K.World.notes (RepositoryWorld.notes (R.State.dataState after)) other key ≡
     K.World.notes (RepositoryWorld.notes (R.State.dataState before)) other key
-  writePreservesOtherFamily (write {before = before} {request = request} {id = id} resolved allowed valid visible receipt) other key distinct =
+  writePreservesOtherFamily (write {before = before} {request = request} {id = id} resolved allowed valid visible owner receipt) other key distinct =
     Notes.putOtherFamily (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request)))
       id (noteFrom (C.Mutation.input request) id) (K.World.notes (RepositoryWorld.notes before)) other key distinct
 
@@ -189,7 +191,7 @@ module For (Other OtherReply : Set)
     K.Note.scope old ≡ just selected →
     RepositoryWorld.locations (R.State.dataState before) (C.FamilyTarget.location (C.NoteInput.target (C.Mutation.input request))) ≡ just checkout →
     ¬ (W.Checkout.id checkout ≡ selected) → ⊥
-  scopedWriteCannotRunElsewhere (write resolved allowed valid newVisible receipt) present scoped location distinct =
+  scopedWriteCannotRunElsewhere (write resolved allowed valid newVisible owner receipt) present scoped location distinct =
     scopedUnavailable resolved _ _ _ scoped location distinct (existingWriteVisible allowed present)
 
   scopedDeleteCannotRunElsewhere : ∀ {before after request target id old selected checkout} →
@@ -199,7 +201,7 @@ module For (Other OtherReply : Set)
     K.Note.scope old ≡ just selected →
     RepositoryWorld.locations (R.State.dataState before) (C.FamilyTarget.location target) ≡ just checkout →
     ¬ (W.Checkout.id checkout ≡ selected) → ⊥
-  scopedDeleteCannotRunElsewhere expected (delete input resolved found visible receipt) present scoped location distinct
+  scopedDeleteCannotRunElsewhere expected (delete input resolved found visible owner receipt) present scoped location distinct
     with trans (sym input) expected
   ... | refl = scopedUnavailable resolved _ _ _ scoped location distinct
     (subst (λ note → K.Visible note (Resolved.checkout resolved)) (just-injective (trans (sym found) present)) visible)
@@ -208,7 +210,7 @@ module For (Other OtherReply : Set)
     C.Mutation.input request ≡ (target , id) →
     Step (R.completion (C.Mutation.operationId request) (deleteMeaning request) (deleted id)) before after →
     K.World.notes (RepositoryWorld.notes (R.State.dataState after)) (C.FamilyTarget.expectedFamily target) id ≡ nothing
-  deleteRemovesNote expected (delete {before = before} input resolved found visible receipt)
+  deleteRemovesNote expected (delete {before = before} input resolved found visible owner receipt)
     with trans (sym input) expected
   ... | refl = Notes.deletedNote _ _ (RepositoryWorld.notes before)
 
@@ -218,7 +220,7 @@ module For (Other OtherReply : Set)
     ∀ other key → ¬ (C.FamilyTarget.expectedFamily target ≡ other) →
     K.World.notes (RepositoryWorld.notes (R.State.dataState after)) other key ≡
     K.World.notes (RepositoryWorld.notes (R.State.dataState before)) other key
-  deletePreservesOtherFamily expected (delete {before = before} input resolved found visible receipt) other key distinct
+  deletePreservesOtherFamily expected (delete {before = before} input resolved found visible owner receipt) other key distinct
     with trans (sym input) expected
   ... | refl = Notes.removeOtherFamily _ _ (K.World.notes (RepositoryWorld.notes before)) other key distinct
 
@@ -274,7 +276,7 @@ module For (Other OtherReply : Set)
   writeMeetsGoal : ∀ {before after request id} →
     Step (R.completion (C.Mutation.operationId request) (writeMeaning request) (saved id)) before after →
     WriteGoal before after request id
-  writeMeetsGoal step@(write {before = before} {request = request} {id = id} resolved allowed valid visible receipt) = record
+  writeMeetsGoal step@(write {before = before} {request = request} {id = id} resolved allowed valid visible owner receipt) = record
     { storedNote = writeStoresNote step
     ; oldVectorRemoved = Notes.changedNoteHasNoOldVector _ id (RepositoryWorld.notes before) (noteFrom (C.Mutation.input request) id)
     ; otherNotes = writePreservesOtherFamily step
@@ -320,7 +322,7 @@ module For (Other OtherReply : Set)
     C.Mutation.input request ≡ (target , id) →
     Step (R.completion (C.Mutation.operationId request) (deleteMeaning request) (deleted id)) before after →
     DeleteGoal before after request target id
-  deleteMeetsGoal expected step@(delete {before = before} input resolved found visible receipt)
+  deleteMeetsGoal expected step@(delete {before = before} input resolved found visible owner receipt)
     with trans (sym input) expected
   ... | refl = record
     { removedNote = Notes.deletedNote _ _ (RepositoryWorld.notes before)
@@ -389,3 +391,19 @@ module For (Other OtherReply : Set)
     R.State.ledger before original ≡ just (R.completed meaning result) →
     R.Step (R.replayRequest original meaning result) after after
   retryAfterOtherNotes steps receipt = R.replayStep (otherNoteStepsKeepReceipt steps receipt)
+
+  writeReceiptOwnedByFamily : ∀ {before after request id} →
+    Step (R.completion (C.Mutation.operationId request) (writeMeaning request) (saved id)) before after →
+    R.ledgerOwner (R.State.ledger after) (C.Mutation.operationId request) ≡
+      just (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request))))
+  writeReceiptOwnedByFamily (write {ledger = ledger} {request = request} {id = id} resolved allowed valid visible owner receipt)
+    rewrite R.updateAt (C.Mutation.operationId request) (R.completed (writeMeaning request) (saved id)) ledger | owner = refl
+
+  deleteReceiptOwnedByFamily : ∀ {before after request target id} →
+    C.Mutation.input request ≡ (target , id) →
+    Step (R.completion (C.Mutation.operationId request) (deleteMeaning request) (deleted id)) before after →
+    R.ledgerOwner (R.State.ledger after) (C.Mutation.operationId request) ≡
+      just (C.repositoryOwner (C.FamilyTarget.expectedFamily target))
+  deleteReceiptOwnedByFamily expected (delete {ledger = ledger} {request = request} {id = id} input resolved found visible owner receipt)
+    with trans (sym input) expected
+  ... | refl rewrite R.updateAt (C.Mutation.operationId request) (R.completed (deleteMeaning request) (deleted id)) ledger | owner = refl

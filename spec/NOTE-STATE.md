@@ -7,6 +7,8 @@ edited or deleted only from their own checkout; family-wide notes are shared
 across checkouts in that family. New note IDs must be unused across families.
 
 A note write or deletion commits its note change and request receipt together.
+The receipt owner must be the resolved family; this is internal state, not a
+new command argument.
 The independent world goals specify the changed note, its derived vector,
 preservation of unrelated notes, vectors, profiles, locations and other state,
 and preservation of other request receipts. A repeated committed request
