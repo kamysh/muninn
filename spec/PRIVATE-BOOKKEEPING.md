@@ -8,7 +8,9 @@ curated notes remain searchable.
 ## One invariant at the shared store boundary
 
 `OwnedState.executionBookkeeping` classifies every record kind explicitly.
-`PublicReference` admits only targets outside the private categories.
+`privateTarget` also includes mutable published-view selectors: searches read
+the association to choose a snapshot, then retain that snapshot's data.
+`PublicReference` admits only targets outside this private boundary.
 `Admissible.privateBookkeeping` requires that every stored strong reference
 satisfy this condition. The previous private-reader property is derived from
 this stronger invariant, so callers cannot silently retain the narrower rule.

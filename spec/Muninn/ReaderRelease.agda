@@ -86,7 +86,7 @@ lookupBeforeDelete world removed key value found with removed ≟ key
 
 privateUnreferenced : ∀ world owner key → O.Admissible world → ReaderAt owner key world → All (O.NoIncomingTo key) world
 privateUnreferenced world owner key valid (reader , found , owned , sameKind) =
-  O.privateUnreferenced key world reader valid found (cong O.executionBookkeeping sameKind)
+  O.privateUnreferenced key world reader valid found (cong O.privateTarget sameKind)
 
 admissible : ∀ {A : Set} owner key (ready : A) replan world → O.Admissible world →
   O.Admissible (proj₂ (DB.execute (finish owner key ready replan) world))

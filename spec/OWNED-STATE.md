@@ -70,7 +70,8 @@ scope; a path string does not establish a new family.
 The state invariant requires unique logical record identities, permitted owner
 placement, resolution of every strong reference to a record of the expected
 kind and permitted owner, and private execution bookkeeping. Strong references
-cannot target readers, cleanup tasks, accepted work, continuations or receipts.
+cannot target readers, cleanup tasks, accepted work, continuations, receipts or
+mutable current-view selectors.
 Status tools may still inspect them through ordinary reads. This privacy rule
 does not remove their outgoing holds on indexed data; see
 [private bookkeeping](PRIVATE-BOOKKEEPING.md). Chunk, posting, vector, symbol, edge and snapshot
