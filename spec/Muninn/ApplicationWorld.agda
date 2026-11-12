@@ -36,7 +36,7 @@ record World (Family Key Value RequestId Request Result : Set) : Set where
         receipts : RequestId → Maybe (Receipt Family Request Result)
 
 -- Ownership of request and result content is an independent semantic input.
--- Receipt metadata must cover it. The dispatcher must bind these inputs to
+-- Receipt metadata must match it. The dispatcher must bind these inputs to
 -- the agreed semantics rather than accepting operation-chosen predicates.
 WellFormed : ∀ {Family Key Value RequestId Request Result} →
   (Request → Family → Set) → (Result → Family → Set) →
@@ -49,9 +49,10 @@ WellFormed {Family} {Key} {Value} requestOwns resultOwns world =
     target ∈ Entry.installationReferences entry → Σ Value (λ targetValue →
       World.installationData world target ≡ just targetValue)) ×
   ((∀ id owners request family → World.receipts world id ≡ just (active owners request) →
-      requestOwns request family → family ∈ owners) ×
+      (requestOwns request family → family ∈ owners) × (family ∈ owners → requestOwns request family)) ×
    (∀ id owners request result family → World.receipts world id ≡ just (completed owners request result) →
-      (requestOwns request family ⊎ resultOwns result family) → family ∈ owners)))
+      ((requestOwns request family ⊎ resultOwns result family) → family ∈ owners) ×
+      (family ∈ owners → (requestOwns request family ⊎ resultOwns result family)))))
 
 -- These predicates are fixed by the outcome model, not by a removal script.
 -- Installation records and receipt contents can themselves belong to a family.

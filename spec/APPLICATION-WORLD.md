@@ -14,8 +14,8 @@ logical state: the future storage correspondence must show they include every
 real reference. The type checker does not inspect an opaque payload and cannot
 establish that correspondence by itself.
 
-Receipt ownership must cover independently defined ownership of the request and
-result. The forgetting and preservation goals use independent ownership of
+Receipt ownership must match independently defined ownership of the request and
+result, with neither missing nor unrelated owners. The forgetting and preservation goals use independent ownership of
 installation values, requests and results directly, rather than trusting the
 receipt owner list. Issue #51 must bind those definitions to fixed operation
 semantics rather than allowing an operation to choose weaker ones.
