@@ -28,6 +28,7 @@ import Muninn.Connection
 import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
+import Muninn.Workset
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
 import Muninn.OwnedState
