@@ -132,7 +132,7 @@ IntentInput continueRequest = ContinueInput
 data Job : Set where
   preparePublic prepareFamily prepareGraph fleetScan discoverCheckouts observeCheckout : Job
   reconcileFamily reconcileCheckout watchBatch analyzeFile publishCheckout embedCode embedNote : Job
-  reclaimExcluded reclaimRetired handoff appendLog pruneLogs flushDiagnostics : Job
+  reclaimExcluded reclaimRetired handoff recoverOperation recordUsage appendLog pruneLogs flushDiagnostics : Job
 
 -- Fleet work may involve several families. The internal owner list identifies
 -- every family whose data the operation records; it is not a wire argument.
@@ -153,6 +153,12 @@ record FileJob : Set where
         path : FilePath
         version : Maybe VersionId
 
+record UsageInput : Set where
+  field tool : String
+        family : Maybe FamilyId
+        durationMilliseconds : ℕ
+        resultCount : Maybe ℕ
+
 JobInput : Job → Set
 JobInput preparePublic = OperationId × BootstrapConfig
 JobInput prepareFamily = FamilyJob
@@ -170,6 +176,8 @@ JobInput embedNote = FamilyJob × KnowledgeId
 JobInput reclaimExcluded = FamilyJob
 JobInput reclaimRetired = FamilyJob
 JobInput handoff = FamilyJob
+JobInput recoverOperation = OperationId
+JobInput recordUsage = UsageInput
 JobInput appendLog = OperationId × String
 JobInput pruneLogs = OperationId × ℕ
 JobInput flushDiagnostics = OperationId

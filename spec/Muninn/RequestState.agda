@@ -10,7 +10,7 @@ open import Data.Unit using (⊤)
 import Muninn.Worktree as W
 import Muninn.CatalogInputs as C
 import Muninn.OperationCatalog as O
-import Muninn.Dialogue as D
+import Muninn.RequestDialogue as D
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
 open import Relation.Nullary using (Dec; yes; no; ¬_)
 open import Data.Empty using (⊥; ⊥-elim)
@@ -74,6 +74,8 @@ requestId (jobMeaning C.embedNote (family , note)) = just (C.FamilyJob.operation
 requestId (jobMeaning C.reclaimExcluded input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.reclaimRetired input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.handoff input) = just (C.FamilyJob.operationId input)
+requestId (jobMeaning C.recoverOperation input) = nothing
+requestId (jobMeaning C.recordUsage input) = nothing
 requestId (jobMeaning C.appendLog (id , text)) = just id
 requestId (jobMeaning C.pruneLogs (id , duration)) = just id
 requestId (jobMeaning C.flushDiagnostics input) = just input
@@ -122,6 +124,8 @@ requestOwner (jobMeaning C.embedNote (family , note)) = just (C.repositoryOwner 
 requestOwner (jobMeaning C.reclaimExcluded input) = just (C.repositoryOwner (C.FamilyJob.family input))
 requestOwner (jobMeaning C.reclaimRetired input) = just (C.repositoryOwner (C.FamilyJob.family input))
 requestOwner (jobMeaning C.handoff input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.recoverOperation input) = nothing
+requestOwner (jobMeaning C.recordUsage input) = nothing
 requestOwner (jobMeaning C.appendLog (id , text)) = just (C.installationOwner)
 requestOwner (jobMeaning C.pruneLogs (id , duration)) = just (C.installationOwner)
 requestOwner (jobMeaning C.flushDiagnostics input) = just (C.installationOwner)
