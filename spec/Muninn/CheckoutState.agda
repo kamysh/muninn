@@ -104,3 +104,61 @@ module Model (Artifact : Set) where
   excludedNotPending policy Settled before observations path excluded rewrite excluded = refl
   excludedNotPending policy Operating before observations path excluded rewrite excluded = refl
   excludedNotPending policy Conflicted before observations path excluded rewrite excluded = refl
+
+-- A policy is applied to the selected storage view even while Git prevents
+-- publication of a replacement snapshot. This changes visibility, not the
+-- retained snapshot or its graph.
+module Stored where
+  open import Muninn.Worktree using (FileEntry; Baselines; CheckoutId)
+  import Muninn.Storage as Storage
+  import Muninn.GraphMembership as Graph
+  open import Data.Product using (proj₁; proj₂; _,_)
+  open import Data.Empty using (⊥)
+  module Files = Model FileEntry
+
+  visible : (FilePath → Bool) → ∀ {baselines : Baselines} →
+    Storage.World baselines → CheckoutId → FilePath → Maybe FileEntry
+  visible policy world checkout path =
+    Files.select (policy path) (Storage.viewsOf world checkout path)
+
+  excludedNotVisible : ∀ policy {baselines} (world : Storage.World baselines) checkout path →
+    policy path ≡ false → visible policy world checkout path ≡ nothing
+  excludedNotVisible policy world checkout path excluded rewrite excluded = refl
+
+  includedUsesStoredView : ∀ policy {baselines} (world : Storage.World baselines) checkout path →
+    policy path ≡ true → visible policy world checkout path ≡ Storage.viewsOf world checkout path
+  includedUsesStoredView policy world checkout path included rewrite included = refl
+
+  -- The same policy is applied before and after a blocked publication; the
+  -- entire stored checkout, including its graph, remains the old snapshot.
+  blockedPublicationKeepsVisibility : ∀ {baselines} policy eq required ledger schemas artifacts families target git candidate
+    (world : Storage.World baselines) ready valid →
+    Muninn.IndexFsm.GitBlocked git → ∀ selected path →
+    visible policy (Storage.publish eq required ledger schemas artifacts families target git candidate world ready valid) selected path ≡
+    visible policy world selected path
+  blockedPublicationKeepsVisibility policy eq required ledger schemas artifacts families target git candidate world ready valid blocked selected path
+    rewrite Storage.publicationWhileBlockedRetains eq required ledger schemas artifacts families target git candidate world ready valid blocked selected = refl
+
+  excludedCannotBeSource : ∀ policy {baselines} (world : Storage.World baselines) checkout
+    {store members family ref} (result : Graph.SelectedEdge store members family (visible policy world checkout) ref) →
+    let path = Graph.SymbolOccurrence.path (Graph.GraphEdge.source (Graph.SelectedEdge.edge result)) in
+    policy path ≡ false → ⊥
+  excludedCannotBeSource policy world checkout result excluded
+    with proj₁ (Graph.SelectedEdge.visible result)
+  ... | entry , present , version with excludedNotVisible policy world checkout _ excluded
+  ... | absent rewrite absent = impossible present
+    where
+    impossible : ∀ {A : Set} {value : A} → nothing ≡ just value → ⊥
+    impossible ()
+
+  excludedCannotBeTarget : ∀ policy {baselines} (world : Storage.World baselines) checkout
+    {store members family ref} (result : Graph.SelectedEdge store members family (visible policy world checkout) ref) →
+    let path = Graph.SymbolOccurrence.path (Graph.GraphEdge.target (Graph.SelectedEdge.edge result)) in
+    policy path ≡ false → ⊥
+  excludedCannotBeTarget policy world checkout result excluded
+    with proj₂ (Graph.SelectedEdge.visible result)
+  ... | entry , present , version with excludedNotVisible policy world checkout _ excluded
+  ... | absent rewrite absent = impossible present
+    where
+    impossible : ∀ {A : Set} {value : A} → nothing ≡ just value → ⊥
+    impossible ()

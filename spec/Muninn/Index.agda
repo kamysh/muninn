@@ -13,6 +13,7 @@ module Muninn.Index where
 open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
+import Muninn.CheckoutState as CheckoutState
 open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool   using (Bool; true; false)
 open import Data.List   using (List)
