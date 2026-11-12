@@ -350,3 +350,12 @@ reachability; a stored snapshot is not itself a root. The model states uniquenes
 and checkout agreement, and preserves cleanup/history laws with the corrected
 references. See [current views](CURRENT-VIEWS.md). Fresh-view construction,
 publication and closed-catalog enforcement remain under #84.
+
+## Filtered snapshot preparation
+
+`SnapshotPreparation` reads an actual source snapshot, allocates inside the
+transaction and inserts its independently specified filtered copy before
+invoking the publication continuation. The copy is canonical in the resulting
+store; original records, receipts and current-view invariants are preserved.
+See [snapshot preparation](SNAPSHOT-PREPARATION.md). Association replacement,
+receipt sealing and full lifecycle assembly remain under #84.
