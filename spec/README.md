@@ -89,3 +89,5 @@ an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
 
 Database specifies the shared logical transaction semantics. Its correspondence to Rust and PostgreSQL is a separate obligation.
+
+Recovery defines the shared interruption and retry contract. See RECOVERY.md for its environment and dispatcher boundaries.
