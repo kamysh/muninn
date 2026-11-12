@@ -25,6 +25,8 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.KnowledgeState
+import Muninn.NoteRequests
 import Muninn.RequestState
 import Muninn.Dialogue
 import Muninn.OperationCatalog
