@@ -152,6 +152,10 @@ with Rust or database transactions.
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
 
+## Fair scheduling
+
+`FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.
+
 ## Index work control
 
 `IndexWorkControl` separates registration from explicit first-start authorization. It describes accepted work surviving client disconnection, pause (including Ctrl-C) and resume preserving progress, and cancellation removing the work while keeping committed results. The cleanup is modeled as part of cancellation; correspondence to runtime effects remains a separate obligation.
