@@ -23,6 +23,7 @@ record OperationId : Set where
 data Owner : Set where
   installationOwner : Owner
   repositoryOwner : FamilyId → Owner
+  repositoriesOwner : List FamilyId → Owner
 
 record Mutation (A : Set) : Set where
   field operationId : OperationId
@@ -136,6 +137,12 @@ data Job : Set where
   reconcileFamily reconcileCheckout watchBatch analyzeFile publishCheckout embedCode embedNote : Job
   reclaimExcluded reclaimRetired handoff appendLog pruneLogs flushDiagnostics : Job
 
+-- Fleet work may involve several families. The internal owner list identifies
+-- every family whose data the operation records; it is not a wire argument.
+record FleetJob : Set where
+  field operationId : OperationId
+        families : List FamilyId
+
 record FamilyJob : Set where
   field operationId : OperationId
         family : FamilyId
@@ -153,7 +160,7 @@ JobInput : Job → Set
 JobInput preparePublic = OperationId × BootstrapConfig
 JobInput prepareFamily = FamilyJob
 JobInput prepareGraph = FamilyJob × Maybe CheckoutId
-JobInput fleetScan = OperationId
+JobInput fleetScan = FleetJob
 JobInput discoverCheckouts = FamilyJob
 JobInput observeCheckout = CheckoutJob
 JobInput reconcileFamily = FamilyJob
