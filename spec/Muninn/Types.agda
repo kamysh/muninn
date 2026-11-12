@@ -9,7 +9,7 @@ open import Data.List   using (List)
 open import Data.Bool   using (Bool; true; false)
 open import Data.Maybe  using (Maybe)
 open import Data.Nat    using (ℕ)
-open import Relation.Binary.PropositionalEquality using (_≡_; _≢_)
+open import Relation.Binary.PropositionalEquality using (_≡_)
 
 record UUID : Set where
   field value : String
@@ -27,9 +27,7 @@ record LineRange : Set where
   field start : ℕ
         end   : ℕ
 
--- The tier a chunk belongs to. First-party source is indexed at full weight and
--- embedded eagerly; vendored dependency code is down-weighted in search and
--- embedded lazily by the daemon. See Muninn.Config.classify.
+-- The tier a chunk belongs to. Either tier can publish text before vectors.
 data Tier : Set where
   Tier1 : Tier   -- first-party source
   Tier2 : Tier   -- vendored dependency
@@ -37,8 +35,8 @@ data Tier : Set where
 -- A chunk's embedding lifecycle state.
 data EmbeddingState : Set where
   Embedded : EmbeddingState   -- vector present
-  Pending  : EmbeddingState   -- Tier-2 chunk awaiting daemon backfill (full-text only)
-  Absent   : EmbeddingState   -- embedder returned empty (distinct from Pending)
+  Pending  : EmbeddingState   -- vector work is pending; text can be available
+  Absent   : EmbeddingState   -- unavailable; work may be retried
 
 -- A contiguous slice of a source file with an optional embedding vector.
 record Chunk : Set where
@@ -63,9 +61,3 @@ record Repo : Set where
                                                -- (the lock itself is a session advisory lock, not a column)
         paused            : Bool               -- `muninn pause` set this; the daemon skips paused
                                                -- repos (no reindex, no watcher) without dropping data
-
--- A Tier-1 chunk is always eagerly embedded: only Tier 2 may defer (Pending).
--- The foreground indexer must uphold this — it never leaves a first-party chunk
--- awaiting backfill.
-Tier1NeverPending : Chunk → Set
-Tier1NeverPending c = Chunk.tier c ≡ Tier1 → Chunk.embeddingState c ≢ Pending

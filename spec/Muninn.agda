@@ -28,6 +28,7 @@ import Muninn.SymlinkSelection
 import Muninn.Connection
 import Muninn.ExclusionAcceptance
 import Muninn.Continuation
+import Muninn.StagedContent
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
 import Muninn.NoteRequests
