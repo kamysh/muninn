@@ -25,6 +25,7 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.Continuation
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

@@ -87,3 +87,13 @@ Do not add a postulate, weaken a guard or substitute a concrete example simply
 to make a proof pass. A behavior or architecture change needs explicit agreement;
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
+
+## Continuation state
+
+`Muninn.Continuation` describes an idle continuation, a running call, a
+request to restart, and completion. Starting a later page requires the original
+view to be available and valid. Each continued page is a prefix of the
+remaining ordering, and entries carry eligibility evidence. Only a running call
+holds the view in this model. The interpretation of availability, validity,
+eligibility and holds must be connected to the actual stored views and
+dispatcher; this module alone does not prove Rust or database correspondence.
