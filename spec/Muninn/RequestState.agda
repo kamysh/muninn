@@ -5,7 +5,9 @@ module Muninn.RequestState where
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.List using (List; []; _∷_)
 open import Data.String using (String)
-open import Data.Product using (_,_)
+open import Data.Product using (Σ; _,_; proj₁)
+open import Data.Unit using (⊤)
+import Muninn.Worktree as W
 import Muninn.CatalogInputs as C
 import Muninn.OperationCatalog as O
 import Muninn.Dialogue as D
@@ -70,10 +72,92 @@ requestId (jobMeaning C.embedNote (family , note)) = just (C.FamilyJob.operation
 requestId (jobMeaning C.reclaimExcluded input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.reclaimRetired input) = just (C.FamilyJob.operationId input)
 requestId (jobMeaning C.handoff input) = just (C.FamilyJob.operationId input)
-requestId (jobMeaning C.recoverOperation input) = just input
 requestId (jobMeaning C.appendLog (id , text)) = just id
 requestId (jobMeaning C.pruneLogs (id , duration)) = just id
 requestId (jobMeaning C.flushDiagnostics input) = just input
+
+-- Detailed receipts retain a resolved logical owner. The compact used-ID
+-- marker carries no owner or request content.
+requestOwner : Meaning → Maybe C.Owner
+requestOwner (userMeaning C.replaceGlobal input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.applyPolicy input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.register input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.start input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.reindex input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.pause input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.resume input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.cancel input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.unregister input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.forget input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.recreateIndex input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.convertDirectory input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.writeNote input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.deleteNote input) = just (C.Mutation.owner input)
+requestOwner (userMeaning C.inspectGlobal input) = nothing
+requestOwner (userMeaning C.inspectPolicy input) = nothing
+requestOwner (userMeaning C.checkPolicy input) = nothing
+requestOwner (userMeaning C.preflight input) = nothing
+requestOwner (userMeaning C.status input) = nothing
+requestOwner (userMeaning C.usage input) = nothing
+requestOwner (userMeaning C.searchStructure input) = nothing
+requestOwner (userMeaning C.searchNotes input) = nothing
+requestOwner (userMeaning C.listNotes input) = nothing
+requestOwner (userMeaning C.continueRequest input) = nothing
+requestOwner (userMeaning (C.searchCode mode) input) = nothing
+requestOwner (jobMeaning C.preparePublic (id , config)) = just (C.installationOwner)
+requestOwner (jobMeaning C.prepareFamily input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.prepareGraph (family , checkout)) = just (C.repositoryOwner (C.FamilyJob.family family))
+requestOwner (jobMeaning C.fleetScan input) = just (C.installationOwner)
+requestOwner (jobMeaning C.discoverCheckouts input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.observeCheckout input) = just (C.repositoryOwner (C.FamilyJob.family (C.CheckoutJob.parent input)))
+requestOwner (jobMeaning C.reconcileFamily input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.reconcileCheckout input) = just (C.repositoryOwner (C.FamilyJob.family (C.CheckoutJob.parent input)))
+requestOwner (jobMeaning C.watchBatch (family , paths)) = just (C.repositoryOwner (C.FamilyJob.family family))
+requestOwner (jobMeaning C.analyzeFile input) = just (C.repositoryOwner (C.FamilyJob.family (C.CheckoutJob.parent (C.FileJob.parent input))))
+requestOwner (jobMeaning C.publishCheckout input) = just (C.repositoryOwner (C.FamilyJob.family (C.CheckoutJob.parent input)))
+requestOwner (jobMeaning C.embedCode (family , version)) = just (C.repositoryOwner (C.FamilyJob.family family))
+requestOwner (jobMeaning C.embedNote (family , note)) = just (C.repositoryOwner (C.FamilyJob.family family))
+requestOwner (jobMeaning C.reclaimExcluded input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.reclaimRetired input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.handoff input) = just (C.repositoryOwner (C.FamilyJob.family input))
+requestOwner (jobMeaning C.appendLog (id , text)) = just (C.installationOwner)
+requestOwner (jobMeaning C.pruneLogs (id , duration)) = just (C.installationOwner)
+requestOwner (jobMeaning C.flushDiagnostics input) = just (C.installationOwner)
+
+reindexOwner : C.ReindexTarget → C.Owner
+reindexOwner (C.foregroundIndex target) = C.repositoryOwner (C.FamilyTarget.expectedFamily target)
+reindexOwner (C.detachedIndex target) = C.repositoryOwner (C.FamilyTarget.expectedFamily target)
+reindexOwner C.allRegistered = C.installationOwner
+
+-- The internal owner must agree with the typed target before admission.
+-- Registration additionally needs its resolved family binding from #32.
+ownerMatches : Meaning → Set
+ownerMatches (userMeaning C.replaceGlobal input) = C.Mutation.owner input ≡ (C.installationOwner)
+ownerMatches (userMeaning C.applyPolicy input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.PolicyTarget.target (proj₁ (C.Mutation.input input)))))
+ownerMatches (userMeaning C.start input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.PolicyTarget.target (C.Mutation.input input))))
+ownerMatches (userMeaning C.reindex input) = C.Mutation.owner input ≡ (reindexOwner (C.Mutation.input input))
+ownerMatches (userMeaning C.pause input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
+ownerMatches (userMeaning C.resume input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
+ownerMatches (userMeaning C.cancel input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (proj₁ (C.Mutation.input input))))
+ownerMatches (userMeaning C.unregister input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
+ownerMatches (userMeaning C.forget input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
+ownerMatches (userMeaning C.recreateIndex input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (proj₁ (C.Mutation.input input))))
+ownerMatches (userMeaning C.convertDirectory input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.Mutation.input input)))
+ownerMatches (userMeaning C.writeNote input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input input))))
+ownerMatches (userMeaning C.deleteNote input) = C.Mutation.owner input ≡ (C.repositoryOwner (C.FamilyTarget.expectedFamily (proj₁ (C.Mutation.input input))))
+ownerMatches (userMeaning C.register input) = Σ W.FamilyId (λ family → C.Mutation.owner input ≡ C.repositoryOwner family)
+ownerMatches (userMeaning C.inspectGlobal input) = ⊤
+ownerMatches (userMeaning C.inspectPolicy input) = ⊤
+ownerMatches (userMeaning C.checkPolicy input) = ⊤
+ownerMatches (userMeaning C.preflight input) = ⊤
+ownerMatches (userMeaning C.status input) = ⊤
+ownerMatches (userMeaning C.usage input) = ⊤
+ownerMatches (userMeaning C.searchStructure input) = ⊤
+ownerMatches (userMeaning C.searchNotes input) = ⊤
+ownerMatches (userMeaning C.listNotes input) = ⊤
+ownerMatches (userMeaning C.continueRequest input) = ⊤
+ownerMatches (userMeaning (C.searchCode mode) input) = ⊤
+ownerMatches (jobMeaning job input) = ⊤
 
 module Model (Reply : Set)
   (sameId : (a b : Id) → Dec (a ≡ b))
@@ -83,6 +167,11 @@ module Model (Reply : Set)
     active : Meaning → Entry
     completed : Meaning → Reply → Entry
     used : Entry
+
+  entryOwner : Entry → Maybe C.Owner
+  entryOwner (active meaning) = requestOwner meaning
+  entryOwner (completed meaning result) = requestOwner meaning
+  entryOwner used = nothing
 
   Ledger : Set
   Ledger = Id → Maybe Entry
@@ -193,7 +282,8 @@ module Model (Reply : Set)
   -- The receipt and the operation outcome are committed in one transition.
   -- Each operation still needs its own independent outcome proof.
   data Step {Data : Set} : Event → State Data → State Data → Set where
-    admit : ∀ {dataState ledger id meaning} → requestId meaning ≡ just id → ledger id ≡ nothing →
+    admit : ∀ {dataState ledger id meaning owner} → requestId meaning ≡ just id →
+      requestOwner meaning ≡ just owner → ownerMatches meaning → ledger id ≡ nothing →
       Step (admission id meaning) (state dataState ledger) (state dataState (update id (active meaning) ledger))
     resume : ∀ {dataState ledger id meaning} → ledger id ≡ just (active meaning) →
       Step (resumption id meaning) (state dataState ledger) (state dataState ledger)
@@ -228,7 +318,7 @@ module Model (Reply : Set)
 
   safeStepPreservesData : ∀ {Data : Set} {event} {before after : State Data} →
     SafeEvent event → Step event before after → State.dataState after ≡ State.dataState before
-  safeStepPreservesData safeAdmission (admit matching absent) = refl
+  safeStepPreservesData safeAdmission (admit matching owned ownerValid absent) = refl
   safeStepPreservesData safeResumption (resume receipt) = refl
   safeStepPreservesData safeReplay (replayStep receipt) = refl
 
@@ -268,7 +358,15 @@ module Model (Reply : Set)
 
   admissionRequiresMatchingId : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (admission id meaning) before after → requestId meaning ≡ just id
-  admissionRequiresMatchingId (admit matchingId absent) = matchingId
+  admissionRequiresMatchingId (admit matchingId owned ownerValid absent) = matchingId
+
+  admissionHasOwner : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    Step (admission id meaning) before after → Σ C.Owner (λ owner → requestOwner meaning ≡ just owner)
+  admissionHasOwner (admit {owner = owner} matching owned ownerValid absent) = owner , owned
+
+  admissionOwnerMatches : ∀ {Data : Set} {before after : State Data} {id meaning} →
+    Step (admission id meaning) before after → ownerMatches meaning
+  admissionOwnerMatches (admit matching owned ownerValid absent) = ownerValid
 
   resumePreservesState : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (resumption id meaning) before after → after ≡ before
@@ -298,7 +396,7 @@ module Model (Reply : Set)
   admissionKeepsOther : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (admission id meaning) before after → ∀ other → ¬ (id ≡ other) →
     State.ledger after other ≡ State.ledger before other
-  admissionKeepsOther (admit {ledger = ledger} {id = id} {meaning = meaning} matchingId absent) other distinct =
+  admissionKeepsOther (admit {ledger = ledger} {id = id} {meaning = meaning} matchingId owned ownerValid absent) other distinct =
     updateOther id (active meaning) ledger other distinct
 
   completionKeepsOther : ∀ {Data : Set} {before after : State Data} {id meaning result} →
@@ -314,9 +412,24 @@ module Model (Reply : Set)
   justCannotBeNothing : ∀ {entry : Entry} → ¬ (just entry ≡ nothing)
   justCannotBeNothing ()
 
+  ledgerOwner : Ledger → Id → Maybe C.Owner
+  ledgerOwner ledger id with ledger id
+  ... | nothing = nothing
+  ... | just entry = entryOwner entry
+
+  retirementDropsOwner : ∀ {Data : Set} {before after : State Data} {id} →
+    Step (retirement id) before after → ledgerOwner (State.ledger after) id ≡ nothing
+  retirementDropsOwner step rewrite retirementKeepsMarker step = refl
+
+  noteAdmissionOwner : ∀ {Data : Set} {before after : State Data} {request} →
+    Step (admission (C.Mutation.operationId request) (userMeaning C.writeNote request)) before after →
+    C.Mutation.owner request ≡ C.repositoryOwner
+      (C.FamilyTarget.expectedFamily (C.NoteInput.target (C.Mutation.input request)))
+  noteAdmissionOwner step = admissionOwnerMatches step
+
   usedIdCannotBeAdmitted : ∀ {Data : Set} {before after : State Data} {id meaning} →
     State.ledger before id ≡ just used → ¬ Step (admission id meaning) before after
-  usedIdCannotBeAdmitted found (admit matchingId absent) = justCannotBeNothing (trans (sym found) absent)
+  usedIdCannotBeAdmitted found (admit matchingId owned ownerValid absent) = justCannotBeNothing (trans (sym found) absent)
 
   usedIsNotActive : ∀ {meaning} → ¬ (just used ≡ just (active meaning))
   usedIsNotActive ()
@@ -326,7 +439,7 @@ module Model (Reply : Set)
 
   usedMarkerPreserved : ∀ {Data : Set} {before after : State Data} {id event} →
     State.ledger before id ≡ just used → Step event before after → State.ledger after id ≡ just used
-  usedMarkerPreserved {id = target} found (admit {ledger = ledger} {id = changed} {meaning = meaning} matching absent)
+  usedMarkerPreserved {id = target} found (admit {ledger = ledger} {id = changed} {meaning = meaning} matching owned ownerValid absent)
     with sameId changed target
   ... | yes refl = ⊥-elim (justCannotBeNothing (trans (sym found) absent))
   ... | no distinct = found
