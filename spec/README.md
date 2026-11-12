@@ -131,6 +131,10 @@ to make a proof pass. A behavior or architecture change needs explicit agreement
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
 
+## File-size admission
+
+`FileLimits` specifies raw-byte limits and text-only coverage when structural analysis is unavailable. `IndexFileLimits` models a batch of already-selected files: files within the family limit proceed while oversized files receive guidance. The selection predicate is supplied by the separate selection specification; integration with the implementation remains to be verified.
+
 ## Exclusion acceptance
 
 `Muninn.ExclusionAcceptance` commits the new family policy, a fixed workset
@@ -143,6 +147,10 @@ with Rust or database transactions.
 ## Staged text and vectors
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
+
+## Index work control
+
+`IndexWorkControl` separates registration from explicit first-start authorization. It describes accepted work surviving client disconnection, pause (including Ctrl-C) and resume preserving progress, and cancellation removing the work while keeping committed results. The cleanup is modeled as part of cancellation; correspondence to runtime effects remains a separate obligation.
 
 ## Continuation state
 
@@ -380,6 +388,8 @@ remain. See [record allocation](RECORD-ALLOCATION.md). Current-view production
 and lifecycle integration remain under #84.
 
 ## Database access and request resumption
+
+`DatabaseStartup` models automatic reconnection and operation restart after transactional rollback. It retains configured bootstrap data and requires application migration and AGE graph readiness before an operation runs. The model does not establish correspondence with real migration boundaries or connection drivers.
 
 `DatabaseResumption` keeps known conversations responsive without a database
 transaction while access is unavailable, then resumes or replays actual saved
