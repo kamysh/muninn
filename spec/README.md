@@ -52,8 +52,11 @@ connect actual requests and prerequisites to these transitions; nonempty text
 alone does not prove that an explanation is useful. Issue #20 remains open.
 
 `RequestState` uses the closed catalog and complete typed operation inputs for
-request identity. It models admission, continuation, committed receipts and
-compact used-ID markers, and connects clarification to the conversation state.
+request identity. Admitted changes include an internally resolved owner that
+must match the typed target; compact used-ID markers retain no owner or request
+content. Registration still needs its resolved family binding (#32). It models
+admission, continuation and committed receipts, and connects clarification to
+the conversation state.
 The modeled request cannot execute with incomplete latest context or while an
 answer is pending, and the generic receipt path cannot complete arbitrary data
 changes. The later dispatcher must establish that reconstructed inputs express
