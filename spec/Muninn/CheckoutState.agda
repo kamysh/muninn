@@ -116,6 +116,20 @@ module Stored where
   open import Data.Empty using (⊥)
   module Files = Model FileEntry
 
+  -- Project the actual stored checkout and its pending work into the
+  -- reconciliation state; an uninitialized checkout has no published view.
+  project : ∀ {baselines : Baselines} → Storage.World baselines → CheckoutId →
+    (FilePath → Bool) → Files.State
+  project world checkout waiting with world checkout
+  ... | nothing = Files.state nothing waiting
+  ... | just snapshot = Files.state (just (Storage.viewsOf world checkout)) waiting
+
+  projectedViewIsStored : ∀ {baselines} (world : Storage.World baselines) checkout waiting path →
+    Files.previous (Files.State.published (project world checkout waiting)) path ≡ Storage.viewsOf world checkout path
+  projectedViewIsStored world checkout waiting path with world checkout in found
+  ... | nothing = refl
+  ... | just snapshot rewrite found = refl
+
   visible : (FilePath → Bool) → ∀ {baselines : Baselines} →
     Storage.World baselines → CheckoutId → FilePath → Maybe FileEntry
   visible policy world checkout path =
