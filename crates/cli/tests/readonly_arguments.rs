@@ -31,6 +31,7 @@ fn malformed_write_payloads_fail_before_loading_global_configuration() {
     for args in [
         vec!["config", "/unused", "--json", "--apply", "-"],
         vec!["add", "/unused", "--json", "--input", "-"],
+        vec!["start", "/unused", "--json", "--input", "-"],
     ] {
         let mut child = Command::new(env!("CARGO_BIN_EXE_muninn"))
             .args(args)

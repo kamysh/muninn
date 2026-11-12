@@ -5,13 +5,11 @@
 -- not derived from source files, and searched independently of code.
 module Muninn.Knowledge where
 
-open import Muninn.Float
 open import Muninn.Worktree using (FamilyId)
 open import Muninn.Types
 open import Data.String  using (String)
-open import Data.List    using (List; length)
+open import Data.List    using (List)
 open import Data.Maybe   using (Maybe)
-open import Data.Nat     using (ℕ; _≤_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Relation.Nullary                      using (¬_)
 open import Data.List.Membership.Propositional    using (_∈_)
@@ -43,16 +41,6 @@ NonEmptyBody item = ¬ (KnowledgeItem.body item ≡ "")
 record ValidKnowledgeItem (item : KnowledgeItem) : Set where
   field titleOk : NonEmptyTitle item
         bodyOk  : NonEmptyBody  item
-
--- ─── Search ───────────────────────────────────────────────────────────────────
-
-record KnowledgeResult : Set where
-  field item  : KnowledgeItem
-        score : Float
-
--- Search results must not exceed the requested limit.
-KnowledgeResultBound : (limit : ℕ) → List KnowledgeResult → Set
-KnowledgeResultBound limit results = length results ≤ limit
 
 -- ─── Family Scoping ──────────────────────────────────────────────────────────
 
