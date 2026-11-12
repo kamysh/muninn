@@ -35,6 +35,7 @@ import Muninn.OperationCatalog
 import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
+import Muninn.GeneralRecovery
 import Muninn.Workset
 import Muninn.PublicationVisibility
 import Muninn.ViewPublication

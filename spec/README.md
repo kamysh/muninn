@@ -133,6 +133,8 @@ rewrite the specification to fit it.
 
 Database specifies the shared logical transaction semantics. Its correspondence to Rust and PostgreSQL is a separate obligation.
 
+GeneralRecovery defines the shared interruption and retry contract. See RECOVERY.md for its environment and dispatcher boundaries.
+
 `CheckoutState` states per-file progress and policy-filtered visibility over stored checkout views. Connecting its reconciliation transition to storage publication and proving runtime correspondence remain open; this module alone does not establish those guarantees for Rust.
 
 ApplicationWorld describes logical ownership, reference invariants, and world-level outcomes. See APPLICATION-WORLD.md for the storage boundary. Runtime correspondence and dispatcher integration remain separate work.
