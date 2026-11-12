@@ -34,6 +34,7 @@ import Muninn.StagedContent
 import Muninn.ReusePolicy
 import Muninn.IndexWorkControl
 import Muninn.FairScheduling
+import Muninn.StatusReport
 import Muninn.LockOwnership
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
