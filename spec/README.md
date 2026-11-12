@@ -55,10 +55,10 @@ alone does not prove that an explanation is useful. Issue #20 remains open.
 request identity. It models admission, continuation, committed receipts and
 compact used-ID markers, and connects clarification to the conversation state.
 The modeled request cannot execute with incomplete latest context or while an
-answer is pending. The dispatcher must still establish that reconstructed
-inputs express the original task and that each operation meets its independent
-outcome; adapter normalization and Rust correspondence also remain outstanding.
-Issue #21 remains open until those connections are verified.
+answer is pending, and the generic receipt path cannot complete arbitrary data
+changes. The later dispatcher must establish that reconstructed inputs express
+the original task and each operation meets its independent outcome; adapter
+normalization and Rust correspondence also remain outstanding (#51–#52).
 
 ## Known model/runtime gaps
 
