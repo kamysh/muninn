@@ -98,11 +98,12 @@ oldResolve world slot added fresh source ref resolved = record
   ; rightKind = O.Resolves.rightKind resolved; rightOwner = O.Resolves.rightOwner resolved }
 
 insertAdmissible : ∀ world slot added → O.Admissible world → Fresh world slot → O.Placed added →
-  All (O.Resolves world (O.owner added)) (O.references (O.body added)) → O.Admissible (DB.write slot added world)
-insertAdmissible world slot added valid fresh placed resolved = record
+  All (O.Resolves world (O.owner added)) (O.references (O.body added)) → O.PrivateReaderReferences added → O.Admissible (DB.write slot added world)
+insertAdmissible world slot added valid fresh placed resolved privateRefs = record
   { unique = Storage.writeUnique slot added world (O.Admissible.unique valid)
   ; placed = placed ∷ O.deleteAll slot world (O.Admissible.placed valid)
-  ; sound = All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner added) ref proof) resolved ∷ O.deleteAll slot world shifted }
+  ; sound = All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner added) ref proof) resolved ∷ O.deleteAll slot world shifted
+  ; privateReaders = privateRefs ∷ O.deleteAll slot world (O.Admissible.privateReaders valid) }
   where
   shifted : All (O.SoundReferences (DB.write slot added world)) world
   shifted = All.map (λ {row} refs → All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner (proj₂ row)) ref proof) refs) (O.Admissible.sound valid)

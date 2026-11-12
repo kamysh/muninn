@@ -280,3 +280,12 @@ cleanup pass, then executes the existing reader transaction for the original
 request. Its shared script has a constructive completion proof and preserves
 saved task worksets. See [reader resumption](CLEANUP-RESUMPTION.md). Canonical
 view production, holder lifecycle and scheduling remain under #84.
+
+## Releasing completed readers
+
+`ReaderRelease` removes a completed search’s private reader record atomically,
+preserves indexed records and other holders, and proves retry idempotence.
+`ReaderReleaseCleanup` executes release followed by productive cleanup and
+proves the full cleanup outcome when other pending use has ended. The shared
+store and admission enforce private reader identities. See [reader release](READER-RELEASE.md).
+Lifecycle scheduling and current-view production remain under #84.

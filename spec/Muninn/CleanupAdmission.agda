@@ -116,11 +116,12 @@ module Model (excluded : List String → String → Bool) where
 
     CleanRef : O.World → O.Reference → Set
     CleanRef world ref = C.At world (O.target ref) (λ value → O.kind (O.body value) ≡ O.expected ref ×
-      (O.MayReference (E.targetOwner selection) (O.owner value) × Canonical world value))
+      (O.MayReference (E.targetOwner selection) (O.owner value) × (Canonical world value × O.expected ref Relation.Binary.PropositionalEquality.≢ O.activeReaderK)))
 
     cleanRef? : ∀ world ref → Dec (CleanRef world ref)
     cleanRef? world ref = C.at? world (O.target ref) _ (λ value → C.both (C.kindEqual (O.kind (O.body value)) (O.expected ref))
-      (C.both (C.mayReference? (E.targetOwner selection) (O.owner value)) (canonical? world value)))
+      (C.both (C.mayReference? (E.targetOwner selection) (O.owner value)) (C.both (canonical? world value)
+        (Effects.not? (C.kindEqual (O.expected ref) O.activeReaderK)))))
 
     reader : List O.Reference → String → O.Record
     reader refs payload = O.recordOf (E.targetOwner selection) (O.activeReader refs payload)
@@ -207,7 +208,8 @@ module Model (excluded : List String → String → Bool) where
     admissionAdmissible slot refs payload ready replan world valid with effects slot refs payload ready replan world
     ... | inj₁ same = subst O.Admissible (sym same) valid
     ... | inj₂ (fresh , resolved , clean , allowed , same) = subst O.Admissible (sym same)
-      (Insert.insertAdmissible world slot (reader refs payload) valid fresh O.local resolved)
+      (Insert.insertAdmissible world slot (reader refs payload) valid fresh O.local resolved
+        (All.map (λ {ref} (value , found , kind , owner , canonical , privateRefs) → privateRefs) clean))
 
     admitted : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world → Insert.Fresh world slot →
       DB.lookup slot (proj₂ (DB.execute (admit slot refs payload ready replan) world)) ≡ just (reader refs payload) →
