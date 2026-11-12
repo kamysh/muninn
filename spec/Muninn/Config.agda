@@ -132,11 +132,16 @@ record PolicyDefaults : Set where
   field defaultsRevision : String
         rules : IndexConfig
 
+record FileLimits : Set where
+  field selectedBytes : ℕ
+        structuralBytes : ℕ
+
 record FamilyPolicy : Set where
   field family : FamilyId
         name : String
         watcher : WatcherConfig
         index : IndexConfig
+        limits : FileLimits
         embeddings : EmbeddingSelection
         revision : ℕ
         defaults : PolicyDefaults

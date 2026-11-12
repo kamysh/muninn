@@ -26,6 +26,7 @@ module Muninn where
 import Muninn.SymlinkTraversal
 import Muninn.SymlinkSelection
 import Muninn.Connection
+import Muninn.ExclusionAcceptance
 import Muninn.Continuation
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
