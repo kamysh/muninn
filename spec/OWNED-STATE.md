@@ -104,7 +104,8 @@ one record at a time.
   configured log directory without checking the Muninn filename. The formal
   log-maintenance outcome must preserve files not owned by Muninn. This PR
   records the discrepancy; it does not repair that runtime behavior.
-- Per-kind metadata is retained as uninterpreted payload here. Identity,
+- Remaining per-kind metadata is retained as uninterpreted payload here. Saved
+  policy/default contents are typed by [stored-policy resolution](STORED-POLICY.md). Identity,
   selection, transitions, ranking and operation-specific validity are subsequent
   issues; this ownership/reference invariant is not the complete product spec.
 - The closed dispatcher and Rust/SQL projection must require this complete world
@@ -136,3 +137,12 @@ current structural snapshot. Snapshot contents are separate from the current-pub
 being stored does not independently make a version current. The domain invariant,
 reachability laws and pending publication integration are specified in
 [current views](CURRENT-VIEWS.md).
+
+## Typed stored policy
+
+Saved defaults use the existing `PolicyDefaults`. Policy versions carry their
+typed family identity, revision and `PolicyDraft`, and keep the original strong
+defaults reference. The current pointer, version and defaults resolve from the
+same owned world; see [stored-policy resolution](STORED-POLICY.md). Existing
+ownership/reference laws do not alone establish immutable policy histories or
+external locator-to-owner routing.

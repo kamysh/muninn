@@ -19,6 +19,8 @@ import Muninn.Database
 import Muninn.Recovery
 import Muninn.ReceiptTypes as Receipt
 import Muninn.CatalogInputs as Input
+import Muninn.Config as Config
+import Muninn.Worktree as Worktree
 import Data.List.Relation.Unary.All as All
 
 data Owner : Set where
@@ -51,11 +53,18 @@ record CheckoutInfo : Set where
   field retired paused gitSuspended : Bool
         metadata : String
 
+record PolicyVersionInfo : Set where
+  constructor policyVersionInfo
+  field familyId : Worktree.FamilyId
+        revision : ℕ
+        contents : Input.PolicyDraft
+
 data Body : Set where
   registration : RegistrationInfo → Body
-  creationIntent defaults : String → Body
+  creationIntent : String → Body
+  defaults : Config.PolicyDefaults → Body
   checkout : CheckoutInfo → Body
-  policyVersion : ℕ → String → Body
+  policyVersion : ℕ → PolicyVersionInfo → Body
   currentPolicy : ℕ → Body
   note : String → Body
   notePosting noteVector : ℕ → String → Body
