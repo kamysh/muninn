@@ -32,6 +32,7 @@ import Muninn.Continuation
 import Muninn.IndexWorkControl
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
+import Muninn.ProfileRecreation
 import Muninn.NoteRequests
 import Muninn.RequestState
 import Muninn.Dialogue

@@ -148,6 +148,10 @@ with Rust or database transactions.
 
 `IndexWorkControl` separates registration from explicit first-start authorization. It describes accepted work surviving client disconnection, pause (including Ctrl-C) and resume preserving progress, and cancellation removing the work while keeping committed results. The cleanup is modeled as part of cancellation; correspondence to runtime effects remains a separate obligation.
 
+## Embedding profile recreation
+
+`ProfileRecreation` treats a profile change as an atomic replacement of derived data. It preserves repository identity, settings and curated notes, removes the affected code and note vectors, and leaves other families unchanged. A repeat after completion preserves rebuilt data. Storage and implementation correspondence remain separate obligations.
+
 ## Continuation state
 
 `Muninn.Continuation` describes an idle continuation, a running call, a
