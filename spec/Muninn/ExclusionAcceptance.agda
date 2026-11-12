@@ -4,7 +4,8 @@ module Muninn.ExclusionAcceptance where
 open import Data.List using (List; _∷_; map)
 open import Data.Maybe using (just; nothing)
 open import Data.Nat using (ℕ)
-open import Data.Product using (_×_; proj₁; proj₂)
+open import Data.Sum using (_⊎_; inj₁; inj₂)
+open import Data.Product using (_×_; proj₁; proj₂; ∃-syntax; _,_)
 open import Relation.Nullary using (Dec; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
 import Muninn.Config as Config
@@ -104,3 +105,15 @@ module Model (Record Reply : Set)
     accepted-policy : ∀ s input p →
       Policy.PolicyState.current (State.policy (accept s input p)) ≡ p
     accepted-policy s input p = refl
+
+    -- Interruption before the atomic commit keeps the previous world.
+    -- Interruption after commit observes the complete accepted world.
+    data Attempt (input : PolicyInput) : State → State → Set where
+      before-commit : ∀ {s} → Attempt input s s
+      after-commit : ∀ {s t} → Step input s t → Attempt input s t
+
+    no-partial-acceptance : ∀ {input before after} →
+      Attempt input before after →
+      (after ≡ before) ⊎ (∃[ p ] (after ≡ accept before input p))
+    no-partial-acceptance before-commit = inj₁ refl
+    no-partial-acceptance (after-commit (accepted {p = p} guard valid draft owner absent)) = inj₂ (p , refl)
