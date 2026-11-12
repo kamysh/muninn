@@ -87,3 +87,5 @@ Do not add a postulate, weaken a guard or substitute a concrete example simply
 to make a proof pass. A behavior or architecture change needs explicit agreement;
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
+
+Database specifies the shared logical transaction semantics. Its correspondence to Rust and PostgreSQL is a separate obligation.
