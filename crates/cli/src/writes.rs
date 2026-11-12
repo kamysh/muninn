@@ -78,7 +78,21 @@ pub async fn add(path: &Path, with_input: bool) -> policy::Result<Value> {
     Ok(data)
 }
 
-pub async fn start(path: &Path, input: bool) -> policy::Result<Value> {
+/// Feedback only: these events do not change start authorization or indexing.
+pub enum StartProgress<'a> {
+    Phase(&'static str),
+    File {
+        done: usize,
+        total: usize,
+        path: &'a Path,
+    },
+}
+
+pub async fn start(
+    path: &Path,
+    input: bool,
+    progress: impl Fn(StartProgress<'_>),
+) -> policy::Result<Value> {
     let request = if input {
         let mut text = String::new();
         std::io::stdin()
@@ -88,11 +102,16 @@ pub async fn start(path: &Path, input: bool) -> policy::Result<Value> {
     } else {
         None
     };
+    progress(StartProgress::Phase("Loading configuration…"));
     let cfg = GlobalConfig::load()
         .map_err(|_| error("bootstrap_config_error", "cannot load global configuration"))?;
+    progress(StartProgress::Phase("Connecting to the database…"));
     let mut client = db::connect(&cfg.database)
         .await
         .map_err(|_| error("database_error", "cannot connect to database"))?;
+    progress(StartProgress::Phase(
+        "Checking the selected repository and policy…",
+    ));
     let request = match request {
         Some(r) => r,
         None => {
@@ -107,16 +126,7 @@ pub async fn start(path: &Path, input: bool) -> policy::Result<Value> {
             }
         }
     };
-    start_configured(&mut client, &cfg, path, &request).await
-}
-
-pub async fn start_configured(
-    client: &mut tokio_postgres::Client,
-    cfg: &GlobalConfig,
-    path: &Path,
-    request: &policy::start::Request,
-) -> policy::Result<Value> {
-    start_configured_with_progress(client, cfg, path, request, |_, _, _| {}).await
+    start_configured_with_feedback(&mut client, &cfg, path, &request, progress).await
 }
 
 pub async fn start_configured_with_progress(
@@ -125,6 +135,21 @@ pub async fn start_configured_with_progress(
     path: &Path,
     request: &policy::start::Request,
     progress: impl Fn(usize, usize, &Path),
+) -> policy::Result<Value> {
+    start_configured_with_feedback(client, cfg, path, request, |event| {
+        if let StartProgress::File { done, total, path } = event {
+            progress(done, total, path);
+        }
+    })
+    .await
+}
+
+async fn start_configured_with_feedback(
+    client: &mut tokio_postgres::Client,
+    cfg: &GlobalConfig,
+    path: &Path,
+    request: &policy::start::Request,
+    progress: impl Fn(StartProgress<'_>),
 ) -> policy::Result<Value> {
     use muninn_core::{embeddings, pipeline, store};
     // Reject a stale/wrong family before requesting preemption. Authorization
@@ -143,12 +168,14 @@ pub async fn start_configured_with_progress(
         ));
     }
     // Foreground job lock is acquired before enabling daemon retries.
+    progress(StartProgress::Phase("Acquiring the indexing lock…"));
     let lock = match store::try_lock(&cfg.database, request.expected_family_id)
         .await
         .map_err(|_| error("database_error", "cannot acquire indexing lock"))?
     {
         Some(c) => c,
         None => {
+            progress(StartProgress::Phase("Another indexer is active; requesting a handover and waiting for the indexing lock…"));
             store::request_preempt(client, request.expected_family_id)
                 .await
                 .map_err(|_| error("database_error", "cannot request foreground indexing"))?;
@@ -161,6 +188,9 @@ pub async fn start_configured_with_progress(
     store::clear_preempt(&lock, request.expected_family_id)
         .await
         .map_err(|_| error("database_error", "cannot clear foreground request"))?;
+    progress(StartProgress::Phase(
+        "Checking authorization and preparing the index…",
+    ));
     let view = policy::start::authorize(client, path, request, cfg).await?;
     let context = policy::readonly::resolve(client, path).await?;
     let eff = policy::runtime::effective(cfg, &view);
@@ -168,6 +198,9 @@ pub async fn start_configured_with_progress(
         .await
         .map_err(|_| error("database_error", "cannot schedule indexing"))?;
     let backend = std::sync::Arc::from(embeddings::make_backend(&eff.embeddings));
+    progress(StartProgress::Phase(
+        "Indexing files and rebuilding relationships (file counts are per pass)…",
+    ));
     let result = pipeline::index_repo(
         client,
         view.family_id,
@@ -177,9 +210,10 @@ pub async fn start_configured_with_progress(
         view.dimension as usize,
         &eff.exclude,
         &eff.vendor,
-        progress,
+        |done, total, path| progress(StartProgress::File { done, total, path }),
     )
     .await;
+    progress(StartProgress::Phase("Releasing the indexing lock…"));
     let _ = store::unlock(&lock, view.family_id).await;
     let _ = store::notify_repos_changed(client).await;
     match result {
