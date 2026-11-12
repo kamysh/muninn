@@ -163,6 +163,10 @@ with Rust or database transactions.
 
 `RepositoryIdentity` distinguishes database identities from locations and Git/filesystem identity evidence. Confirmed moves preserve identity, uncertain associations require context, and explicit directory-to-Git conversion retains the registration. `RepositoryRegistration` models atomic registration, retry and isolation of other families. Runtime correspondence remains separate.
 
+## Retirement and reclamation
+
+`Retirement` requires 60 seconds of confirmed absence before retirement. Uncertain inspection is not absence; verified identity reactivates the registration. Retired index data is reclaimed as soon as the existing cleanup transaction establishes that it is unneeded and unprotected, without an additional retention period.
+
 ## Fair scheduling
 
 `FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.

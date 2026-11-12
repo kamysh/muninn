@@ -36,6 +36,7 @@ import Muninn.IndexWorkControl
 import Muninn.FairScheduling
 import Muninn.StatusReport
 import Muninn.LockOwnership
+import Muninn.Retirement
 import Muninn.RepositoryRegistration
 import Muninn.RepositoryIdentity
 import Muninn.ApplicationWorld

@@ -47,11 +47,14 @@ record RegistrationInfo : Set where
   constructor registrationInfo
   field retired legacyReadable : Bool
         metadata : String
+        missingSince : Maybe ℕ
+        identity : Maybe Worktree.FamilyId
 
 record CheckoutInfo : Set where
   constructor checkoutInfo
   field retired paused gitSuspended : Bool
         metadata : String
+        missingSince : Maybe ℕ
 
 record PolicyVersionInfo : Set where
   constructor policyVersionInfo
