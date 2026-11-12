@@ -31,7 +31,7 @@ not solely by the model's type check.
 | `Schema`, `Storage` | Application/graph roles, readiness evidence, family isolation and abstract publication/reference lifetimes |
 | `GraphMembership` | Selected-view symbol/edge membership and endpoint visibility; no compiler name-resolution proof |
 | `Config`, `Policy`, `Registration` | Bootstrap/policy separation, frozen defaults, revision guards, registration intent/retry and authorization preservation |
-| `IndexFsm`, `Index`, `Cli` | First-start and subsequent-work gates, retained views during blocked Git operations and abstract command intents |
+| `IndexFsm`, `Index`, `CheckoutState`, `Cli` | First-start and subsequent-work gates, checkout reconciliation, retained views during blocked Git operations and abstract command intents |
 | `Types`, `Embeddings`, `Knowledge` | Chunk/vector validity and knowledge-scoping contracts |
 | `AdvisoryLock`, `Concurrency` | Index exclusion/preemption and watcher coordination contracts |
 
@@ -130,6 +130,8 @@ Do not add a postulate, weaken a guard or substitute a concrete example simply
 to make a proof pass. A behavior or architecture change needs explicit agreement;
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
+
+`CheckoutState` states per-file progress and policy-filtered visibility over stored checkout views. Connecting its reconciliation transition to storage publication and proving runtime correspondence remain open; this module alone does not establish those guarantees for Rust.
 
 ApplicationWorld describes logical ownership, reference invariants, and world-level outcomes. See APPLICATION-WORLD.md for the storage boundary. Runtime correspondence and dispatcher integration remain separate work.
 ## Shared database effect semantics
