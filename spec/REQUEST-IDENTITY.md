@@ -45,7 +45,7 @@ The raw JSON parsers and Rust/CLI/MCP adapters are not proved by this module.
 They must implement the typed contract and its formatting-independent parsing
 through the adapter and correspondence work (#48, #49 and #52).
 
-Permanent used-ID markers and durable receipt/task transitions are #62.
-Parent #21 remains open for their integration with dialogue and admission.
+[Durable receipt transitions](RECEIPTS.md) and [identity-aware corrective
+admission](IDENTITY-ADMISSION.md) now integrate this normalized identity model.
 This slice does not change SQL, Rust, wire names, services or installation, and
 does not claim that runtime retry isolation has already been implemented.

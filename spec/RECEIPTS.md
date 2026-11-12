@@ -57,7 +57,8 @@ commit/abort sealing and every interruption boundary of a single atomic step.
 
 ## Remaining integration obligations
 
-Parent #21 must connect these transitions to admission and corrective dialogue.
+[Identity-aware admission](IDENTITY-ADMISSION.md) now connects these transitions
+to the corrective dialogue model.
 Each operation still owes its independent outcome, complete prerequisite and
 whole-world preservation proofs; the proof-requiring dispatcher is #51.
 Selecting `complete` does not itself certify the user-visible goal.

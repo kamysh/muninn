@@ -67,8 +67,9 @@ claim that a full process restart freezes every external or database resource.
 
 The shared catalog/schema must instantiate recognized fields, request matching,
 prerequisites, result types and outcome predicates independently of handlers.
-Identity validation, persistence lookup and receipt reuse are #21; concrete
-MCP/CLI/TUI admission and rendering are #48/#49; proof-requiring application
+[Identity-aware admission](IDENTITY-ADMISSION.md) connects identity validation,
+receipt lookup and replay to this protocol. Concrete MCP/CLI/TUI parsing,
+admission and rendering remain #48/#49; proof-requiring application
 dispatch and Rust correspondence remain #51/#52. Those layers must preserve the
 identity/provenance of recovered context and map real client/host events to the
 appropriate transition. Source references do not establish that integration.
