@@ -39,6 +39,13 @@ The historical migration test runs first on the empty fixture, before the
 remaining tests use the prepared public tables.
 Run `bash muninn-setup/test-persistence.sh` for the smaller persistence subset.
 Fixtures and their temporary files are created under `/var/tmp`.
+For the focused `muninn start` progress regression, run
+`bash muninn-setup/test-start-progress.sh` inside the dev shell. It uses the same
+guarded disposable database and checks live lock-wait feedback, Git and directory
+file progress, stored chunks, failures, and the unchanged JSON output contract.
+Its vendor-only fixtures do not request embeddings or download a model.
+Set `MUNINN_TEST_CLI` to an absolute executable path to run these same process
+checks against a staged release binary, for example after a static build.
 The runner mounts disposable credentials and configuration at the application's
 normal lookup paths inside the test processes only, including TUI reloads. It
 requires existing `~/.pgpass` and `~/.config` mount points; host files are unchanged.
