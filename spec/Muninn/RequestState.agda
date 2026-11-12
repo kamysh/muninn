@@ -229,25 +229,30 @@ module Model (Reply : Set)
   belongs? same family (C.repositoriesOwner targets) = member? same family targets
 
   forgetEntry : ((a b : W.FamilyId) → Dec (a ≡ b)) → W.FamilyId → Entry → Entry
-  forgetEntry same family entry with entryOwner entry
+  forgetEntry same family (active meaning) = active meaning
+  forgetEntry same family used = used
+  forgetEntry same family entry@(completed meaning result) with requestOwner meaning
   ... | nothing = entry
   ... | just owner with belongs? same family owner
   ...   | yes _ = used
   ...   | no _ = entry
 
-  forgottenReceiptIsMarker : ∀ same family entry owner → entryOwner entry ≡ just owner →
-    belongs family owner → forgetEntry same family entry ≡ used
-  forgottenReceiptIsMarker same family entry owner owned member with entryOwner entry | owned
+  forgottenReceiptIsMarker : ∀ same family meaning result owner → requestOwner meaning ≡ just owner →
+    belongs family owner → forgetEntry same family (completed meaning result) ≡ used
+  forgottenReceiptIsMarker same family meaning result owner owned member with requestOwner meaning | owned
   ... | .(just owner) | refl with belongs? same family owner
   ...   | yes _ = refl
   ...   | no absent = ⊥-elim (absent member)
 
-  unrelatedReceiptPreserved : ∀ same family entry owner → entryOwner entry ≡ just owner →
-    ¬ belongs family owner → forgetEntry same family entry ≡ entry
-  unrelatedReceiptPreserved same family entry owner owned unrelated with entryOwner entry | owned
+  unrelatedReceiptPreserved : ∀ same family meaning result owner → requestOwner meaning ≡ just owner →
+    ¬ belongs family owner → forgetEntry same family (completed meaning result) ≡ completed meaning result
+  unrelatedReceiptPreserved same family meaning result owner owned unrelated with requestOwner meaning | owned
   ... | .(just owner) | refl with belongs? same family owner
   ...   | yes member = ⊥-elim (unrelated member)
   ...   | no _ = refl
+
+  forgetKeepsActiveRequest : ∀ same family meaning → forgetEntry same family (active meaning) ≡ active meaning
+  forgetKeepsActiveRequest same family meaning = refl
 
   forgetKeepsUsedMarker : ∀ same family → forgetEntry same family used ≡ used
   forgetKeepsUsedMarker same family = refl
