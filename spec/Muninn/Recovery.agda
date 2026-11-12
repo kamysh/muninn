@@ -1,87 +1,71 @@
 {-# OPTIONS --safe #-}
--- One interruption relation for operations over fixed effect semantics.
+-- One interruption semantics for all operations. A crash can lose the local
+-- program position or acknowledgement at ANY transaction boundary. Tentative
+-- statement prefixes never publish: Database.execute is the only atomic effect.
 module Muninn.Recovery where
 
-open import Agda.Primitive using (Level)
-open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
+open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 open import Relation.Nullary using (Dec)
 import Muninn.Database
 
--- Atomic is supplied by the shared interpreter, not by an individual script.
--- Effects may include observations as well as committed storage transactions.
-module Protocol {effectLevel : Level} (World : Set) (Effect : Set effectLevel)
-  (Reply : Effect → Set)
-  (Atomic : World → (effect : Effect) → Reply effect → World → Set) where
+module Protocol (Key Value : Set) (equal : (a b : Key) → Dec (a ≡ b)) where
+  module DB = Muninn.Database.Store Key Value equal
+  open DB using (Rows; Transaction; execute)
 
-  data Script (Result : Set) : Set effectLevel where
+  data Script (Result : Set) : Set₁ where
     done : Result → Script Result
-    call : (effect : Effect) → (Reply effect → Script Result) → Script Result
+    atomic : ∀ {Reply : Set} → Transaction Reply →
+      (Reply → Script Result) → Script Result
 
-  data Prefix {Result : Set} : Script Result → World → Script Result → World → Set effectLevel where
+  data Prefix {Result : Set} : Script Result → Rows → Script Result → Rows → Set₁ where
     stop : ∀ {script world} → Prefix script world script world
-    advanced : ∀ {effect next before reply after residual final} →
-      Atomic before effect reply after → Prefix (next reply) after residual final →
-      Prefix (call effect next) before residual final
+    committed : ∀ {Reply} {transaction : Transaction Reply} {next : Reply → Script Result}
+      {world residual final} →
+      Prefix (next (proj₁ (execute transaction world)))
+             (proj₂ (execute transaction world)) residual final →
+      Prefix (atomic transaction next) world residual final
 
-  Interrupted : ∀ {Result} → Script Result → World → World → Set effectLevel
-  Interrupted script before after = Σ (Script _) (λ residual → Prefix script before residual after)
+  Interrupted : ∀ {Result} → Script Result → Rows → Rows → Set₁
+  Interrupted script before after = Σ _ (λ residual → Prefix script before residual after)
 
-  Completed : ∀ {Result} → Script Result → World → Result → World → Set effectLevel
+  Completed : ∀ {Result} → Script Result → Rows → Result → Rows → Set₁
   Completed script before result after = Prefix script before (done result) after
 
-  -- Goal, frame and readiness are independently fixed by the operation catalog.
+  -- Goal is an interface PARAMETER, fixed by the independently specified
+  -- catalog entry. It is deliberately not an operation-supplied record field.
   record Recoverable (Input Result : Set)
-    (Goal Frame : Input → World → World → Set) (Ready : Input → World → Set) : Set effectLevel where
+    (Goal Frame : Input → Rows → Rows → Set) : Set₂ where
     field
-      script : Input → Script Result
+      script : Input → Rows → Script Result
       preserves : ∀ input before after →
-        Interrupted (script input) before after → Frame input before after
+        Interrupted (script input before) before after → Frame input before after
       converges : ∀ input before interrupted final result →
-        Interrupted (script input) before interrupted →
-        Completed (script input) interrupted result final → Goal input before final
-      progresses : ∀ input before → Ready input before →
-        Σ Result (λ result → Σ World (λ final → Completed (script input) before result final))
+        Interrupted (script input before) before interrupted →
+        Completed (script input interrupted) interrupted result final →
+        Goal input before final
+      terminates : ∀ input before → Σ Result (λ result → Σ Rows (λ final →
+        Completed (script input before) before result final))
 
-  firstBoundary : ∀ {Result : Set} effect (next : Reply effect → Script Result) before after →
-    Interrupted (call effect next) before after →
-    (after ≡ before) ⊎ Σ (Reply effect) (λ reply → Σ World (λ middle →
-      Atomic before effect reply middle × Interrupted (next reply) middle after))
-  firstBoundary effect next before after (residual , stop) = inj₁ refl
-  firstBoundary effect next before after (residual , advanced committed rest) =
-    inj₂ (_ , _ , committed , residual , rest)
+  firstAtomicBoundary : ∀ {Result Reply : Set} (transaction : Transaction Reply)
+    (next : Reply → Script Result) before after →
+    Interrupted (atomic transaction next) before after →
+    (after ≡ before) ⊎ Σ (Script Result) (λ residual →
+      Prefix (next (proj₁ (execute transaction before)))
+        (proj₂ (execute transaction before)) residual after)
+  firstAtomicBoundary transaction next before after (residual , stop) = inj₁ refl
+  firstAtomicBoundary transaction next before after (residual , committed rest) = inj₂ (residual , rest)
 
-  -- A committed effect is a retry boundary even if its reply is not delivered.
-  committedBoundary : ∀ {Result : Set} {effect} {next : Reply effect → Script Result}
-    {before reply after} → Atomic before effect reply after → Interrupted (call effect next) before after
-  committedBoundary {next = next} {reply = reply} committed = next reply , advanced committed stop
+  completedReturnPreservesWorld : ∀ {Result : Set} (result : Result) before observed after →
+    Completed (done result) before observed after → after ≡ before
+  completedReturnPreservesWorld result before observed after stop = refl
 
   composePrefixes : ∀ {Result : Set} {start middle final : Script Result} {before between after} →
     Prefix start before middle between → Prefix middle between final after → Prefix start before final after
   composePrefixes stop second = second
-  composePrefixes (advanced committed first) second = advanced committed (composePrefixes first second)
+  composePrefixes (committed first) second = committed (composePrefixes first second)
 
-  completedReturnKeepsWorld : ∀ {Result : Set} (result : Result) before observed after →
-    Completed (done result) before observed after → after ≡ before
-  completedReturnKeepsWorld result before observed after stop = refl
-
-  completedIsBoundary : ∀ {Result : Set} {script : Script Result} {before result after} →
+  completedIsInterruptionBoundary : ∀ {Result : Set} {script : Script Result} {before result after} →
     Completed script before result after → Interrupted script before after
-  completedIsBoundary {result = result} run = done result , run
-
--- The database instance fixes atomic commit and rollback to the shared database
--- semantics. The dispatcher must use this instance for database effects.
-module DatabaseProtocol (Key Value : Set) (same : (a b : Key) → Dec (a ≡ b)) where
-  module DB = Muninn.Database.Store Key Value same
-
-  data Effect : Set₁ where
-    transaction : ∀ {Answer : Set} → DB.Transaction Answer → Effect
-
-  ReplyOf : Effect → Set
-  ReplyOf (transaction {Answer} transactionBody) = Answer
-
-  Atomic : DB.Rows → (effect : Effect) → ReplyOf effect → DB.Rows → Set
-  Atomic before (transaction transactionBody) reply after = DB.execute transactionBody before ≡ (reply , after)
-
-  module Shared = Protocol DB.Rows Effect ReplyOf Atomic
+  completedIsInterruptionBoundary {result = result} run = done result , run
