@@ -92,8 +92,8 @@ rewrite the specification to fit it.
 
 `Muninn.Continuation` describes an idle continuation, a running call, a
 request to restart, and completion. Starting a later page requires the original
-view to be available and valid. Each continued page is a prefix of the
-remaining ordering, and entries carry eligibility evidence. Only a running call
+view to be available and valid. Each continued page preserves earlier pages, and entries carry eligibility
+evidence. Only a running call
 holds the view in this model. The interpretation of availability, validity,
 eligibility and holds must be connected to the actual stored views and
 dispatcher; this module alone does not prove Rust or database correspondence.

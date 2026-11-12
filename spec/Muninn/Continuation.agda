@@ -8,7 +8,7 @@ open import Data.Empty using (⊥)
 open import Relation.Nullary using (¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
--- A continuation keeps the identity and remaining ordering of the original
+-- A continuation keeps the identity and returned pages of the original
 -- result view, not a reference that keeps its underlying data alive.
 module Model (View Result : Set) (Available Valid : View → Set)
              (Eligible : View → Result → Set) where
@@ -25,21 +25,21 @@ module Model (View Result : Set) (Available Valid : View → Set)
     begin : ∀ {v rest} → Available v → Valid v → Step (idle v rest) (running v rest)
     invalidate : ∀ {v rest} → ¬ Valid v → Step (idle v rest) restart
     unavailable : ∀ {v rest} → ¬ Available v → Step (idle v rest) restart
-    more : ∀ {v page rest} → All (Eligible v) page →
-           Step (running v (page ++ rest)) (idle v rest)
-    done : ∀ {v page} → All (Eligible v) page →
-           Step (running v page) finished
+    more : ∀ {v page previous} → All (Eligible v) page →
+           Step (running v previous) (idle v (previous ++ page))
+    done : ∀ {v previous page} → All (Eligible v) page →
+           Step (running v previous) finished
 
-  -- The only continuing response retains the original view and removes a
-  -- prefix; no later page may silently select a different view or reorder it.
+  -- A continuing response retains the original view and the pages already
+  -- returned, even if approximate retrieval discovers stronger matches later.
   same-view : ∀ {v remaining v′ remaining′} →
     Step (running v remaining) (idle v′ remaining′) → v ≡ v′
   same-view (more eligible) = refl
 
-  prefix-consumed : ∀ {v remaining v′ remaining′} →
+  pages-preserved : ∀ {v remaining v′ remaining′} →
     Step (running v remaining) (idle v′ remaining′) →
-    ∃[ page ] (remaining ≡ page ++ remaining′)
-  prefix-consumed (more {page = page} eligible) = page , refl
+    ∃[ page ] (remaining′ ≡ remaining ++ page)
+  pages-preserved (more {page = page} eligible) = page , refl
 
   -- Only an in-flight call may retain a view; an idle continuation does not.
   data Holds : State → View → Set where
