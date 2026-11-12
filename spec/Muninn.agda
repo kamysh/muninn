@@ -25,6 +25,7 @@
 module Muninn where
 
 import Muninn.Connection
+import Muninn.ExclusionAcceptance
 import Muninn.RequestState
 import Muninn.Dialogue
 import Muninn.OperationCatalog

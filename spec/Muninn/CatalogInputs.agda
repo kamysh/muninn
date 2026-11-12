@@ -13,6 +13,7 @@ open import Data.Unit using (⊤)
 open import Muninn.Types using (UUID; FilePath)
 open import Muninn.Worktree using (FamilyId; CheckoutId; VersionId)
 open import Muninn.Config using (BootstrapConfig; IndexConfig; WatcherConfig; EmbeddingSelection)
+open import Muninn.Config using (FileLimits) public
 open import Muninn.Knowledge using (KnowledgeId)
 
 record OperationId : Set where
@@ -40,10 +41,6 @@ record FamilyTarget : Set where
 record PolicyTarget : Set where
   field target : FamilyTarget
         expectedRevision : ℕ
-
-record FileLimits : Set where
-  field selectedBytes : ℕ
-        structuralBytes : ℕ
 
 record PolicyDraft : Set where
   field name : String

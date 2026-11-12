@@ -109,3 +109,12 @@ Do not add a postulate, weaken a guard or substitute a concrete example simply
 to make a proof pass. A behavior or architecture change needs explicit agreement;
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
+
+## Exclusion acceptance
+
+`Muninn.ExclusionAcceptance` commits the new family policy, a fixed workset
+captured from the family record inventory, and the active request receipt as
+one state transition. A later policy change supersedes prior tasks and preserves
+other request receipts. The worker must check current policy and references
+before deleting; this module does not prove worker convergence or correspondence
+with Rust or database transactions.
