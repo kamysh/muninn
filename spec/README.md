@@ -419,3 +419,11 @@ through complete finite path splits. Its computed Boolean is sound and complete
 for the independent relation; ordinary wildcards/classes cannot consume path
 separators. See [glob matching](GLOB-MATCHING.md). Raw parsing, rule precedence,
 ignored-parent traversal and selection integration remain under #26.
+
+## Certified glob class scanning
+
+`GlobLexing` scans escaped units and bracketed classes with actual source-grammar
+evidence. Recognition completeness, deterministic meaning, source reconstruction
+and strict suffix progress are proved for arbitrary input. See
+[glob class scanning](GLOB-LEXING.md). Range interpretation, complete raw parsing
+and selection integration remain under #26.

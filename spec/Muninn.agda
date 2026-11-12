@@ -35,6 +35,7 @@ import Muninn.CurrentReader
 import Muninn.StoredPolicy
 import Muninn.PolicyCleanupBatch
 import Muninn.GlobMatching
+import Muninn.GlobLexing
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
