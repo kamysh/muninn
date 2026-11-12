@@ -67,9 +67,10 @@ and `crates/cli/src/readonly.rs`. Opening a configuration editor is a control;
 effectful editor actions are in `TuiEffect`, implemented in `crates/cli/src/tui/`.
 
 `Job` names finite work, including preparation, discovery, reconciliation,
-indexing, embedding, cleanup, recovery and logging. The current daemon starts
+indexing, embedding, cleanup and logging. The current daemon starts
 and schedules work in `crates/indexer/src/main.rs` and `crates/indexer/src/watcher.rs`;
-indexing is in `crates/core/src/pipeline.rs`. Some job identities describe the
+indexing is in `crates/core/src/pipeline.rs`. Recovery continues the original request rather than creating a new job identity.
+Some job identities describe the
 agreed target state and have no current standalone runtime handler. Startup,
 shutdown, notifications, help, version, tool listing and interruption are
 `Control` events; their protocol and process handling are in the MCP, CLI and
@@ -91,7 +92,6 @@ standalone handler. Several logical jobs are parts of one existing function.
 | `embedNote` | `crates/mcp/src/tools.rs` (`record_knowledge`); separate job is planned |
 | `reclaimExcluded`, `reclaimRetired` | Target cleanup work; no standalone handler established |
 | `handoff` | `crates/indexer/src/main.rs`; independent queued handoff is planned |
-| `recoverOperation` | Planned; no durable-operation recovery handler established |
 | `appendLog`, `flushDiagnostics` | `crates/indexer/src/logging.rs`; standalone jobs are planned |
 | `pruneLogs` | `crates/mcp/src/main.rs` (`prune_log_dir`) |
 

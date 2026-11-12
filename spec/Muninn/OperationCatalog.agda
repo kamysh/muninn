@@ -149,7 +149,6 @@ jobOwner embedNote = knowledge
 jobOwner reclaimExcluded = cleanup
 jobOwner reclaimRetired = removal
 jobOwner handoff = concurrency
-jobOwner recoverOperation = continuation
 jobOwner appendLog = observability
 jobOwner pruneLogs = observability
 jobOwner flushDiagnostics = observability
