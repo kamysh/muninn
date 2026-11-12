@@ -49,7 +49,7 @@ module For (Other OtherReply : Set)
   (sameFamily : (a b : W.FamilyId) → Dec (a ≡ b))
   (sameNote : (a b : KnowledgeId) → Dec (a ≡ b))
   (sameRequest : (a b : Requests.Id) → Dec (a ≡ b))
-  (sameMeaning : (a b : Requests.Meaning) → Dec (a ≡ b)) where
+  (sameMeaning : (a b : Requests.Meaning) → Dec (Requests.canonical a ≡ Requests.canonical b)) where
 
   module Notes = K.Operations sameFamily sameNote
   module R = Requests.Model (Reply OtherReply) sameRequest sameMeaning
