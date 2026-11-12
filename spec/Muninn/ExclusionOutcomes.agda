@@ -231,15 +231,19 @@ module Model (excluded : List String → String → Bool) where
   hasDelta : O.Owner → ℕ → String → O.World → Bool
   hasDelta owner selected path = anyRow (λ key value → deltaValue owner selected path value)
 
-  bindingValue : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
-  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) =
+  bindingWithDelta : Bool → O.Owner → ℕ → String → ℕ → O.Record → Bool
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) =
     sameOwner owner storedOwner ∧ (does (path String.≟ storedPath) ∧
-      (sameNat version storedVersion ∧ not (hasDelta owner selected path world)))
-  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) = false
-  bindingValue selection world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) =
+      (sameNat version storedVersion ∧ not overridden))
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) = false
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) =
     sameOwner owner storedOwner ∧ (sameNat checkout selected ∧
       (does (path String.≟ storedPath) ∧ sameNat version storedVersion))
-  bindingValue selection world owner selected path version _ = false
+  bindingWithDelta overridden owner selected path version _ = false
+
+  bindingValue : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
+  bindingValue selection world owner selected path version value =
+    bindingWithDelta (hasDelta owner selected path world) owner selected path version value
 
   versionAtPath : Rule → O.World → O.Owner → ℕ → String → ℕ → Bool
   versionAtPath selection world owner selected path version =
@@ -254,19 +258,33 @@ module Model (excluded : List String → String → Bool) where
   versionPublishedAtPath : Rule → O.World → O.Owner → String → ℕ → Bool
   versionPublishedAtPath selection world owner path version = anyRow (checkoutVersionValue selection world owner path version) world
 
-  symbolObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
-  symbolObservation selection world owner selected (just (O.recordOf storedOwner (O.symbol version path payload))) =
+  symbolFacts : Maybe O.Record → Maybe (O.Owner × ℕ × String)
+  symbolFacts (just (O.recordOf storedOwner (O.symbol version path payload))) = just (storedOwner , version , path)
+  symbolFacts _ = nothing
+
+  symbolFromFacts : Rule → O.World → O.Owner → ℕ → Maybe (O.Owner × ℕ × String) → Bool
+  symbolFromFacts selection world owner selected (just (storedOwner , version , path)) =
     sameOwner owner storedOwner ∧ versionAtPath selection world owner selected path version
-  symbolObservation selection world owner selected _ = false
+  symbolFromFacts selection world owner selected nothing = false
+
+  symbolObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
+  symbolObservation selection world owner selected value = symbolFromFacts selection world owner selected (symbolFacts value)
 
   symbolVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
   symbolVisible selection world owner selected key = symbolObservation selection world owner selected (DB.lookup key world)
 
-  edgeObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
-  edgeObservation selection world owner selected (just (O.recordOf storedOwner (O.edge source target payload))) =
+  edgeFacts : Maybe O.Record → Maybe (O.Owner × ℕ × ℕ)
+  edgeFacts (just (O.recordOf storedOwner (O.edge source target payload))) = just (storedOwner , source , target)
+  edgeFacts _ = nothing
+
+  edgeFromFacts : Rule → O.World → O.Owner → ℕ → Maybe (O.Owner × ℕ × ℕ) → Bool
+  edgeFromFacts selection world owner selected (just (storedOwner , source , target)) =
     sameOwner owner storedOwner ∧ (symbolVisible selection world owner selected source ∧
       symbolVisible selection world owner selected target)
-  edgeObservation selection world owner selected _ = false
+  edgeFromFacts selection world owner selected nothing = false
+
+  edgeObservation : Rule → O.World → O.Owner → ℕ → Maybe O.Record → Bool
+  edgeObservation selection world owner selected value = edgeFromFacts selection world owner selected (edgeFacts value)
 
   edgeVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
   edgeVisible selection world owner selected key = edgeObservation selection world owner selected (DB.lookup key world)
