@@ -29,6 +29,7 @@ import Muninn.Connection
 import Muninn.ExclusionAcceptance
 import Muninn.IndexFileLimits
 import Muninn.Continuation
+import Muninn.IndexWorkControl
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
 import Muninn.NoteRequests
