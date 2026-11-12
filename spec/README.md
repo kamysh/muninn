@@ -131,6 +131,7 @@ to make a proof pass. A behavior or architecture change needs explicit agreement
 an implementation discrepancy is evidence to investigate, not permission to
 rewrite the specification to fit it.
 
+ApplicationWorld describes logical ownership, reference invariants, and world-level outcomes. See APPLICATION-WORLD.md for the storage boundary. Runtime correspondence and dispatcher integration remain separate work.
 ## Shared database effect semantics
 
 `Muninn.Database` defines one finite-store meaning of reads, scans, writes,
