@@ -155,6 +155,9 @@ with Rust or database transactions.
 ## Status and usage
 
 `StatusReport` reads saved request and indexing progress, reports vector coverage from published content, and exposes stored guidance when vector work needs attention. It distinguishes a saved result from an independently verified cleanup outcome and checks for recorded cleanup work. Usage rows are structured and separate from local logs, whose default retention is seven days. These are specification guarantees; the running implementation still requires correspondence work.
+## Lock ownership and handoff
+
+`LockOwnership` distinguishes the session and request holding the indexing lock from the owner of a publication transaction. Interactive requests acquire in queue order; release, preemption and session loss preserve committed work. Notifications and a configurable ten-second polling fallback do not imply a handoff deadline. The database and scheduler must provide the corresponding observations and execution.
 
 ## Fair scheduling
 
