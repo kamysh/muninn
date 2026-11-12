@@ -210,3 +210,11 @@ for lasting need and temporary protection in the complete owned world. Their
 size decrease and saturation proofs handle cyclic dependencies without arbitrary
 cutoffs. See [the classifier and remaining cleanup boundary](EXCLUSION-CLASSIFICATION.md).
 No deletion effects or runtime cleanup are implemented by this slice.
+
+## Bounded cleanup effects
+
+`Muninn.CleanupStorage` and `Muninn.CleanupEffects` prove complete-world safety,
+reference/identity preservation and actual committed deletion/projection effects
+for current-snapshot cleanup. Their mutation bound is indexed by the database
+transaction itself. See [the transaction contract and convergence boundary](CLEANUP-EFFECTS.md).
+Progress and retry convergence remain #73 under #70; no runtime cleanup is added.
