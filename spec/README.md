@@ -80,6 +80,11 @@ changes. The later dispatcher must establish that reconstructed inputs express
 the original task and each operation meets its independent outcome; adapter
 normalization and Rust correspondence also remain outstanding (#51–#52).
 
+[Family note state](NOTE-STATE.md) defines family and worktree visibility,
+atomic note changes with request receipts, profile recreation and preservation
+of unrelated state. Runtime path-key and embedding-profile differences remain
+correspondence obligations.
+
 ## Known model/runtime gaps
 
 These are unresolved correspondence obligations, not authorization to weaken the
