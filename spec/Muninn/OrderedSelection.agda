@@ -6,6 +6,7 @@ import Muninn.RulePatterns as R
 import Muninn.RuleScope as S
 import Muninn.GlobBody as B
 import Muninn.Config as C
+import Muninn.PolicyRuleAdmission as A
 open import Data.Bool using (Bool; true; false; not)
 open import Data.List using (List; []; _∷_; _++_; map)
 open import Data.String using (String; toList)
@@ -115,8 +116,8 @@ unmatchedPreserves : ∀ {inputs word directory} {rules : Rules inputs} → Unma
 unmatchedPreserves absent before = recognized (unmatchedResolution absent before)
 
 record FamilyRules (policy : C.FamilyPolicy) : Set where
-  field exclude : Rules (map toList (C.EffectiveConfig.exclude (C.familyConfig policy)))
-        vendor : Rules (map toList (C.EffectiveConfig.vendor (C.familyConfig policy)))
+  field exclude : Rules (map (λ text → A.normalize (toList text)) (C.EffectiveConfig.exclude (C.familyConfig policy)))
+        vendor : Rules (map (λ text → A.normalize (toList text)) (C.EffectiveConfig.vendor (C.familyConfig policy)))
 
 classify : ∀ {excludeInputs vendorInputs} → Bool → Rules excludeInputs → Rules vendorInputs → R.Word → Bool → C.Decision
 classify gitDefault exclude vendor word directory =

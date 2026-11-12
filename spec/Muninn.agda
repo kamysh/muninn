@@ -42,6 +42,9 @@ import Muninn.GlobBody
 import Muninn.RulePatterns
 import Muninn.RuleScope
 import Muninn.OrderedSelection
+import Muninn.StrictGlob
+import Muninn.PolicyRuleAdmission
+import Muninn.AdmittedSelection
 import Muninn.ViewReplacement
 import Muninn.SnapshotPreparation
 import Muninn.PublishedViews
