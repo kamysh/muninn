@@ -364,12 +364,12 @@ module Model (Reply : Set)
     admit : ∀ {dataState ledger id meaning owner} → requestId meaning ≡ just id →
       requestOwner meaning ≡ just owner → ownerMatches meaning → ledger id ≡ nothing →
       Step (admission id meaning) (state dataState ledger) (state dataState (update id (active meaning) ledger))
-    resume : ∀ {dataState ledger id meaning} → ledger id ≡ just (active meaning) →
-      Step (resumption id meaning) (state dataState ledger) (state dataState ledger)
+    resume : ∀ {dataState ledger id meaning original} → ledger id ≡ just (active original) →
+      canonical meaning ≡ canonical original → Step (resumption id meaning) (state dataState ledger) (state dataState ledger)
     commit : ∀ {before after ledger id meaning result} → ledger id ≡ just (active meaning) →
       Step (completion id meaning result) (state before ledger) (state after (update id (completed meaning result) ledger))
-    replayStep : ∀ {dataState ledger id meaning result} → ledger id ≡ just (completed meaning result) →
-      Step (replayRequest id meaning result) (state dataState ledger) (state dataState ledger)
+    replayStep : ∀ {dataState ledger id meaning original result} → ledger id ≡ just (completed original result) →
+      canonical meaning ≡ canonical original → Step (replayRequest id meaning result) (state dataState ledger) (state dataState ledger)
     retire : ∀ {dataState ledger id meaning result} → ledger id ≡ just (completed meaning result) →
       Step (retirement id) (state dataState ledger) (state dataState (update id used ledger))
 
@@ -398,8 +398,8 @@ module Model (Reply : Set)
   safeStepPreservesData : ∀ {Data : Set} {event} {before after : State Data} →
     SafeEvent event → Step event before after → State.dataState after ≡ State.dataState before
   safeStepPreservesData safeAdmission (admit matching owned ownerValid absent) = refl
-  safeStepPreservesData safeResumption (resume receipt) = refl
-  safeStepPreservesData safeReplay (replayStep receipt) = refl
+  safeStepPreservesData safeResumption (resume receipt same) = refl
+  safeStepPreservesData safeReplay (replayStep receipt same) = refl
 
   data ConversationEvent : Set where
     dialogueEvent : D.Event Information → ConversationEvent
@@ -449,11 +449,11 @@ module Model (Reply : Set)
 
   resumePreservesState : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (resumption id meaning) before after → after ≡ before
-  resumePreservesState (resume receipt) = refl
+  resumePreservesState (resume receipt same) = refl
 
   replayPreservesState : ∀ {Data : Set} {before after : State Data} {id meaning result} →
     Step (replayRequest id meaning result) before after → after ≡ before
-  replayPreservesState (replayStep receipt) = refl
+  replayPreservesState (replayStep receipt same) = refl
 
   commitKeepsReceipt : ∀ {Data : Set} {before after : State Data} {id meaning result} →
     Step (completion id meaning result) before after →
@@ -464,13 +464,15 @@ module Model (Reply : Set)
   committedCanReplay : ∀ {Data : Set} {before after : State Data} {id meaning result} →
     Step (completion id meaning result) before after →
     Step (replayRequest id meaning result) after after
-  committedCanReplay step = replayStep (commitKeepsReceipt step)
+  committedCanReplay step = replayStep (commitKeepsReceipt step) refl
 
   replayReturnsSaved : ∀ {Data : Set} {before after : State Data} {id meaning result} →
     Step (replayRequest id meaning result) before after →
     decide meaning (State.ledger before id) ≡ replay result
-  replayReturnsSaved {meaning = meaning} {result = result} (replayStep receipt) rewrite receipt =
-    repeatCompleted meaning result
+  replayReturnsSaved {meaning = meaning} {result = result} (replayStep {original = original} receipt same) rewrite receipt
+    with sameMeaning meaning original
+  ... | yes _ = refl
+  ... | no different = ⊥-elim (different same)
 
   admissionKeepsOther : ∀ {Data : Set} {before after : State Data} {id meaning} →
     Step (admission id meaning) before after → ∀ other → ¬ (id ≡ other) →
@@ -522,12 +524,12 @@ module Model (Reply : Set)
     with sameId changed target
   ... | yes refl = ⊥-elim (justCannotBeNothing (trans (sym found) absent))
   ... | no distinct = found
-  usedMarkerPreserved found (resume receipt) = found
+  usedMarkerPreserved found (resume receipt same) = found
   usedMarkerPreserved {id = target} found (commit {ledger = ledger} {id = changed} {meaning = meaning} {result = result} receipt)
     with sameId changed target
   ... | yes refl = ⊥-elim (usedIsNotActive (trans (sym found) receipt))
   ... | no distinct = found
-  usedMarkerPreserved found (replayStep receipt) = found
+  usedMarkerPreserved found (replayStep receipt same) = found
   usedMarkerPreserved {id = target} found (retire {ledger = ledger} {id = changed} receipt)
     with sameId changed target
   ... | yes refl = ⊥-elim (usedIsNotCompleted (trans (sym found) receipt))
