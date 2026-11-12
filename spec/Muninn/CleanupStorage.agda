@@ -129,6 +129,7 @@ module Model (excluded : List String → String → Bool) where
   shape selection world value@(O.recordOf owner (O.coordination _)) = plain refl
   shape selection world value@(O.recordOf owner (O.schemaResource _)) = plain refl
   shape selection world value@(O.recordOf owner (O.graphResource _ _ _)) = plain refl
+  shape selection world value@(O.recordOf owner (O.publishedView _ _)) = plain refl
   shape selection world value@(O.recordOf owner (O.logFile _)) = plain refl
   shape selection world value@(O.recordOf owner (O.bootstrapStage _)) = plain refl
 
@@ -197,3 +198,12 @@ module Model (excluded : List String → String → Bool) where
     valid found (projectOwner selection world value) (projectKind selection world value)
     (projectPlaced selection world value (lookupAll world key value (O.Admissible.placed valid) found))
     (projectReferences selection world value)
+
+
+  projectCheckout : ∀ selection world value →
+    E.snapshotCheckout (M.project selection world value) ≡ E.snapshotCheckout value
+  projectCheckout selection world value with shape selection world value
+  ... | plain same = cong E.snapshotCheckout same
+  ... | snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
+  ...   | yes same = refl
+  ...   | no different = refl

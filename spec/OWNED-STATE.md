@@ -126,3 +126,12 @@ legacy and symbol source paths, and graph-resource scope/current use. These
 logical facts must match actual published reads; cleanup cannot choose them as
 retention preferences. The source inventory above remains a physical boundary,
 not a claim that these are new SQL columns or that Rust already exports them.
+
+
+## Current structural views
+
+A family-owned `publishedView` association references one checkout and its
+current structural snapshot. Snapshot contents are separate from the current-publication association;
+being stored does not independently make a version current. The domain invariant,
+reachability laws and pending publication integration are specified in
+[current views](CURRENT-VIEWS.md).

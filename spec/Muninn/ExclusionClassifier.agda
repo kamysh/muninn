@@ -76,6 +76,7 @@ kindCode O.schemaResourceK = 31
 kindCode O.graphResourceK = 32
 kindCode O.logFileK = 33
 kindCode O.bootstrapStageK = 34
+kindCode O.publishedViewK = 35
 
 kindFromCode : ℕ → Maybe O.Kind
 kindFromCode number = nth number
@@ -88,7 +89,7 @@ kindFromCode number = nth number
     O.stagingK ∷ O.acceptedWorkK ∷ O.cleanupWorkK ∷ O.activeReaderK ∷
     O.continuationK ∷ O.receiptK ∷ O.migrationK ∷ O.usageK ∷
     O.bootstrapK ∷ O.modelCacheK ∷ O.coordinationK ∷ O.schemaResourceK ∷
-    O.graphResourceK ∷ O.logFileK ∷ O.bootstrapStageK ∷
+    O.graphResourceK ∷ O.logFileK ∷ O.bootstrapStageK ∷ O.publishedViewK ∷
     [])
   where
   nth : ℕ → List O.Kind → Maybe O.Kind
@@ -133,6 +134,7 @@ kindRoundTrip O.schemaResourceK = refl
 kindRoundTrip O.graphResourceK = refl
 kindRoundTrip O.logFileK = refl
 kindRoundTrip O.bootstrapStageK = refl
+kindRoundTrip O.publishedViewK = refl
 
 kindEqual : ∀ a b → Dec (a ≡ b)
 kindEqual a b with kindCode a ≟ kindCode b

@@ -341,3 +341,12 @@ and continues the conversation. Retry, indexed-data preservation and
 compact-marker retention are proved.
 See [task completion](CLEANUP-FINALIZATION.md). Policy selection, fresh-view
 production and full lifecycle scheduling remain under #84.
+
+## Current published views
+
+`PublishedViews` distinguishes the checkout's current published structural
+view from older retained snapshots. Publication references provide permanent
+reachability; a stored snapshot is not itself a root. The model states uniqueness
+and checkout agreement, and preserves cleanup/history laws with the corrected
+references. See [current views](CURRENT-VIEWS.md). Fresh-view construction,
+publication and closed-catalog enforcement remain under #84.

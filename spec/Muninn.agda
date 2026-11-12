@@ -29,6 +29,7 @@ import Muninn.DatabaseResumption
 import Muninn.Database
 import Muninn.Recovery
 import Muninn.Workset
+import Muninn.PublishedViews
 import Muninn.OwnedState
 import Muninn.Catalog
 import Muninn.CatalogSources
