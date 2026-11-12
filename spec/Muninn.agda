@@ -8,7 +8,7 @@
 --   Muninn.Float        — postulated IEEE 754 Float operations
 --   Muninn.AdvisoryLock — (--safe) the index mutex: advisory lock + preempt signal
 --   Muninn.IndexFsm     — (--safe) index lifecycle FSM + configure decision
---   Muninn.Types        — core domain types (Chunk, Repo, SearchResult, …)
+--   Muninn.Types        — core domain types (Chunk, Repo, …)
 --   Muninn.Graph        — symbol kinds, structural edges, and per-repo graph
 --   Muninn.Worktree     — immutable baselines, sparse overrides, file reuse
 --   Muninn.FileMap      — file updates and minimal-overlay normalization laws
@@ -16,16 +16,67 @@
 --   Muninn.GraphMembership — explicit selected-edge membership and visibility
 --   Muninn.Storage      — pair ownership, checkout isolation, artifact lifetime
 --   Muninn.Index        — legacy/proposed daemon dispatch, validity (re-exports IndexFsm)
---   Muninn.Search     — Similarity, RRF scoring, HybridResultBound
 --   Muninn.Embeddings — EmbeddingBackend, EmbeddingDimension, RepoDimMatchesBackend
 --   Muninn.Config     — bootstrap, database family policy, DimFrozen, resolution
 --   Muninn.Cli        — CLI command AST, argument constraints, pre/postconditions
---   Muninn.Knowledge     — KnowledgeItem, validity invariants, family scoping, search bounds
+--   Muninn.Knowledge     — KnowledgeItem, validity invariants, family scoping
 --   Muninn.Concurrency   — advisory-lock mutex (re-exports AdvisoryLock), watcher eviction
 module Muninn where
 
+import Muninn.SymlinkTraversal
+import Muninn.SymlinkSelection
 import Muninn.Connection
 import Muninn.ApplicationWorld
+import Muninn.KnowledgeState
+import Muninn.NoteRequests
+import Muninn.RequestState
+import Muninn.Dialogue
+import Muninn.OperationCatalog
+import Muninn.DatabaseResumption
+import Muninn.Database
+import Muninn.Recovery
+import Muninn.Workset
+import Muninn.PublicationVisibility
+import Muninn.ViewPublication
+import Muninn.CurrentReader
+import Muninn.StoredPolicy
+import Muninn.PolicyCleanupBatch
+import Muninn.GlobMatching
+import Muninn.GlobLexing
+import Muninn.GlobRanges
+import Muninn.GlobTokens
+import Muninn.GlobBody
+import Muninn.RulePatterns
+import Muninn.RuleScope
+import Muninn.OrderedSelection
+import Muninn.StrictGlob
+import Muninn.PolicyRuleAdmission
+import Muninn.AdmittedSelection
+import Muninn.ViewReplacement
+import Muninn.SnapshotPreparation
+import Muninn.PublishedViews
+import Muninn.OwnedState
+import Muninn.Catalog
+import Muninn.CatalogSources
+import Muninn.Dialogue
+import Muninn.RequestIdentity
+import Muninn.ReceiptLedger
+import Muninn.RequestAdmission
+import Muninn.CleanupAdmission
+import Muninn.CleanupResumption
+import Muninn.ReaderRelease
+import Muninn.ReaderReleaseCleanup
+import Muninn.CleanupLoop
+import Muninn.CleanupFinalization
+import Muninn.CleanupScheduling
+import Muninn.RecordAllocation
+import Muninn.CleanupAlignment
+import Muninn.CleanupHistory
+import Muninn.CleanupCompletion
+import Muninn.CleanupProgress
+import Muninn.CleanupEffects
+import Muninn.ExclusionClassifier
+import Muninn.ExclusionOutcomes
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public
@@ -38,7 +89,6 @@ open import Muninn.Schema       public
 open import Muninn.GraphMembership public
 open import Muninn.Storage      public
 open import Muninn.Index        public
-open import Muninn.Search       public
 open import Muninn.Embeddings   public
 open import Muninn.Config       public
 open import Muninn.Policy       public
