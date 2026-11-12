@@ -152,6 +152,10 @@ with Rust or database transactions.
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
 
+## Status and usage
+
+`StatusReport` reads saved request and indexing progress, reports vector coverage from published content, and exposes stored guidance when vector work needs attention. It distinguishes a saved result from an independently verified cleanup outcome and checks for recorded cleanup work. Usage rows are structured and separate from local logs, whose default retention is seven days. These are specification guarantees; the running implementation still requires correspondence work.
+
 ## Fair scheduling
 
 `FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.
