@@ -358,7 +358,7 @@ module For (Other OtherReply : Set)
     R.State.ledger before original ≡ just (R.completed originalMeaning originalResult) →
     R.Step (R.replayRequest original originalMeaning originalResult) after after
   retryAfterAnotherNote step distinct savedReceipt = R.replayStep
-    (trans (R.completionKeepsOther (asReceiptStep step) _ distinct) savedReceipt)
+    (trans (R.completionKeepsOther (asReceiptStep step) _ distinct) savedReceipt) refl
 
   -- Search may choose a subset, but must never return a note outside the
   -- selected family or worktree scope. Relevance is outside this state model.
@@ -390,7 +390,7 @@ module For (Other OtherReply : Set)
     OtherNoteSteps original before after →
     R.State.ledger before original ≡ just (R.completed meaning result) →
     R.Step (R.replayRequest original meaning result) after after
-  retryAfterOtherNotes steps receipt = R.replayStep (otherNoteStepsKeepReceipt steps receipt)
+  retryAfterOtherNotes steps receipt = R.replayStep (otherNoteStepsKeepReceipt steps receipt) refl
 
   writeReceiptOwnedByFamily : ∀ {before after request id} →
     Step (R.completion (C.Mutation.operationId request) (writeMeaning request) (saved id)) before after →
