@@ -556,23 +556,24 @@ and selection integration remain under #26.
 `GlobRanges` turns actual scanned class units into ordered singleton/range
 meaning and constructs the matching atom from both source certificates.
 Recognition completeness, deterministic atom/suffix meaning and inherited
-source progress are proved. See [class ranges](GLOB-RANGES.md). Complete
-raw glob bodies and rule-selection integration remain under #26.
+source progress are proved. See [class ranges](GLOB-RANGES.md). The complete
+selection integration is described in [Git authority](SELECTION-INTEGRATION.md).
 
 ## Certified raw glob tokens
 
 `GlobTokens` assigns source-certified token meanings, including position-sensitive
 recursive wildcards and compiled classes. Recognition, determinism, exact source
 consumption and strict suffix progress are proved. See [raw glob tokens](GLOB-TOKENS.md).
-Whole-body assembly, rule framing and selection integration remain under #26.
+Whole-body assembly and selection integration use these tokens; see
+[Git authority](SELECTION-INTEGRATION.md).
 
 ## Complete raw glob-body parsing
 
 `GlobBody` supplies actual position/group context and assembles certified tokens
 into complete matcher trees. General laws prove full recognition, unique meaning,
 a source-length transition bound and raw-pattern match soundness/completeness.
-See [complete glob bodies](GLOB-BODY.md). Rule framing, policy precedence and
-selection integration remain under #26.
+See [complete glob bodies](GLOB-BODY.md). Rule framing and policy integration are connected through
+[Git authority](SELECTION-INTEGRATION.md).
 
 ## Source-certified rule framing and scope
 
@@ -580,7 +581,7 @@ selection integration remain under #26.
 bodies; `RuleScope` decides scoped and ancestor matching through complete finite
 path splits. General laws prove recognition, unique compiled meaning and sound/
 complete matching. See [rule framing and scope](RULE-PATTERNS.md). Entry admission,
-Git/Muninn precedence, traversal and selection integration remain under #26.
+Git precedence and traversal are connected through [Git authority](SELECTION-INTEGRATION.md).
 
 ## Ordered selection from compiled rules
 
@@ -588,8 +589,8 @@ Git/Muninn precedence, traversal and selection integration remain under #26.
 matches from the Git default through frozen-default and family overrides. General
 laws establish matching-tail precedence, unmatched preservation, deterministic
 family decisions and vendor isolation. See [ordered selection](ORDERED-SELECTION.md).
-Entry/Git admission, traversal and final indexing/search/cleanup integration remain
-under #26.
+Entry/Git admission and indexing/search/cleanup share the concrete
+[selection integration](SELECTION-INTEGRATION.md).
 
 ## Strict policy admission and family selection
 
@@ -597,4 +598,5 @@ under #26.
 entries and lists, preserving quoted literals and the strict class requirement.
 `AdmittedSelection` connects those certificates to normalized effective family
 rules and deterministic selection. See [policy admission](POLICY-RULE-ADMISSION.md).
-Git evaluation, traversal and final shared selection integration remain under #26.
+Git supplies batched defaults; traversal and stored-policy integration are
+described in [Git authority](SELECTION-INTEGRATION.md).

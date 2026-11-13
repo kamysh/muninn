@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorker where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupDecision as Decision
 import Muninn.CleanupRequest as Request
 import Muninn.CleanupEffects as Effects
@@ -47,23 +48,24 @@ message advanced = "Cleanup is progressing."
 message waiting = "Cleanup will continue when the work it is waiting for finishes."
 message (response _) = "See the request status for details."
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (originalRules : List String)
-    (original : Outcome.Intent (E.rule family originalRules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList originalRules))
+    (original : Outcome.Intent (E.rule family originalRules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     id = Input.Mutation.operationId request
     meaning = Identity.mutation Identity.kApplyPolicy request
     owner = O.family family
     captured = Outcome.Intent.keys original
     module Policy = Stored.Family family pointer
-    open Batch.Model.Family excluded family pointer accepted originalRules original id taskSlot using (batch)
-    open Finish.Model.Family excluded family pointer accepted originalRules original request taskSlot using (finish)
+    open Batch.Model.Family family pointer accepted originalRules validRules original id taskSlot using (batch)
+    open Finish.Model.Family family pointer accepted originalRules validRules original request taskSlot using (finish)
 
     module Current {world : O.World} (current : Policy.Saved world) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted originalRules original id taskSlot current
-      open Decision.Model.Family.Current excluded family pointer accepted originalRules original id taskSlot current using (next)
+      module Step = Batch.Model.Family.Selected family pointer accepted originalRules validRules original id taskSlot current
+      open Decision.Model.Family.Current family pointer accepted originalRules validRules original id taskSlot current using (next)
 
       abstract
         finishStep : ℕ → Receipt.Work → (String → Dialogue.Prompt) → DB.Transaction Reply
@@ -80,12 +82,12 @@ module Model (excluded : List String → String → Bool) where
         followupStep : Receipt.Work → (String → Dialogue.Prompt) → DB.Transaction Reply
         followupStep progress guidance = mapTransaction response
           (Ledger.update id meaning (Receipt.generation progress) (Ledger.checkpoint (Receipt.versions progress))
-            (Allocation.Model.Family.effect excluded Step.selection id "Follow-up cleanup" "Cleanup is progressing." guidance))
+            (Allocation.Model.Family.effect Step.selection id "Follow-up cleanup" "Cleanup is progressing." guidance))
 
         followupStepDefinition : ∀ progress guidance →
           followupStep progress guidance ≡ mapTransaction response
             (Ledger.update id meaning (Receipt.generation progress) (Ledger.checkpoint (Receipt.versions progress))
-              (Allocation.Model.Family.effect excluded Step.selection id "Follow-up cleanup" "Cleanup is progressing." guidance))
+              (Allocation.Model.Family.effect Step.selection id "Follow-up cleanup" "Cleanup is progressing." guidance))
         followupStepDefinition progress guidance = refl
 
       perform : ℕ → Receipt.Work → (String → Dialogue.Prompt) → DB.Transaction Reply

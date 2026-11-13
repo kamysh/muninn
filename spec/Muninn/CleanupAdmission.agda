@@ -25,10 +25,13 @@ open import Data.Maybe using (just; nothing)
 import Data.Maybe.Properties
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
-open import Data.Empty using (⊥-elim)
+open import Data.Empty using (⊥; ⊥-elim)
 open import Relation.Nullary using (Dec; yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong; cong₂; subst)
 module DB = O.DB
+
+zeroNotOne : 0 ≡ 1 → ⊥
+zeroNotOne ()
 
 allDec : ∀ {A : Set} (P : A → Set) → (∀ value → Dec (P value)) → ∀ values → Dec (All P values)
 allDec P decide [] = yes []
@@ -37,12 +40,12 @@ allDec P decide (value ∷ values) with decide value | allDec P decide values
 ... | no absent | _ = no (λ { (present ∷ rest) → absent present })
 ... | _ | no absent = no (λ { (present ∷ rest) → absent rest })
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Classify = C.Model excluded
-  module Store = Storage.Model excluded
-  module Frame = Insert.Model excluded
-  module Pins = Protection.Model excluded
+module Model where
+  module M = E.Model
+  module Classify = C.Model
+  module Store = Storage.Model
+  module Frame = Insert.Model
+  module Pins = Protection.Model
 
   module Family (selection : E.Rule) where
     claimFor : O.Record → List ℕ
@@ -81,6 +84,9 @@ module Model (excluded : List String → String → Bool) where
     ...     | yes sameNodes | yes sameEdges = yes (cong₂ (λ ns es → O.recordOf owner (O.structuralSnapshot selected ns es payload)) sameNodes sameEdges)
     ...     | no different | _ = no (λ exact → different (cong E.snapshotNodes exact))
     ...     | _ | no different = no (λ exact → different (cong E.snapshotEdges exact))
+
+    canonical? world value | Store.hiddenDelta owner selected version path answer same = no
+      (λ exact → zeroNotOne (cong E.bindingPayload (trans (sym same) exact)))
 
     Pending : O.World → ℕ → Set
     Pending world key = key ∈ claims world × C.At world key (λ value → O.owner value ≡ E.targetOwner selection ×

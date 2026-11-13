@@ -4,6 +4,8 @@ module Muninn.StoredPolicy where
 
 import Muninn.OwnedState as O
 import Muninn.Config as Config
+import Muninn.PolicyRuleAdmission as Admission
+import Muninn.AdmittedSelection as Admitted
 import Muninn.CatalogInputs as I
 import Muninn.ExclusionOutcomes as E
 open import Data.Nat using (ℕ; _≟_)
@@ -21,7 +23,7 @@ applyObserved : ∀ {A B : Set} (observed : A) (use : (value : A) → observed �
   {value : A} (seen : observed ≡ value) → use observed refl ≡ use value seen
 applyObserved observed use refl = refl
 
-policyFrom : O.PolicyVersionInfo → Config.PolicyDefaults → Config.FamilyPolicy
+policyFrom : O.PolicyVersionInfo → O.DefaultsInfo → Config.FamilyPolicy
 policyFrom info frozen = record
   { family = O.PolicyVersionInfo.familyId info
   ; name = I.PolicyDraft.name (O.PolicyVersionInfo.contents info)
@@ -30,7 +32,12 @@ policyFrom info frozen = record
   ; watcher = I.PolicyDraft.watcher (O.PolicyVersionInfo.contents info)
   ; embeddings = I.PolicyDraft.embeddings (O.PolicyVersionInfo.contents info)
   ; revision = O.PolicyVersionInfo.revision info
-  ; defaults = frozen }
+  ; defaults = O.DefaultsInfo.value frozen }
+
+validFrom : ∀ info frozen → Admitted.FamilyEntries (policyFrom info frozen)
+validFrom info frozen = record
+  { exclude = Admission.appendStrings _ _ (O.DefaultsInfo.excludeValid frozen) (O.PolicyVersionInfo.excludeValid info)
+  ; vendor = Admission.appendStrings _ _ (O.DefaultsInfo.vendorValid frozen) (O.PolicyVersionInfo.vendorValid info) }
 
 module Family (family pointer : ℕ) where
   owner = O.family family
@@ -39,7 +46,7 @@ module Family (family pointer : ℕ) where
     constructor saved
     field version defaultsSlot : ℕ
           info : O.PolicyVersionInfo
-          frozen : Config.PolicyDefaults
+          frozen : O.DefaultsInfo
           pointerAt : DB.lookup pointer world ≡ just (O.recordOf owner (O.currentPolicy version))
           versionAt : DB.lookup version world ≡ just (O.recordOf owner (O.policyVersion defaultsSlot info))
           defaultsAt : DB.lookup defaultsSlot world ≡ just (O.recordOf owner (O.defaults frozen))
@@ -48,7 +55,7 @@ module Family (family pointer : ℕ) where
   policy current = policyFrom (Saved.info current) (Saved.frozen current)
 
   rule : ∀ {world} → Saved world → E.Rule
-  rule current = E.fromStoredPolicy family (policy current)
+  rule current = E.fromStoredPolicy family (policy current) (validFrom (Saved.info current) (Saved.frozen current))
 
   defaultsValue : ∀ world version initial info →
     DB.lookup pointer world ≡ just (O.recordOf owner (O.currentPolicy version)) →
@@ -125,7 +132,7 @@ module Family (family pointer : ℕ) where
     (pointerExact world version initial info frozen pointerAt versionAt defaultsAt)
 
   effectiveExclusions : ∀ world (current : Saved world) → E.exclusions (rule current) ≡
-    Config.IndexConfig.exclude (Config.PolicyDefaults.rules (Saved.frozen current)) ++
+    Config.IndexConfig.exclude (Config.PolicyDefaults.rules (O.DefaultsInfo.value (Saved.frozen current))) ++
     Config.IndexConfig.exclude (I.PolicyDraft.index (O.PolicyVersionInfo.contents (Saved.info current)))
   effectiveExclusions world current = refl
 

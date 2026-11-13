@@ -16,8 +16,8 @@ open import Data.Product using (proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong; subst)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   holderIsMetadata : ∀ value ref → ref ∈ M.heldReferences value → E.indexed value ≡ false
   holderIsMetadata value ref present with E.classify (O.body value)
@@ -28,13 +28,13 @@ module Model (excluded : List String → String → Bool) where
   ... | ()
   holderIsMetadata value ref present | E.baselineAnchor with present
   ... | ()
-  holderIsMetadata value ref present | E.baselineBinding path with present
+  holderIsMetadata value ref present | E.baselineBinding path gitDefault with present
   ... | ()
   holderIsMetadata value ref present | E.checkoutBinding selected path with present
   ... | ()
   holderIsMetadata value ref present | E.snapshot selected with present
   ... | ()
-  holderIsMetadata value ref present | E.legacyFile path with present
+  holderIsMetadata value ref present | E.legacyFile path gitDefault with present
   ... | ()
   holderIsMetadata value ref present | E.graphContainer selected inUse with present
   ... | ()
@@ -48,10 +48,10 @@ module Model (excluded : List String → String → Bool) where
   ... | E.holder = refl
   ... | E.artifact = refl
   ... | E.baselineAnchor = refl
-  ... | E.baselineBinding path = refl
+  ... | E.baselineBinding path gitDefault = refl
   ... | E.checkoutBinding selected path = refl
   ... | E.snapshot selected = refl
-  ... | E.legacyFile path = refl
+  ... | E.legacyFile path gitDefault = refl
   ... | E.graphContainer selected inUse = refl
   ... | E.attached parent gate = refl
 
@@ -97,8 +97,8 @@ module Model (excluded : List String → String → Bool) where
       readerSurvives selection before after parent safe previous
 
   module Trace (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Pass = Progress.Model.Pass excluded selection accepted intent
-    module Core = Effects.Model.Core excluded selection accepted intent
+    module Pass = Progress.Model.Pass selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
 
     protectionAcrossTrace : ∀ {count before after} → Pass.Trace count before after → ∀ key →
       M.Protected selection before key → M.Protected selection after key

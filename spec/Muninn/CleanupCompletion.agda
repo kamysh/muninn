@@ -27,6 +27,9 @@ open import Relation.Nullary using (Dec; yes; no; ¬_; does)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong; cong₂; subst)
 module DB = O.DB
 
+zeroNotOne : 0 ≢ 1
+zeroNotOne ()
+
 Incoming : ℕ → O.World → Set
 Incoming key world = Σ (ℕ × O.Record) (λ row → row ∈ world ×
   Σ O.Reference (λ ref → ref ∈ O.references (O.body (proj₂ row)) × O.target ref ≡ key))
@@ -56,11 +59,11 @@ familyReferenceOwner : ∀ source target id → O.MayReference source target →
 familyReferenceOwner source .source id O.own owned = owned
 familyReferenceOwner source .O.installation id O.shared ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Classifier = C.Model excluded
-  module Edits = Effects.Model excluded
-  module Store = Storage.Model excluded
+module Model where
+  module M = E.Model
+  module Classifier = C.Model
+  module Edits = Effects.Model
+  module Store = Storage.Model
 
   module Contract (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
     module Core = Edits.Core selection accepted intent
@@ -92,8 +95,13 @@ module Model (excluded : List String → String → Bool) where
       | Effects.listEqual (E.filterKeys (M.edgeVisible selection world owner selected) edges) edges
     ...     | yes sameNodes | yes sameEdges = inj₁ (cong₂
         (λ ns es → O.recordOf owner (O.structuralSnapshot selected ns es payload)) sameNodes sameEdges)
-    ...     | no changedNodes | _ = inj₂ (owned , refl , inj₁ changedNodes)
-    ...     | _ | no changedEdges = inj₂ (owned , refl , inj₂ changedEdges)
+    ...     | no changedNodes | _ = inj₂ (owned , refl , inj₁ (inj₁ changedNodes))
+    ...     | _ | no changedEdges = inj₂ (owned , refl , inj₁ (inj₂ changedEdges))
+
+    projectionView world value | Store.hiddenDelta owner selected version path answer same with E.ownerEqual owner (E.targetOwner selection)
+    ... | no different = inj₁ refl
+    ... | yes owned = inj₂ (owned , refl , inj₂ (λ equal → zeroNotOne
+        (trans (sym (cong E.bindingPayload same)) equal)))
 
     NoPending : O.World → Set
     NoPending world = ∀ key → ¬ Pending key world

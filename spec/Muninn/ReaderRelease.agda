@@ -155,12 +155,12 @@ receiptFrame owner removed ready replan world key taskOwner receiptData =
   ... | inj₁ same = trans (sym (cong (DB.lookup key) same)) found
   ... | inj₂ (actual , same) = lookupBeforeDelete world removed key _ (trans (sym (cong (DB.lookup key) same)) found)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Pins = Protection.Model excluded
+module Model where
+  module M = E.Model
+  module Pins = Protection.Model
 
   module Family (selection : E.Rule) where
-    module Gate = Admission.Model.Family excluded selection
+    module Gate = Admission.Model.Family selection
 
     protectedPresent : ∀ world key → M.Protected selection world key → Σ O.Record (λ value → DB.lookup key world ≡ just value)
     protectedPresent world .(O.target ref) (M.held source value ref found included resolved) = O.Resolves.value resolved , O.Resolves.found resolved
@@ -232,7 +232,7 @@ module Model (excluded : List String → String → Bool) where
         otherHolds : ∀ key (pin : M.Protected selection world key) → Gate.sourceOf pin ≢ removed → M.Protected selection (DB.delete removed world) key
         otherHolds .(O.target ref) (M.held source value ref found included resolved) different =
           M.held source value ref (trans (DB.deletePreservesOther removed source world (λ equal → different (sym equal))) found) included
-            (resolvedSurvives source value ref found (Released.Model.heldRaw excluded value ref included) resolved)
+            (resolvedSurvives source value ref found (Released.Model.heldRaw value ref included) resolved)
         otherHolds .(O.target ref) (M.required previous (M.reference source value ref found included resolved)) different =
           M.requireReference source value ref earlier
             (trans (DB.deletePreservesOther removed source world (survivingProtectionDistinct source earlier)) found) raw

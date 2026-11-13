@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupBatch where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupEffects as Effects
 import Muninn.CleanupProgress as Progress
 import Muninn.CleanupReleased as Released
@@ -32,15 +33,16 @@ receiptControl recordOwner (R.entry requestId (R.active input names work)) = ref
 receiptControl recordOwner (R.entry requestId (R.finished input names result)) = refl
 receiptControl recordOwner (R.entry requestId R.used) = refl
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (originalRules : List String)
-    (original : M.Intent (E.rule family originalRules) accepted) (id : I.OperationId) (taskSlot : ℕ) where
+    (originalValid : Admission.Entries (Data.List.map Data.String.toList originalRules))
+    (original : M.Intent (E.rule family originalRules originalValid) accepted) (id : I.OperationId) (taskSlot : ℕ) where
     owner = O.family family
     captured = M.Intent.keys original
     module Policy = Stored.Family family pointer
-    module Task = Finalization.Model.Task excluded (E.rule family originalRules) accepted original id taskSlot
+    module Task = Finalization.Model.Task (E.rule family originalRules originalValid) accepted original id taskSlot
 
     module Selected {world : O.World} (current : Policy.Saved world) where
       selection = Policy.rule current
@@ -51,9 +53,9 @@ module Model (excluded : List String → String → Bool) where
         ; uniqueBefore = M.Intent.uniqueBefore original
         ; covers = M.Intent.covers original }
 
-      module Core = Effects.Model.Core excluded selection accepted intent
-      module Pass = Progress.Model.Pass excluded selection accepted intent
-      module Use = Released.Model.Loop excluded selection accepted intent
+      module Core = Effects.Model.Core selection accepted intent
+      module Pass = Progress.Model.Pass selection accepted intent
+      module Use = Released.Model.Loop selection accepted intent
 
       captureUnchanged : M.Intent.keys intent ≡ captured
       captureUnchanged = refl
@@ -165,4 +167,4 @@ module Model (excluded : List String → String → Bool) where
       currentViews : O.Admissible before → Views.Valid before → Views.Valid after
       currentViews valid viewsValid = subst Views.Valid (sym sameEffect)
         (ViewCleanup.validAfterCleanup (proj₂ trail) valid viewsValid)
-        where module ViewCleanup = Views.Model.Cleanup excluded Step.selection accepted Step.intent
+        where module ViewCleanup = Views.Model.Cleanup Step.selection accepted Step.intent

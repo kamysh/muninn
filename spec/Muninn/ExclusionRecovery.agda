@@ -17,14 +17,14 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; subst
 module Exec = O.Execution
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Run (selection : E.Rule) (accepted : O.World) (intent : Outcome.Intent selection accepted) where
-    module Worker = Loop.Model.Run excluded selection accepted intent
+    module Worker = Loop.Model.Run selection accepted intent
     module Pass = Worker.Pass
     module Core = Worker.Core
-    module Safety = History.Model.History excluded selection accepted intent
+    module Safety = History.Model.History selection accepted intent
 
     -- The script executes exactly the transactions selected by the actual pass.
     fromTrace : ∀ {count before after} → Pass.Trace count before after → Exec.Script ⊤

@@ -32,7 +32,7 @@ writeFileElsewhere eq target other value files distinct with eq target other
 ... | yes same = ⊥-elim (distinct same)
 ... | no _ = refl
 
--- Equality is decided on the complete entry (family/version AND tier).
+-- Equality is decided on the complete entry (family/version, tier AND saved Git default).
 -- Absence/inheritance is distinct from an explicit deletion of a baseline file.
 fileDifference : ((a b : Maybe FileEntry) → Dec (a ≡ b)) →
   Maybe FileEntry → Maybe FileEntry → Override

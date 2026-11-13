@@ -47,10 +47,10 @@ reservedSmaller world key present = s≤s (memberBound (Insert.reserved world) k
 allocate : (world : O.World) → Σ ℕ (Insert.Fresh world)
 allocate world = freshId world , fresh world
 
-module Model (excluded : List String → String → Bool) where
+module Model where
   module Family (selection : E.Rule) where
-    module Gate = Admission.Model.Family excluded selection
-    module Tasks = Scheduling.Model.Family excluded selection
+    module Gate = Admission.Model.Family selection
+    module Tasks = Scheduling.Model.Family selection
 
     admit : ∀ {A : Set} → List O.Reference → String → (ℕ → A) → (O.World → A) → DB.Transaction A
     admit refs payload ready replan = DB.scan (λ world → Gate.admit (freshId world) refs payload ready replan)

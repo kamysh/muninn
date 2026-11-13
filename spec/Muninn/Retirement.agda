@@ -152,11 +152,11 @@ import Data.String as String
 import Muninn.Worktree as Worktree
 import Muninn.Types as Types
 
-module Reclamation (excluded : List String → String → Bool)
+module Reclamation
   (selection : Outcomes.Rule) (accepted : Owned.World)
-  (intent : Outcomes.Model.Intent excluded selection accepted) where
-  module Model = Outcomes.Model excluded
-  module Core = Effects.Model.Core excluded selection accepted intent
+  (intent : Outcomes.Model.Intent selection accepted) where
+  module Model = Outcomes.Model
+  module Core = Effects.Model.Core selection accepted intent
   module DB = Owned.DB
 
   -- Observe the actual registration in the same transaction as the cleanup.
@@ -199,9 +199,9 @@ module Reclamation (excluded : List String → String → Bool)
 
   -- After existing users release their records, the finite pass reaches the
   -- independent cleanup outcome; no extra age or retention condition applies.
-  module Pass = Progress.Model.Pass excluded selection accepted intent
-  module Use = Released.Model.Loop excluded selection accepted intent
-  module Worker = Loop.Model.Run excluded selection accepted intent
+  module Pass = Progress.Model.Pass selection accepted intent
+  module Use = Released.Model.Loop selection accepted intent
+  module Worker = Loop.Model.Run selection accepted intent
 
   retiredCleanupFinishes : Owned.Admissible accepted → Use.Released accepted →
     Model.Complete selection accepted intent accepted (Pass.Result.after (Pass.run accepted))
@@ -218,11 +218,11 @@ open import Muninn.CatalogInputs using (OperationId)
 open import Data.Unit using (tt)
 open import Data.Nat using (zero)
 
-module FamilyControl (excluded : List String → String → Bool)
+module FamilyControl
   (selection : Outcomes.Rule) where
-  module M = Outcomes.Model excluded
+  module M = Outcomes.Model
   module DB = Owned.DB
-  module Schedule = Scheduling.Model.Family excluded selection
+  module Schedule = Scheduling.Model.Family selection
 
   data Reply : Set where
     inspected cleanupScheduled : Reply
@@ -488,7 +488,7 @@ module FamilyControl (excluded : List String → String → Bool)
       ; uniqueBefore = Owned.Admissible.unique afterValid
       ; covers = λ key value present owned → covered key value (Order.memberLookup after key value (Owned.Admissible.unique afterValid) present) owned }
 
-    module Worker = Loop.Model.Run excluded selection after intent
+    module Worker = Loop.Model.Run selection after intent
     finishes : Worker.Use.Released after →
       M.Complete selection after intent after (Worker.Pass.Result.after (Worker.Pass.run after))
     finishes = Worker.finishes afterValid

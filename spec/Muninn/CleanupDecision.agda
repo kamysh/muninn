@@ -4,6 +4,7 @@ module Muninn.CleanupDecision where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.PolicyCleanupBatch as Batch
 import Muninn.CleanupFinalization as Finalization
 import Muninn.CleanupBlocker as Blocker
@@ -24,18 +25,19 @@ data Next : Set where
   missingTask doFinish doWait doFollowup : Next
   doEdit : ℕ → Next
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted) (id : Input.OperationId) (slot : ℕ) where
-    module Work = Batch.Model.Family excluded family pointer accepted rules intent id slot
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted) (id : Input.OperationId) (slot : ℕ) where
+    module Work = Batch.Model.Family family pointer accepted rules validRules intent id slot
 
     module Current {world : O.World} (current : Work.Policy.Saved world) where
       module Step = Work.Selected current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id slot
-      module Find = Blocker.Model.Current excluded Step.selection accepted Step.intent world
-      module Followup = Selection.Model.Current excluded Step.selection accepted Step.intent id world
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id slot
+      module Find = Blocker.Model.Current Step.selection accepted Step.intent world
+      module Followup = Selection.Model.Current Step.selection accepted Step.intent id world
 
       abstract
         taskPresent : Bool

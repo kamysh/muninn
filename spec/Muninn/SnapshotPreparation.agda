@@ -33,21 +33,15 @@ filterIdempotent keep (first ∷ keys) with keep first in selected
 ... | true rewrite selected = cong (first ∷_) (filterIdempotent keep keys)
 ... | false = filterIdempotent keep keys
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Store = Storage.Model excluded
-  module Added = Insert.Model excluded
-  module Obs = Observations.Model excluded
+module Model where
+  module M = E.Model
+  module Store = Storage.Model
+  module Added = Insert.Model
+  module Obs = Observations.Model
 
   projectIdempotent : ∀ selection world value →
     M.project selection world (M.project selection world value) ≡ M.project selection world value
-  projectIdempotent selection world value with Store.shape selection world value
-  ... | Store.plain same = cong (M.project selection world) same
-  ... | Store.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection) in decision
-  ...   | no different rewrite decision = refl
-  ...   | yes same rewrite decision = cong₂ (λ ns es → O.recordOf owner (O.structuralSnapshot selected ns es payload))
-    (filterIdempotent (M.symbolVisible selection world owner selected) nodes)
-    (filterIdempotent (M.edgeVisible selection world owner selected) edges)
+  projectIdempotent = Store.projectIdempotent
 
   module Family (selection : E.Rule) where
     owner = E.targetOwner selection
@@ -58,6 +52,7 @@ module Model (excluded : List String → String → Bool) where
     prepareValue next replan world nothing = replan world
     prepareValue next replan world (just value) with Observations.snapshotView value
     ... | Observations.plain nonSnapshot = replan world
+    ... | Observations.delta owner selected version path answer = replan world
     ... | Observations.snapshot sourceOwner selected nodes edges payload with E.ownerEqual sourceOwner owner
     ...   | yes same = DB.put (Allocation.freshId world) (M.project selection world (O.recordOf sourceOwner (O.structuralSnapshot selected nodes edges payload))) (next (Allocation.freshId world))
     ...   | no different = replan world
@@ -101,9 +96,9 @@ module Model (excluded : List String → String → Bool) where
       copied = M.project selection before original
       after = DB.write slot copied before
       intent = M.captureIntent selection before (O.Admissible.unique valid)
-      module Aligned = Alignment.Model.Contract excluded selection before intent
-      module Hist = History.Model.History excluded selection before intent
-      module CurrentView = Views.Model excluded
+      module Aligned = Alignment.Model.Contract selection before intent
+      module Hist = History.Model.History selection before intent
+      module CurrentView = Views.Model
 
       copiedOwner : O.owner copied ≡ owner
       copiedOwner = Store.projectOwner selection before original
@@ -147,7 +142,9 @@ module Model (excluded : List String → String → Bool) where
       support = record
         { safe = Added.insertionSafety selection before slot copied fresh
         ; uniqueBefore = O.Admissible.unique valid; uniqueAfter = O.Admissible.unique afterValid
-        ; backwardPlain = backwardPlain }
+        ; backwardPlain = λ key value present facts → backwardPlain key value present (proj₁ facts)
+        ; backwardDelta = λ key value present kind → value ,
+            backwardPlain key value present (λ equal → Storage.snapshotNotDelta (trans (sym equal) kind)) , Storage.deltaUnchanged value kind }
 
       viewsAfter : Views.Valid after
       viewsAfter = record

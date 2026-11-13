@@ -9,6 +9,7 @@ import Muninn.CleanupReverseViews as ReverseViews
 import Muninn.CleanupNeed as Need
 import Muninn.CleanupNeedScope as Scope
 import Muninn.CleanupStorage as Storage
+import Muninn.GitIgnore
 import Muninn.ReceiptTypes as Receipt
 open import Data.Nat using (ℕ)
 open import Data.Bool using (Bool; true; false; _∧_)
@@ -18,7 +19,7 @@ open import Data.List.Membership.Propositional using (_∈_)
 open import Data.List.Membership.Propositional.Properties using (∈-map⁺; ∈-map⁻; ∈-++⁻; ∈-++⁺ˡ; ∈-++⁺ʳ)
 open import Data.List.Relation.Unary.Any using (here; there)
 import Data.List.Relation.Unary.All as All
-open import Data.Maybe using (just)
+open import Data.Maybe using (just; nothing)
 open import Data.Product using (Σ; _×_; _,_)
 open import Data.Sum using (inj₁; inj₂)
 open import Data.Empty using (⊥-elim)
@@ -32,13 +33,13 @@ boolSame false false forward backward = refl
 boolSame false true forward backward with backward refl
 ... | ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
-  module Needs = Need.Model excluded
-  module Store = Storage.Model excluded
-  module Targets = Scope.Model excluded
-  module BackViews = ReverseViews.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
+  module Needs = Need.Model
+  module Store = Storage.Model
+  module Targets = Scope.Model
+  module BackViews = ReverseViews.Model
 
   record Origin (selection : E.Rule) (before : O.World) (key : ℕ) (value : O.Record) : Set where
     constructor origin
@@ -53,6 +54,12 @@ module Model (excluded : List String → String → Bool) where
   ... | Observations.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes same = refl
   ...   | no different = refl
+
+  parentProjection selection world observed value | Observations.delta owner selected nothing path answer = refl
+  parentProjection selection world observed value | Observations.delta owner selected (just version) path answer
+    with M.includedWithGit selection owner (Muninn.GitIgnore.ignored answer) path
+  ... | true = refl
+  ... | false = refl
 
   module Reverse (selection : E.Rule) (before after : O.World) (support : Obs.Support selection before after)
     (registered : M.familyRegistered selection before ≡ true)
@@ -78,10 +85,10 @@ module Model (excluded : List String → String → Bool) where
     roleSame E.artifact = refl
     roleSame (E.attached parent gate) = refl
     roleSame E.baselineAnchor = cong₂ _∧_ registrationSame anyCheckoutSame
-    roleSame (E.baselineBinding path) = cong₂ _∧_ registrationSame (cong (λ live → live ∧ M.included selection (E.targetOwner selection) path) anyCheckoutSame)
-    roleSame (E.checkoutBinding selected path) = cong₂ _∧_ registrationSame (cong (λ live → live ∧ M.included selection (E.targetOwner selection) path) (checkoutSame selected))
+    roleSame (E.baselineBinding path gitDefault) = cong₂ _∧_ registrationSame (cong (λ live → live ∧ M.includedWithGit selection (E.targetOwner selection) gitDefault path) anyCheckoutSame)
+    roleSame (E.checkoutBinding selected path) = cong₂ _∧_ registrationSame (checkoutSame selected)
     roleSame (E.snapshot selected) = cong₂ _∧_ registrationSame (checkoutSame selected)
-    roleSame (E.legacyFile path) = cong₂ _∧_ registrationSame (cong (λ live → live ∧ M.included selection (E.targetOwner selection) path) legacySame)
+    roleSame (E.legacyFile path gitDefault) = cong₂ _∧_ registrationSame (cong (λ live → live ∧ M.includedWithGit selection (E.targetOwner selection) gitDefault path) legacySame)
     roleSame (E.graphContainer Data.Maybe.nothing inUse) = cong (inUse ∧_) (cong₂ _∧_ registrationSame anyCheckoutSame)
     roleSame (E.graphContainer (just selected) inUse) = cong (inUse ∧_) (cong₂ _∧_ registrationSame (checkoutSame selected))
 
@@ -113,6 +120,10 @@ module Model (excluded : List String → String → Bool) where
         (E.filterKeysComplete (M.edgeVisible selection before owner selected) edges key (Storage.filterSubset _ edges key filtered)
           (Back.edgeBackward owner selected key registered (E.filterKeysSound _ edges key filtered)))))
 
+    projectedRefsBackward value ref present | Observations.delta owner selected version path answer =
+      subst (λ row → ref ∈ O.references (O.body row))
+        (Storage.Model.projectWorldIndependent selection after before value (λ ())) present
+
     refsBackward : ∀ original value ref → M.project selection before value ≡ M.project selection before original →
       ref ∈ M.referencesFor M.permanent selection after value → ref ∈ M.referencesFor M.permanent selection before original
     refsBackward original value ref same present = subst (λ refs → ref ∈ refs)
@@ -135,12 +146,12 @@ module Model (excluded : List String → String → Bool) where
     parentBackward (O.recordOf owner (O.notePosting _ _)) ref ()
     parentBackward (O.recordOf owner (O.noteVector _ _)) ref ()
     parentBackward (O.recordOf owner (O.fileVersion _)) ref ()
-    parentBackward (O.recordOf owner (O.baseBinding _ _)) ref ()
-    parentBackward (O.recordOf owner (O.deltaBinding _ _ _)) ref ()
+    parentBackward (O.recordOf owner (O.baseBinding _ _ _)) ref ()
+    parentBackward (O.recordOf owner (O.deltaBinding _ _ _ _)) ref ()
     parentBackward (O.recordOf owner (O.basePointer _)) ref ()
     parentBackward (O.recordOf owner (O.edge _ _ _)) ref ()
     parentBackward (O.recordOf owner (O.structuralSnapshot _ _ _ _)) ref ()
-    parentBackward (O.recordOf owner (O.legacy _ _)) ref ()
+    parentBackward (O.recordOf owner (O.legacy _ _ _)) ref ()
     parentBackward (O.recordOf owner (O.staging _ _)) ref ()
     parentBackward (O.recordOf owner (O.acceptedWork _ _)) ref ()
     parentBackward (O.recordOf owner (O.cleanupWork _ _ _)) ref ()

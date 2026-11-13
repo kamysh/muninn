@@ -2,6 +2,7 @@
 module Muninn.CleanupViews where
 
 import Muninn.OwnedState as O
+import Muninn.GitIgnore as Git
 import Muninn.ExclusionOutcomes as E
 import Muninn.CleanupObservations as Observations
 import Muninn.CleanupNeedScope as Scope
@@ -30,12 +31,12 @@ notTrueFalse : ∀ b → not b ≡ true → b ≡ false
 notTrueFalse false proof = refl
 notTrueFalse true ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Support = Observations.Model excluded
+module Model where
+  module M = E.Model
+  module Support = Observations.Model
 
   module View (selection : E.Rule) where
-    includedAtTarget : ∀ path → M.included selection (E.targetOwner selection) path ≡ not (excluded (E.exclusions selection) path)
+    includedAtTarget : ∀ path → M.included selection (E.targetOwner selection) path ≡ not (E.excluded selection false path)
     includedAtTarget path with E.ownerEqual (E.targetOwner selection) (E.targetOwner selection)
     ... | yes same = refl
     ... | no different = ⊥-elim (different refl)
@@ -45,144 +46,193 @@ module Model (excluded : List String → String → Bool) where
     ... | yes same = rooted
     ... | no different = ⊥-elim (different owned)
 
-    bindingIdentity : ∀ world owner selected path version value → M.bindingValue selection world owner selected path version value ≡ true →
+    bindingIdentityRaw : ∀ world owner selected path version value → M.bindingRaw selection world owner selected path version value ≡ true →
       (O.owner value ≡ owner) × (O.kind (O.body value) ≢ O.structuralSnapshotK)
 
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.registration _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.checkout _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.creationIntent _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.defaults _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.policyVersion _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.currentPolicy _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.note _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.notePosting _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.noteVector _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.fileVersion _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.basePointer _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.chunk _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.posting _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.vector _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.symbol _ _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.edge _ _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.legacy _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.staging _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.activeReader _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.continuation _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.receipt _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.migration _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.usage _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.bootstrap _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.modelCache _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.coordination _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.schemaResource _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.logFile _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) positive =
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.registration _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.checkout _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.creationIntent _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.defaults _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.policyVersion _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.currentPolicy _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.note _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.notePosting _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.noteVector _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.fileVersion _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.basePointer _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.chunk _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.posting _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.vector _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.symbol _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.edge _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.legacy _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.staging _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.activeReader _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.continuation _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.receipt _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.migration _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.usage _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.bootstrap _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.modelCache _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.coordination _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.schemaResource _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.logFile _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath gitAnswer)) positive =
       sym (Completion.decisionWitness (E.ownerEqual owner storedOwner) ((Scope.andLeft (E.sameOwner owner storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path world)))) (positive)))) , (λ ())
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) ()
-    bindingIdentity world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) positive =
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath _)) ()
+    bindingIdentityRaw world owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath gitAnswer)) positive =
       sym (Completion.decisionWitness (E.ownerEqual owner storedOwner) ((Scope.andLeft (E.sameOwner owner storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive)))) , (λ ())
+
+    bindingIdentity : ∀ world owner selected path version value → M.bindingValue selection world owner selected path version value ≡ true →
+      (O.owner value ≡ owner) × (O.kind (O.body value) ≢ O.structuralSnapshotK)
+    bindingIdentity world owner selected path version value positive = bindingIdentityRaw world owner selected path version value
+      (Scope.andRight (M.bindingSelected selection value) (M.bindingRaw selection world owner selected path version value) positive)
+
+    bindingRootRaw : ∀ world selected path version value → M.familyRegistered selection world ≡ true →
+      M.checkoutLive selection world selected ≡ true → M.bindingSelected selection value ≡ true →
+      M.bindingRaw selection world (E.targetOwner selection) selected path version value ≡ true → M.rooted selection world value ≡ true
+
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.registration _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.checkout _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.creationIntent _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.defaults _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.policyVersion _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.currentPolicy _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.note _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.notePosting _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.noteVector _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.fileVersion _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.basePointer _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.chunk _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.posting _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.vector _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.symbol _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.edge _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.legacy _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.staging _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.activeReader _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.continuation _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.receipt _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.migration _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.usage _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.bootstrap _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.modelCache _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.coordination _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.schemaResource _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.publishedView _ _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.logFile _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.bootstrapStage _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath gitAnswer)) registered live included positive
+      with Completion.decisionWitness (E.ownerEqual (E.targetOwner selection) storedOwner) ((Scope.andLeft (E.sameOwner (E.targetOwner selection) storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world)))) (positive)))
+    ... | refl with Completion.decisionWitness (path String.≟ storedPath) ((Scope.andLeft (Relation.Nullary.does (path String.≟ storedPath)) ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world))) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world)))) (positive))))
+    ...   | refl = ownedRooted world (O.recordOf (E.targetOwner selection) (O.baseBinding storedVersion path gitAnswer)) refl
+      (andBoth registered (andBoth (Support.checkoutImpliesAny selection world selected live) included))
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath _)) registered live included ()
+    bindingRootRaw world selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath gitAnswer)) registered live included positive
+      with Completion.decisionWitness (E.ownerEqual (E.targetOwner selection) storedOwner) ((Scope.andLeft (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive)))
+    ... | refl with Completion.decisionWitness (checkout ≟ selected) ((Scope.andLeft (E.sameNat checkout selected) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion)) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive))))
+    ...   | refl with Completion.decisionWitness (path String.≟ storedPath) ((Scope.andLeft (Relation.Nullary.does (path String.≟ storedPath)) (E.sameNat version storedVersion) (Scope.andRight (E.sameNat checkout selected) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion)) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive)))))
+    ...     | refl = ownedRooted world (O.recordOf (E.targetOwner selection) (O.deltaBinding selected (just storedVersion) path gitAnswer)) refl
+      (andBoth registered live)
 
     bindingRoot : ∀ world selected path version value → M.familyRegistered selection world ≡ true →
       M.checkoutLive selection world selected ≡ true → M.included selection (E.targetOwner selection) path ≡ true →
       M.bindingValue selection world (E.targetOwner selection) selected path version value ≡ true → M.rooted selection world value ≡ true
+    bindingRoot world selected path version value registered live included positive = bindingRootRaw world selected path version value
+      registered live (Scope.andLeft _ _ positive) (Scope.andRight _ _ positive)
 
-    bindingRoot world selected path version (O.recordOf storedOwner (O.registration _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.checkout _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.creationIntent _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.defaults _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.policyVersion _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.currentPolicy _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.note _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.notePosting _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.noteVector _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.fileVersion _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.basePointer _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.chunk _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.posting _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.vector _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.symbol _ _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.edge _ _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.legacy _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.staging _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.activeReader _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.continuation _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.receipt _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.migration _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.usage _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.bootstrap _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.modelCache _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.coordination _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.schemaResource _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.publishedView _ _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.logFile _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.bootstrapStage _)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) registered live included positive
-      with Completion.decisionWitness (E.ownerEqual (E.targetOwner selection) storedOwner) ((Scope.andLeft (E.sameOwner (E.targetOwner selection) storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world)))) (positive)))
-    ... | refl with Completion.decisionWitness (path String.≟ storedPath) ((Scope.andLeft (Relation.Nullary.does (path String.≟ storedPath)) ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world))) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta (E.targetOwner selection) selected path world)))) (positive))))
-    ...   | refl = ownedRooted world (O.recordOf (E.targetOwner selection) (O.baseBinding storedVersion path)) refl
-      (andBoth registered (andBoth (Support.checkoutImpliesAny selection world selected live) included))
-    bindingRoot world selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) registered live included ()
-    bindingRoot world selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) registered live included positive
-      with Completion.decisionWitness (E.ownerEqual (E.targetOwner selection) storedOwner) ((Scope.andLeft (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive)))
-    ... | refl with Completion.decisionWitness (checkout ≟ selected) ((Scope.andLeft (E.sameNat checkout selected) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion)) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive))))
-    ...   | refl with Completion.decisionWitness (path String.≟ storedPath) ((Scope.andLeft (Relation.Nullary.does (path String.≟ storedPath)) (E.sameNat version storedVersion) (Scope.andRight (E.sameNat checkout selected) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion)) (Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) ((E.sameNat checkout selected) ∧ ((Relation.Nullary.does (path String.≟ storedPath)) ∧ (E.sameNat version storedVersion))) (positive)))))
-    ...     | refl = ownedRooted world (O.recordOf (E.targetOwner selection) (O.deltaBinding selected (just storedVersion) path)) refl
-      (andBoth registered (andBoth live included))
+    bindingForwardRaw : ∀ before after owner selected path version value → Support.Support selection before after →
+      M.bindingRaw selection before owner selected path version value ≡ true → M.bindingRaw selection after owner selected path version value ≡ true
 
-    bindingForward : ∀ before after owner selected path version value → Support.Support selection before after →
-      M.bindingValue selection before owner selected path version value ≡ true → M.bindingValue selection after owner selected path version value ≡ true
-
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.registration _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.checkout _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.creationIntent _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.defaults _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.policyVersion _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.currentPolicy _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.note _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.notePosting _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.noteVector _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.fileVersion _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.basePointer _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.chunk _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.posting _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.vector _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.symbol _ _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.edge _ _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.legacy _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.staging _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.activeReader _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.continuation _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.receipt _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.migration _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.usage _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.bootstrap _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.modelCache _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.coordination _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.schemaResource _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.logFile _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) support positive =
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.registration _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.checkout _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.creationIntent _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.defaults _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.policyVersion _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.currentPolicy _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.note _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.notePosting _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.noteVector _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.fileVersion _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.basePointer _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.chunk _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.posting _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.vector _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.symbol _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.edge _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.legacy _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.staging _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.acceptedWork _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.cleanupWork _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.activeReader _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.continuation _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.receipt _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.migration _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.usage _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.bootstrap _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.modelCache _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.coordination _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.schemaResource _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.graphResource _ _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.publishedView _ _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.logFile _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.bootstrapStage _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath gitAnswer)) support positive =
       andBoth ((Scope.andLeft (E.sameOwner owner storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before)))) (positive))) (andBoth ((Scope.andLeft (Relation.Nullary.does (path String.≟ storedPath)) ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before))) (Scope.andRight (E.sameOwner owner storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before)))) (positive))))
         (andBoth ((Scope.andLeft (E.sameNat version storedVersion) (not (M.hasDelta owner selected path before)) (Scope.andRight (Relation.Nullary.does (path String.≟ storedPath)) ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before))) (Scope.andRight (E.sameOwner owner storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before)))) (positive)))))
           (cong not (Support.deltaAbsence selection before after owner selected path support
             (notTrueFalse _ ((Scope.andRight (E.sameNat version storedVersion) (not (M.hasDelta owner selected path before)) (Scope.andRight (Relation.Nullary.does (path String.≟ storedPath)) ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before))) (Scope.andRight (E.sameOwner owner storedOwner) ((Relation.Nullary.does (path String.≟ storedPath)) ∧ ((E.sameNat version storedVersion) ∧ (not (M.hasDelta owner selected path before)))) (positive))))))))))
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) support ()
-    bindingForward before after owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) support positive = positive
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath _)) support ()
+    bindingForwardRaw before after owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath gitAnswer)) support positive = positive
+
+    bindingForward : ∀ before after owner selected path version value → Support.Support selection before after →
+      M.bindingValue selection before owner selected path version value ≡ true → M.bindingValue selection after owner selected path version value ≡ true
+    bindingForward before after owner selected path version value support positive = andBoth
+      (Scope.andLeft _ _ positive)
+      (bindingForwardRaw before after owner selected path version value support (Scope.andRight _ _ positive))
+
+    bindingProject : ∀ world owner selected path version value →
+      M.bindingValue selection world owner selected path version value ≡ true → M.project selection world value ≡ value
+    bindingProject world owner selected path version value positive with Observations.snapshotView value
+    ... | Observations.plain facts = Storage.Model.projectPlain selection world value facts
+    ... | Observations.snapshot storedOwner checkout nodes edges payload with positive
+    ...   | ()
+    bindingProject world owner selected path version value positive | Observations.delta storedOwner checkout nothing storedPath answer with positive
+    ... | ()
+    bindingProject world owner selected path version value positive | Observations.delta storedOwner checkout (just storedVersion) storedPath answer =
+      cong (λ mode → M.deltaProjection mode storedOwner checkout storedVersion storedPath answer) (Scope.andLeft _ _ positive)
+
+    bindingInjective : ∀ world owner selected path version value retained →
+      M.bindingValue selection world owner selected path version value ≡ true →
+      M.project selection world retained ≡ M.project selection world value → retained ≡ value
+    bindingInjective world owner selected path version value retained positive projected with Storage.Model.shape selection world retained
+    ... | Storage.Model.plain same = trans (sym same) (trans projected (bindingProject world owner selected path version value positive))
+    ... | Storage.Model.snapshot storedOwner checkout nodes edges payload = ⊥-elim
+      (proj₂ (bindingIdentity world owner selected path version value positive)
+        (trans (sym (Storage.Model.projectKind selection world value))
+          (trans (sym (cong (λ row → O.kind (O.body row)) projected))
+            (Storage.Model.projectKind selection world (O.recordOf storedOwner (O.structuralSnapshot checkout nodes edges payload))))))
+    ... | Storage.Model.hiddenDelta storedOwner checkout storedVersion storedPath answer same = ⊥-elim
+      (Observations.falseNotTrue (trans (cong (M.bindingValue selection world owner selected path version)
+        (trans (sym same) (trans projected (bindingProject world owner selected path version value positive)))) positive))
+
+    neededBinding : ∀ before after key value owner selected path version → M.Safety selection before after →
+      DB.lookup key before ≡ just value → M.Needed selection before key →
+      M.bindingValue selection before owner selected path version value ≡ true → DB.lookup key after ≡ just value
+    neededBinding before after key value owner selected path version safe found needed positive with M.Safety.needed safe key value found needed
+    ... | retained , present , projected , nodes , edges = trans present
+      (cong just (bindingInjective before owner selected path version value retained positive projected))
 
     retainBinding : ∀ before after key value owner selected path version → Support.Support selection before after →
       DB.lookup key before ≡ just value → (owner ≡ E.targetOwner selection → M.familyRegistered selection before ≡ true) →
@@ -192,8 +242,8 @@ module Model (excluded : List String → String → Bool) where
       with bindingIdentity before owner selected path version value positive | E.ownerEqual owner (E.targetOwner selection)
     ... | sameOwner , nonSnapshot | no different = M.Safety.unrelated (Support.Support.safe support) key value found
         (λ owned → different (trans (sym sameOwner) owned))
-    ... | sameOwner , nonSnapshot | yes refl = Support.neededSame selection before after key value (Support.Support.safe support) found
-      (M.root key value found (bindingRoot before selected path version value (registered refl) live (trans (includedAtTarget path) included) positive)) nonSnapshot
+    ... | sameOwner , nonSnapshot | yes refl = neededBinding before after key value owner selected path version (Support.Support.safe support) found
+      (M.root key value found (bindingRoot before selected path version value (registered refl) live (trans (includedAtTarget path) included) positive)) positive
 
     versionPositive : ∀ before after owner selected path version → Support.Support selection before after →
       (owner ≡ E.targetOwner selection → M.familyRegistered selection before ≡ true) →
@@ -222,8 +272,8 @@ module Model (excluded : List String → String → Bool) where
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.notePosting _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.noteVector _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.fileVersion _)) ()
-    publishedMetadata world owner path version key (O.recordOf storedOwner (O.baseBinding _ _)) ()
-    publishedMetadata world owner path version key (O.recordOf storedOwner (O.deltaBinding _ _ _)) ()
+    publishedMetadata world owner path version key (O.recordOf storedOwner (O.baseBinding _ _ _)) ()
+    publishedMetadata world owner path version key (O.recordOf storedOwner (O.deltaBinding _ _ _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.basePointer _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.chunk _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.posting _ _)) ()
@@ -231,7 +281,7 @@ module Model (excluded : List String → String → Bool) where
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.symbol _ _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.edge _ _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) ()
-    publishedMetadata world owner path version key (O.recordOf storedOwner (O.legacy _ _)) ()
+    publishedMetadata world owner path version key (O.recordOf storedOwner (O.legacy _ _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.staging _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.acceptedWork _ _)) ()
     publishedMetadata world owner path version key (O.recordOf storedOwner (O.cleanupWork _ _ _)) ()
@@ -264,8 +314,8 @@ module Model (excluded : List String → String → Bool) where
     publishedForward before after owner path version key (O.recordOf storedOwner (O.notePosting _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.noteVector _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.fileVersion _)) support registered ()
-    publishedForward before after owner path version key (O.recordOf storedOwner (O.baseBinding _ _)) support registered ()
-    publishedForward before after owner path version key (O.recordOf storedOwner (O.deltaBinding _ _ _)) support registered ()
+    publishedForward before after owner path version key (O.recordOf storedOwner (O.baseBinding _ _ _)) support registered ()
+    publishedForward before after owner path version key (O.recordOf storedOwner (O.deltaBinding _ _ _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.basePointer _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.chunk _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.posting _ _)) support registered ()
@@ -273,7 +323,7 @@ module Model (excluded : List String → String → Bool) where
     publishedForward before after owner path version key (O.recordOf storedOwner (O.symbol _ _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.edge _ _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) support registered ()
-    publishedForward before after owner path version key (O.recordOf storedOwner (O.legacy _ _)) support registered ()
+    publishedForward before after owner path version key (O.recordOf storedOwner (O.legacy _ _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.staging _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.acceptedWork _ _)) support registered ()
     publishedForward before after owner path version key (O.recordOf storedOwner (O.cleanupWork _ _ _)) support registered ()
@@ -302,11 +352,13 @@ module Model (excluded : List String → String → Bool) where
         (publishedMetadata before owner path version key value selected)))
       (publishedForward before after owner path version key value support registered selected)
 
-    symbolNonSnapshot : ∀ world selected value → M.symbolObservation selection world (E.targetOwner selection) selected (just value) ≡ true → O.kind (O.body value) ≢ O.structuralSnapshotK
+    symbolNonSnapshot : ∀ world selected value → M.symbolObservation selection world (E.targetOwner selection) selected (just value) ≡ true → Storage.PlainKind value
     symbolNonSnapshot world selected value positive with Observations.snapshotView value
     ... | Observations.plain nonSnapshot = nonSnapshot
     ... | Observations.snapshot owner checkout nodes edges payload with positive
     ...   | ()
+    symbolNonSnapshot world selected value positive | Observations.delta owner checkout version path answer with positive
+    ... | ()
 
     symbolForward : ∀ before after selected key value → Support.Support selection before after → DB.lookup key before ≡ just value →
       M.Needed selection before key → M.symbolObservation selection before (E.targetOwner selection) selected (just value) ≡ true →
@@ -322,8 +374,8 @@ module Model (excluded : List String → String → Bool) where
     symbolForward before after selected key (O.recordOf storedOwner (O.notePosting _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.noteVector _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.fileVersion _)) support found needed ()
-    symbolForward before after selected key (O.recordOf storedOwner (O.baseBinding _ _)) support found needed ()
-    symbolForward before after selected key (O.recordOf storedOwner (O.deltaBinding _ _ _)) support found needed ()
+    symbolForward before after selected key (O.recordOf storedOwner (O.baseBinding _ _ _)) support found needed ()
+    symbolForward before after selected key (O.recordOf storedOwner (O.deltaBinding _ _ _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.basePointer _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.chunk _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.posting _ _)) support found needed ()
@@ -333,11 +385,11 @@ module Model (excluded : List String → String → Bool) where
         (versionPositive before after (E.targetOwner selection) selected path version support (λ owned → registered) ((Scope.andRight (E.sameOwner (E.targetOwner selection) storedOwner) (M.versionAtPath selection before (E.targetOwner selection) selected path version) (positive))))
       where
       registered : M.familyRegistered selection before ≡ true
-      registered = Scope.Model.neededRegistration excluded selection before key (O.recordOf storedOwner (O.symbol version path payload)) found
+      registered = Scope.Model.neededRegistration selection before key (O.recordOf storedOwner (O.symbol version path payload)) found
         (sym (Completion.decisionWitness (E.ownerEqual (E.targetOwner selection) storedOwner) ((Scope.andLeft (E.sameOwner (E.targetOwner selection) storedOwner) (M.versionAtPath selection before (E.targetOwner selection) selected path version) (positive))))) refl needed
     symbolForward before after selected key (O.recordOf storedOwner (O.edge _ _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) support found needed ()
-    symbolForward before after selected key (O.recordOf storedOwner (O.legacy _ _)) support found needed ()
+    symbolForward before after selected key (O.recordOf storedOwner (O.legacy _ _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.staging _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.acceptedWork _ _)) support found needed ()
     symbolForward before after selected key (O.recordOf storedOwner (O.cleanupWork _ _ _)) support found needed ()
@@ -365,11 +417,13 @@ module Model (excluded : List String → String → Bool) where
         (Support.neededSame selection before after key value (Support.Support.safe support) found needed (symbolNonSnapshot before selected value positive)))
       (symbolForward before after selected key value support found needed positive)
 
-    edgeNonSnapshot : ∀ world selected value → M.edgeObservation selection world (E.targetOwner selection) selected (just value) ≡ true → O.kind (O.body value) ≢ O.structuralSnapshotK
+    edgeNonSnapshot : ∀ world selected value → M.edgeObservation selection world (E.targetOwner selection) selected (just value) ≡ true → Storage.PlainKind value
     edgeNonSnapshot world selected value positive with Observations.snapshotView value
     ... | Observations.plain nonSnapshot = nonSnapshot
     ... | Observations.snapshot owner checkout nodes edges payload with positive
     ...   | ()
+    edgeNonSnapshot world selected value positive | Observations.delta owner checkout version path answer with positive
+    ... | ()
 
     edgeForward : ∀ before after selected key value → O.Admissible before → Support.Support selection before after → DB.lookup key before ≡ just value →
       M.Needed selection before key → M.edgeObservation selection before (E.targetOwner selection) selected (just value) ≡ true →
@@ -385,8 +439,8 @@ module Model (excluded : List String → String → Bool) where
     edgeForward before after selected key (O.recordOf storedOwner (O.notePosting _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.noteVector _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.fileVersion _)) valid support found needed ()
-    edgeForward before after selected key (O.recordOf storedOwner (O.baseBinding _ _)) valid support found needed ()
-    edgeForward before after selected key (O.recordOf storedOwner (O.deltaBinding _ _ _)) valid support found needed ()
+    edgeForward before after selected key (O.recordOf storedOwner (O.baseBinding _ _ _)) valid support found needed ()
+    edgeForward before after selected key (O.recordOf storedOwner (O.deltaBinding _ _ _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.basePointer _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.chunk _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.posting _ _)) valid support found needed ()
@@ -404,7 +458,7 @@ module Model (excluded : List String → String → Bool) where
       targetNeeded : M.Needed selection before target
       targetNeeded = M.required needed (M.reference key value (O.reference target O.symbolK) found (there (here refl)) (All.lookup refs (there (here refl))))
     edgeForward before after selected key (O.recordOf storedOwner (O.structuralSnapshot _ _ _ _)) valid support found needed ()
-    edgeForward before after selected key (O.recordOf storedOwner (O.legacy _ _)) valid support found needed ()
+    edgeForward before after selected key (O.recordOf storedOwner (O.legacy _ _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.staging _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.acceptedWork _ _)) valid support found needed ()
     edgeForward before after selected key (O.recordOf storedOwner (O.cleanupWork _ _ _)) valid support found needed ()
@@ -445,8 +499,8 @@ module Model (excluded : List String → String → Bool) where
     parentPositive before after key (O.recordOf owner (O.notePosting _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.noteVector _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.fileVersion _)) ref support found needed ()
-    parentPositive before after key (O.recordOf owner (O.baseBinding _ _)) ref support found needed ()
-    parentPositive before after key (O.recordOf owner (O.deltaBinding _ _ _)) ref support found needed ()
+    parentPositive before after key (O.recordOf owner (O.baseBinding _ _ _)) ref support found needed ()
+    parentPositive before after key (O.recordOf owner (O.deltaBinding _ _ _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.basePointer _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.chunk _ _)) ref support found needed parent = parent
     parentPositive before after key (O.recordOf owner (O.posting _ _)) ref support found needed parent = parent
@@ -459,10 +513,10 @@ module Model (excluded : List String → String → Bool) where
       Relation.Binary.PropositionalEquality.subst
         (λ ready → (if ready then just (O.reference version O.fileVersionK) else nothing) ≡ just ref)
         (sym (publishedPositive before after owner path version support
-          (λ owned → Scope.Model.neededRegistration excluded selection before key value found owned refl needed) published)) parent
+          (λ owned → Scope.Model.neededRegistration selection before key value found owned refl needed) published)) parent
     parentPositive before after key (O.recordOf owner (O.edge _ _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.structuralSnapshot _ _ _ _)) ref support found needed ()
-    parentPositive before after key (O.recordOf owner (O.legacy _ _)) ref support found needed ()
+    parentPositive before after key (O.recordOf owner (O.legacy _ _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.staging _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.acceptedWork _ _)) ref support found needed ()
     parentPositive before after key (O.recordOf owner (O.cleanupWork _ _ _)) ref support found needed ()

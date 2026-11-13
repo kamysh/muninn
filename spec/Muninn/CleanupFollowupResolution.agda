@@ -20,17 +20,17 @@ open import Data.Empty using (⊥-elim)
 open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Assessment = Classifier.Model excluded
+module Model where
+  module M = E.Model
+  module Assessment = Classifier.Model
   module Run (selection : E.Rule)
     (parentWorld : O.World) (parentIntent : M.Intent selection parentWorld)
     (childWorld : O.World) (childIntent : M.Intent selection childWorld) where
-    module Child = Loop.Model.Run excluded selection childWorld childIntent
+    module Child = Loop.Model.Run selection childWorld childIntent
 
     module At (world : O.World) (valid : O.Admissible world)
       (covered : Child.Covered world) (complete : Child.Final.NoPending world) where
-      module Find = Blocker.Model.Current excluded selection parentWorld parentIntent world
+      module Find = Blocker.Model.Current selection parentWorld parentIntent world
 
       noBlocker : ¬ (Σ (ℕ × O.Record) (λ row → row ∈ world × Find.Blocks row))
       noBlocker ((source , value) , present , outside , owner , indexed , sourceUnprotected ,

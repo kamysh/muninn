@@ -13,12 +13,13 @@ module Muninn.Index where
 open import Muninn.Types
 open import Muninn.Concurrency
 open import Muninn.IndexFsm public
+import Muninn.IndexSelection as Selection
 import Muninn.CheckoutState as CheckoutState
 open import Muninn.Schema using (SchemaState; Missing; Migrating; Ready)
 open import Data.Bool   using (Bool; true; false)
 open import Data.List   using (List)
 open import Data.Maybe  using (Maybe; nothing; just)
-open import Data.Nat    using (_≤_)
+open import Data.Nat    using (ℕ; _≤_)
 open import Data.String using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 open import Relation.Nullary using (¬_)
@@ -140,3 +141,7 @@ dispatchPermitsBackgroundStart true Ready Settled false true waiting needed ()
 dispatchPermitsBackgroundStart true Ready Settled false false true needed ()
 dispatchPermitsBackgroundStart true Ready Settled false false false false ()
 dispatchPermitsBackgroundStart true Ready Settled false false false true chosen = autoDiscovered
+
+-- Fresh intake uses Git answers scoped to the current checkout.
+module FileSelection (family selected generation : ℕ) where
+  open Selection.Checkout family selected generation public

@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorkerSafety where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupEffects as Effects
 import Muninn.CleanupReceiptPreservation as Continuity
 import Muninn.PolicyCleanupBatch as Batch
@@ -23,19 +24,20 @@ open import Data.Product using (Σ; _×_; _,_; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; sym; cong; trans; subst)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     module Policy = Stored.Family family pointer
-    open Proof.Model.Family excluded family pointer accepted rules intent request taskSlot
+    open Proof.Model.Family family pointer accepted rules validRules intent request taskSlot
       using (id; meaning; owner)
-    open Worker.Model.Family excluded family pointer accepted rules intent request taskSlot using (tick)
+    open Worker.Model.Family family pointer accepted rules validRules intent request taskSlot using (tick)
     module At (world : O.World) (current : Policy.Saved world) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
-      open Proof.Model.Family.At excluded family pointer accepted rules intent request taskSlot world current
+      module Step = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
+      open Proof.Model.Family.At family pointer accepted rules validRules intent request taskSlot world current
         using (performsEdit; tickUsesCurrent)
 
       tickSafety : ∀ receiptSlot names progress guidance →
@@ -46,7 +48,7 @@ module Model (excluded : List String → String → Bool) where
         with performsEdit receiptSlot progress guidance actual available
       ... | key , ready , performed = subst (Outcome.Safety Step.selection world)
         (sym (cong proj₂ (trans (tickUsesCurrent receiptSlot names progress guidance found seen) performed)))
-        (Batch.Model.Family.Current.safety excluded family pointer accepted rules intent id taskSlot
+        (Batch.Model.Family.Current.safety family pointer accepted rules validRules intent id taskSlot
           world current seen actual key Effects.unchanged)
 
       tickKeepsReceipt : ∀ receiptSlot names progress guidance → O.Admissible world →
@@ -58,16 +60,16 @@ module Model (excluded : List String → String → Bool) where
       ... | key , ready , performed = trans
         (cong (Ledger.find id) (trans
           (cong proj₂ (trans (tickUsesCurrent receiptSlot names progress guidance found seen) performed))
-          (Batch.Model.Family.Current.sameEffect excluded family pointer accepted rules intent id taskSlot
+          (Batch.Model.Family.Current.sameEffect family pointer accepted rules validRules intent id taskSlot
             world current seen actual key Effects.unchanged)))
-        (Continuity.Model.Core.preserves excluded Step.selection accepted Step.intent id key world valid)
+        (Continuity.Model.Core.preserves Step.selection accepted Step.intent id key world valid)
 
       tickBatch : ∀ receiptSlot names progress guidance →
         Ledger.find id world ≡ just (Ledger.found receiptSlot owner (Receipt.active meaning names progress)) →
         Policy.observe world ≡ just current → Task.TaskAt world → Step.Pass.Available world →
         Σ ℕ (λ key → Step.Pass.Ready key world ×
           (proj₂ (DB.execute (tick guidance) world) ≡
-           proj₂ (DB.execute (Batch.Model.Family.batch excluded family pointer accepted rules intent id taskSlot key Effects.unchanged) world)))
+           proj₂ (DB.execute (Batch.Model.Family.batch family pointer accepted rules validRules intent id taskSlot key Effects.unchanged) world)))
       tickBatch receiptSlot names progress guidance found seen actual available
         with performsEdit receiptSlot progress guidance actual available
       ... | key , ready , performed = key , ready , cong proj₂

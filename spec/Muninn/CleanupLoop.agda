@@ -27,16 +27,16 @@ open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong; subst)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Assessment = Classifier.Model excluded
+module Model where
+  module M = E.Model
+  module Assessment = Classifier.Model
 
   module Run (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Pass = Progress.Model.Pass excluded selection accepted intent
-    module Core = Effects.Model.Core excluded selection accepted intent
-    module Final = Completion.Model.Contract excluded selection accepted intent
-    module Aligned = Alignment.Model.Contract excluded selection accepted intent
-    module Use = Released.Model.Loop excluded selection accepted intent
+    module Pass = Progress.Model.Pass selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
+    module Final = Completion.Model.Contract selection accepted intent
+    module Aligned = Alignment.Model.Contract selection accepted intent
+    module Use = Released.Model.Loop selection accepted intent
 
     Covered : O.World → Set
     Covered world = ∀ key value → DB.lookup key world ≡ just value → O.owner value ≡ E.targetOwner selection → key ∈ M.Intent.keys intent
@@ -53,10 +53,10 @@ module Model (excluded : List String → String → Bool) where
     controlRooted world E.holder proof = refl
     controlRooted world E.artifact ()
     controlRooted world E.baselineAnchor ()
-    controlRooted world (E.baselineBinding _) ()
+    controlRooted world (E.baselineBinding _ _) ()
     controlRooted world (E.checkoutBinding _ _) ()
     controlRooted world (E.snapshot _) ()
-    controlRooted world (E.legacyFile _) ()
+    controlRooted world (E.legacyFile _ _) ()
     controlRooted world (E.graphContainer _ _) ()
     controlRooted world (E.attached _ _) ()
 
@@ -84,10 +84,10 @@ module Model (excluded : List String → String → Bool) where
     ... | E.administrative = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.artifact = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.baselineAnchor = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
-    ... | E.baselineBinding path = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
+    ... | E.baselineBinding path gitDefault = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.checkoutBinding selected path = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.snapshot selected = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
-    ... | E.legacyFile path = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
+    ... | E.legacyFile path gitDefault = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.graphContainer selected inUse = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.attached parent gate = inj₁ (subst (λ v → ref ∈ O.references (O.body v)) (sym exact) included)
     ... | E.holder = inj₂ included
@@ -151,7 +151,7 @@ module Model (excluded : List String → String → Bool) where
     resumes {observed = observed} first valid released = completeTrace (Aligned.Hist.appendTrace first (Pass.Result.trace (Pass.run observed))) valid acceptedCovered released (Pass.Result.noEdit (Pass.run observed))
 
   module Followup (selection : E.Rule) (original : O.World) (intent : M.Intent selection original) where
-    module Parent = Completion.Model.Contract excluded selection original intent
+    module Parent = Completion.Model.Contract selection original intent
 
     module Current (world : O.World) (valid : O.Admissible world) where
       captured : M.Intent selection world

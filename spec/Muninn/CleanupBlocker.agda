@@ -17,12 +17,12 @@ open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Relation.Nullary using (Dec; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Current (selection : E.Rule) (accepted : O.World) (intent : Outcome.Intent selection accepted) (world : O.World) where
-    module Assessment = Classifier.Model.Assessment excluded selection world
-    module Final = Completion.Model.Contract excluded selection accepted intent
+    module Assessment = Classifier.Model.Assessment selection world
+    module Final = Completion.Model.Contract selection accepted intent
     captured = Outcome.Intent.keys intent
     owner = E.targetOwner selection
 

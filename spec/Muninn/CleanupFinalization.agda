@@ -51,12 +51,12 @@ taskBody : ∀ body id captured → taskIdentity body ≡ just (id , captured) �
 taskBody (O.cleanupWork storedId storedKeys payload) id captured same with just-injective same
 ... | refl = payload , refl
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Task (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted)
     (id : I.OperationId) (slot : ℕ) where
-    module Final = Completion.Model.Contract excluded selection accepted intent
+    module Final = Completion.Model.Contract selection accepted intent
     owner = E.targetOwner selection
     captured = M.Intent.keys intent
 
@@ -190,7 +190,7 @@ module Model (excluded : List String → String → Bool) where
             (receiptFrame world (proj₁ (proj₁ (committedReady world result continuation reply after committed))))
       }
 
-    module Worker = Loop.Model.Run excluded selection accepted intent
+    module Worker = Loop.Model.Run selection accepted intent
     worked = Worker.Pass.Result.after (Worker.Pass.run accepted)
     trail = Worker.Pass.Result.trace (Worker.Pass.run accepted)
 

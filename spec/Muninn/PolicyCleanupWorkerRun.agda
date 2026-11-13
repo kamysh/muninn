@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorkerRun where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupProgress as Progress
 import Muninn.PolicyCleanupBatch as Batch
 import Muninn.PolicyCleanupWorker as Worker
@@ -24,20 +25,21 @@ open import Data.Product using (_×_; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     module Policy = Stored.Family family pointer
-    open Proof.Model.Family excluded family pointer accepted rules intent request taskSlot
+    open Proof.Model.Family family pointer accepted rules validRules intent request taskSlot
       using (id; meaning; owner)
-    open Worker.Model.Family excluded family pointer accepted rules intent request taskSlot using (tick)
+    open Worker.Model.Family family pointer accepted rules validRules intent request taskSlot using (tick)
 
     module At (world : O.World) (current : Policy.Saved world) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
-      open Proof.Model.Family.At excluded family pointer accepted rules intent request taskSlot world current
+      module Step = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
+      open Proof.Model.Family.At family pointer accepted rules validRules intent request taskSlot world current
         using (tickProgresses)
 
     data One (before : O.World) : O.World → Set where
@@ -50,7 +52,7 @@ module Model (excluded : List String → String → Bool) where
 
     decreases : ∀ {before after} → One before after → Progress.mass after < Progress.mass before
     decreases {before} (edit current receiptSlot names progress guidance found seen actual available) =
-      Proof.Model.Family.At.tickProgresses excluded family pointer accepted rules intent request taskSlot
+      Proof.Model.Family.At.tickProgresses family pointer accepted rules validRules intent request taskSlot
         before current receiptSlot names progress guidance found seen actual available
 
     data Run : ℕ → O.World → O.World → Set where

@@ -36,17 +36,17 @@ filterAbsorb first second (key ∷ keys) positive with first key in selected
 ...   | false = filterAbsorb first second keys (λ k present → positive k (there present))
 ...   | true rewrite selected = filterAbsorb first second keys (λ k present → positive k (there present))
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
-  module View = Views.Model excluded
-  module Needs = Need.Model excluded
-  module Store = Storage.Model excluded
-  module Protected = Protection.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
+  module View = Views.Model
+  module Needs = Need.Model
+  module Store = Storage.Model
+  module Protected = Protection.Model
 
   module History (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Pass = Progress.Model.Pass excluded selection accepted intent
-    module Core = Effects.Model.Core excluded selection accepted intent
+    module Pass = Progress.Model.Pass selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
     module Support = Obs.Step selection accepted intent
     module Pins = Protected.Trace selection accepted intent
 
@@ -110,7 +110,7 @@ module Model (excluded : List String → String → Bool) where
       M.project selection before (M.project selection middle value) ≡ M.project selection before value
     absorbProjection before middle source selected nodes edges payload value valid support found needed owner kind checkout nodeSubset edgeSubset
       with Observations.snapshotView value
-    ... | Observations.plain nonSnapshot = ⊥-elim (nonSnapshot kind)
+    ... | Observations.plain nonSnapshot = ⊥-elim (Data.Product.proj₁ nonSnapshot kind)
     ... | Observations.snapshot storedOwner storedSelected ns es text with owner | checkout
     ...   | refl | refl = trans (cong (M.project selection before) (targetProjection middle selected ns es text))
         (trans (targetProjection before selected (E.filterKeys (M.symbolVisible selection middle (E.targetOwner selection) selected) ns)
@@ -126,6 +126,10 @@ module Model (excluded : List String → String → Bool) where
                 (edgeNeeded before source selected nodes edges payload key valid found needed (edgeSubset key present) visible) visible)))
             (sym (targetProjection before selected ns es text))))
 
+    absorbProjection before middle source selected nodes edges payload value valid support found needed owner kind checkout nodeSubset edgeSubset
+      | Observations.delta storedOwner storedSelected version path answer with kind
+    ... | ()
+
     neededAcrossTrace : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → ∀ key → M.Needed selection before key → M.Needed selection after key
     neededAcrossTrace (Pass.stop world) valid key needed = needed
     neededAcrossTrace (Pass.edit chosen before ready later) valid key needed = neededAcrossTrace later
@@ -133,7 +137,7 @@ module Model (excluded : List String → String → Bool) where
       (Needs.neededSurvives selection before (Pass.next chosen before) key valid (Support.stepSupport chosen before valid) needed)
 
     originalNeededPlain : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → ∀ key value →
-      DB.lookup key before ≡ just value → M.Needed selection before key → O.kind (O.body value) Relation.Binary.PropositionalEquality.≢ O.structuralSnapshotK → DB.lookup key after ≡ just value
+      DB.lookup key before ≡ just value → M.Needed selection before key → Storage.PlainKind value → DB.lookup key after ≡ just value
     originalNeededPlain (Pass.stop world) valid key value found needed nonSnapshot = found
     originalNeededPlain (Pass.edit chosen before ready later) valid key value found needed nonSnapshot = originalNeededPlain later
       (Core.transactionAdmissible chosen before valid) key value
@@ -197,6 +201,24 @@ module Model (excluded : List String → String → Bool) where
         finalOwner finalKind finalCheckout
         (λ member present → firstNodes member (laterNodes member present))
         (λ member present → firstEdges member (laterEdges member present))
+
+    neededFrame trail@(Pass.edit chosen before ready later) valid key value found needed | Observations.delta owner selected version path answer
+      with M.Safety.needed (Core.transactionSafety chosen before) key value found needed
+    ... | middleValue , middleFound , firstProjection , firstNodes , firstEdges
+      with neededFrame later (Core.transactionAdmissible chosen before valid) key middleValue middleFound
+        (Needs.neededSurvives selection before (Pass.next chosen before) key valid (Support.stepSupport chosen before valid) needed)
+    ... | content finalValue finalFound laterProjection laterNodes laterEdges = content finalValue finalFound
+      (trans (Storage.Model.projectWorldIndependent selection before (Pass.next chosen before) finalValue finalPlain)
+        (trans laterProjection (trans
+          (sym (Storage.Model.projectWorldIndependent selection before (Pass.next chosen before) middleValue middlePlain)) firstProjection)))
+      (λ member present → firstNodes member (laterNodes member present))
+      (λ member present → firstEdges member (laterEdges member present))
+      where
+      middleKind = Needs.projectionKind selection before middleValue value firstProjection
+      middlePlain : O.kind (O.body middleValue) Relation.Binary.PropositionalEquality.≢ O.structuralSnapshotK
+      middlePlain equal = Storage.snapshotNotDelta (trans (sym equal) middleKind)
+      finalPlain : O.kind (O.body finalValue) Relation.Binary.PropositionalEquality.≢ O.structuralSnapshotK
+      finalPlain equal = middlePlain (trans (sym (Needs.projectionKind selection (Pass.next chosen before) finalValue middleValue laterProjection)) equal)
 
     traceSafety : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → M.Safety selection before after
     traceSafety trail valid = record
