@@ -4,10 +4,11 @@ module Muninn.Retirement where
 
 import Muninn.Dialogue as D
 import Muninn.RepositoryIdentity as Identity
+import Muninn.PendingRemoval as Pending
 import Muninn.OwnedState as Owned
 open import Data.String using (_++_)
 open import Data.Nat using (ℕ; _+_; _≤_; _≤?_; _≟_)
-open import Data.Bool using (Bool; true; false)
+open import Data.Bool using (Bool; true; false; _∧_; not)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.Empty using (⊥-elim)
@@ -247,15 +248,26 @@ module FamilyControl (excluded : List String → String → Bool)
   inspectionReply _ = inspected
 
   -- A successful identity observation must name this stored family.
-  observationFits : Inspection → Owned.RegistrationInfo → Bool
-  observationFits confirmedAbsent info = true
-  observationFits (inconclusive why) info = true
-  observationFits (verifiedSame saved observed evidence) info with Owned.RegistrationInfo.identity info
+  identityFits : Inspection → Owned.RegistrationInfo → Bool
+  identityFits confirmedAbsent info = true
+  identityFits (inconclusive why) info = true
+  identityFits (verifiedSame saved observed evidence) info with Owned.RegistrationInfo.identity info
   ... | nothing = false
   ... | just id with Types.UUID.value (Worktree.FamilyId.value id) String.≟
                     Types.UUID.value (Worktree.FamilyId.value (Identity.FamilyBinding.id saved))
   ...   | yes same = true
   ...   | no different = false
+
+  -- A live removal keeps its fence even when the repository is rediscovered.
+  observationFits : Inspection → Owned.RegistrationInfo → Owned.World → Bool
+  observationFits (verifiedSame saved observed evidence) info world =
+    identityFits (verifiedSame saved observed evidence) info ∧ not (Pending.pending (Outcomes.targetOwner selection) world)
+  observationFits observation info world = identityFits observation info
+
+  inspectionDenied : Owned.World → Reply
+  inspectionDenied world with Pending.pending (Outcomes.targetOwner selection) world
+  ... | true = inspected
+  ... | false = clarify identityQuestion
 
   -- A cleanup task must belong to an already accepted job for this family.
   jobReady : OperationId → Owned.RegistrationInfo → Owned.World → Bool
@@ -284,8 +296,8 @@ module FamilyControl (excluded : List String → String → Bool)
     examine (just (Owned.recordOf owner (Owned.registration info))) world
       with Outcomes.ownerEqual owner (Outcomes.targetOwner selection)
     ... | no different = DB.commit (clarify registrationQuestion)
-    ... | yes same with observationFits observation info
-    ...   | false = DB.commit (clarify identityQuestion)
+    ... | yes same with observationFits observation info world
+    ...   | false = DB.commit (inspectionDenied world)
     ...   | true with startsCleanup (State.phase (registrationState info)) (State.phase (inspect now observation (registrationState info)))
     ...     | false =
       DB.put slot (Owned.recordOf owner (Owned.registration (saveRegistration (inspect now observation (registrationState info)) info)))
@@ -312,7 +324,7 @@ module FamilyControl (excluded : List String → String → Bool)
   retirementSchedules : ∀ now observation job slot world owner info →
     DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
     owner ≡ Outcomes.targetOwner selection →
-    observationFits observation info ≡ true →
+    observationFits observation info world ≡ true →
     jobReady job info world ≡ true →
     State.phase (registrationState info) ≡ active →
     State.phase (inspect now observation (registrationState info)) ≡ retired →
@@ -332,7 +344,7 @@ module FamilyControl (excluded : List String → String → Bool)
   freshRetirementSchedules : ∀ now observation job slot world owner info family →
     DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
     owner ≡ Outcomes.targetOwner selection →
-    observationFits observation info ≡ true →
+    observationFits observation info world ≡ true →
     Ledger.find job world ≡ nothing → Owned.RegistrationInfo.identity info ≡ just family →
     State.phase (registrationState info) ≡ active →
     State.phase (inspect now observation (registrationState info)) ≡ retired →
@@ -351,8 +363,8 @@ module FamilyControl (excluded : List String → String → Bool)
   -- An identity mismatch cannot reactivate or change the saved registration.
   mismatchedIdentityKeepsWorld : ∀ now observation job slot world owner info →
     DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
-    owner ≡ Outcomes.targetOwner selection → observationFits observation info ≡ false →
-    DB.execute (update now observation job slot) world ≡ (clarify identityQuestion , world)
+    owner ≡ Outcomes.targetOwner selection → observationFits observation info world ≡ false →
+    DB.execute (update now observation job slot) world ≡ (inspectionDenied world , world)
   mismatchedIdentityKeepsWorld now observation job slot world owner info found same mismatch
     rewrite found | same with Outcomes.ownerEqual (Outcomes.targetOwner selection) (Outcomes.targetOwner selection)
   ... | no impossible = ⊥-elim (impossible refl)
@@ -362,7 +374,7 @@ module FamilyControl (excluded : List String → String → Bool)
   freshRetirementPreservesOther : ∀ now observation job slot world owner info family key value →
     DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
     owner ≡ Outcomes.targetOwner selection →
-    observationFits observation info ≡ true →
+    observationFits observation info world ≡ true →
     Ledger.find job world ≡ nothing → Owned.RegistrationInfo.identity info ≡ just family →
     State.phase (registrationState info) ≡ active →
     State.phase (inspect now observation (registrationState info)) ≡ retired →
@@ -400,7 +412,7 @@ module FamilyControl (excluded : List String → String → Bool)
   existingRetirementPreservesOther : ∀ now observation job slot world owner info key value →
     DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
     owner ≡ Outcomes.targetOwner selection →
-    observationFits observation info ≡ true → jobReady job info world ≡ true →
+    observationFits observation info world ≡ true → jobReady job info world ≡ true →
     State.phase (registrationState info) ≡ active →
     State.phase (inspect now observation (registrationState info)) ≡ retired →
     DB.lookup key world ≡ just value → Owned.owner value ≢ Outcomes.targetOwner selection →
@@ -486,7 +498,7 @@ module FamilyControl (excluded : List String → String → Bool)
   module ExistingCompletion (now : ℕ) (observation : Inspection) (job : OperationId)
     (slot : ℕ) (world : Owned.World) (owner : Owned.Owner) (info : Owned.RegistrationInfo)
     (found : DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)))
-    (same : owner ≡ Outcomes.targetOwner selection) (fits : observationFits observation info ≡ true)
+    (same : owner ≡ Outcomes.targetOwner selection) (fits : observationFits observation info world ≡ true)
     (ready : jobReady job info world ≡ true) (wasActive : State.phase (registrationState info) ≡ active)
     (nowRetired : State.phase (inspect now observation (registrationState info)) ≡ retired)
     (valid : Owned.Admissible world) where
@@ -501,7 +513,7 @@ module FamilyControl (excluded : List String → String → Bool)
     (slot : ℕ) (world : Owned.World) (owner : Owned.Owner) (info : Owned.RegistrationInfo)
     (family : Worktree.FamilyId)
     (found : DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)))
-    (same : owner ≡ Outcomes.targetOwner selection) (fits : observationFits observation info ≡ true)
+    (same : owner ≡ Outcomes.targetOwner selection) (fits : observationFits observation info world ≡ true)
     (noJob : Ledger.find job world ≡ nothing) (identity : Owned.RegistrationInfo.identity info ≡ just family)
     (wasActive : State.phase (registrationState info) ≡ active)
     (nowRetired : State.phase (inspect now observation (registrationState info)) ≡ retired)
@@ -521,3 +533,22 @@ module FamilyControl (excluded : List String → String → Bool)
     finishes : Saved.Worker.Use.Released Saved.after →
       M.Complete selection Saved.after Saved.intent Saved.after (Saved.Worker.Pass.Result.after (Saved.Worker.Pass.run Saved.after))
     finishes = Saved.finishes
+
+  -- Rediscovery cannot undo the fence while a removal is active.
+  removalFenceHeld : ∀ saved observed evidence info world →
+    Pending.pending (Outcomes.targetOwner selection) world ≡ true →
+    observationFits (verifiedSame saved observed evidence) info world ≡ false
+  removalFenceHeld saved observed evidence info world activeRemoval rewrite activeRemoval
+    with identityFits (verifiedSame saved observed evidence) info
+  ... | true = refl
+  ... | false = refl
+
+  noReactivationDuringRemoval : ∀ now saved observed evidence job slot world owner info →
+    DB.lookup slot world ≡ just (Owned.recordOf owner (Owned.registration info)) →
+    owner ≡ Outcomes.targetOwner selection →
+    Pending.pending (Outcomes.targetOwner selection) world ≡ true →
+    DB.execute (update now (verifiedSame saved observed evidence) job slot) world ≡ (inspected , world)
+  noReactivationDuringRemoval now saved observed evidence job slot world owner info found same activeRemoval
+    rewrite found | same with Outcomes.ownerEqual (Outcomes.targetOwner selection) (Outcomes.targetOwner selection)
+  ... | no impossible = ⊥-elim (impossible refl)
+  ... | yes identical rewrite removalFenceHeld saved observed evidence info world activeRemoval | activeRemoval = refl

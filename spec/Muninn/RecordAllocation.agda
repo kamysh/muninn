@@ -8,13 +8,14 @@ import Muninn.CleanupAdmissionStorage as Insert
 import Muninn.CleanupAdmission as Admission
 import Muninn.CleanupScheduling as Scheduling
 import Muninn.ReceiptLedger as Ledger
+import Muninn.PendingRemoval as Removal
 import Muninn.ReceiptTypes as R
 import Muninn.CatalogInputs as I
 import Muninn.RequestIdentity as Identity
 import Muninn.Dialogue as D
 open import Data.Nat using (ℕ; zero; suc; _⊔_; _≤_; _<_ ; s≤s)
 open import Data.Nat.Properties using (m≤m⊔n; m≤n⊔m; ≤-trans; <-irrefl)
-open import Data.Bool using (Bool)
+open import Data.Bool using (Bool; false)
 open import Data.String using (String)
 open import Data.List using (List; []; _∷_)
 open import Data.List.Membership.Propositional using (_∈_)
@@ -54,10 +55,10 @@ module Model (excluded : List String → String → Bool) where
     admit : ∀ {A : Set} → List O.Reference → String → (ℕ → A) → (O.World → A) → DB.Transaction A
     admit refs payload ready replan = DB.scan (λ world → Gate.admit (freshId world) refs payload ready replan)
 
-    admits : ∀ {A : Set} refs payload (ready : ℕ → A) replan world → Gate.Resolved world refs →
+    admits : ∀ {A : Set} refs payload (ready : ℕ → A) replan world → Removal.pending (E.targetOwner selection) world ≡ false → Gate.Resolved world refs →
       Gate.Clean (Gate.proposed world (freshId world) refs payload) refs → Gate.Allowed world (freshId world) refs payload →
       DB.execute (admit refs payload ready replan) world ≡ (ready (freshId world) , Gate.proposed world (freshId world) refs payload)
-    admits refs payload ready replan world resolved clean allowed = Gate.accepts (freshId world) refs payload ready replan world (fresh world) resolved clean allowed
+    admits refs payload ready replan world notRemoving resolved clean allowed = Gate.accepts (freshId world) refs payload ready replan world notRemoving (fresh world) resolved clean allowed
 
     admissionAdmissible : ∀ {A : Set} refs payload (ready : ℕ → A) replan world → O.Admissible world →
       O.Admissible (proj₂ (DB.execute (admit refs payload ready replan) world))
