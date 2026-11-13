@@ -80,9 +80,26 @@ The existing finite classifier and cleanup transactions use this contract.
 `ExclusionRecovery` now connects their actual finite pass to the common
 interruption protocol and proves retry convergence once pending temporary holds
 are released, including after a reader releases its hold, provided the original
-capture still covers the current family records. Newly introduced blockers and
-the full worker lifecycle remain #67/#70/#77/#81/#84 and #25. Policy supersession and the worker
-must compose permitted metadata transitions with the cleanup-core frame.
+capture still covers the current family records. `PolicyCleanupWorkerVerified`
+connects the actual bounded worker transactions to that outcome. Productive
+steps preserve the request, task and current policy and reach a quiet state in
+finite time. The worker rechecks the current policy and references for each
+step. It can continue unrelated actionable cleanup while a reader holds a
+record, and it keeps the original request active until all its tasks finish.
+
+At a quiet state, once temporary holds have been released, cleanup either
+finishes under the latest policy or identifies a later blocking record. The
+worker schedules a bounded follow-up unless an existing task already covers
+that record; a completed follow-up covering the current family records removes
+the blockers it captured. This includes still-needed records with obsolete
+references. A newer policy supersedes the earlier one without allowing stale
+rules to drive deletion. Progress assumes database transactions and scheduling
+resume, existing holders release their references, and relevant concurrent
+changes eventually settle. These theorems do not bound that waiting time.
+
+The remaining integration issues include #67/#70/#77/#81/#84. The checked
+worker model does not yet prove the Rust implementation or external scheduler
+matches it.
 
 Raw selection semantics, analysis validity, publication/read-state consistency,
 structural retrieval and implementation projection remain their respective
