@@ -35,8 +35,8 @@ weakIds (O.note _) = []
 weakIds (O.notePosting _ _) = []
 weakIds (O.noteVector _ _) = []
 weakIds (O.fileVersion _) = []
-weakIds (O.baseBinding _ _) = []
-weakIds (O.deltaBinding _ _ _) = []
+weakIds (O.baseBinding _ _ _) = []
+weakIds (O.deltaBinding _ _ _ _) = []
 weakIds (O.basePointer _) = []
 weakIds (O.chunk _ _) = []
 weakIds (O.posting _ _) = []
@@ -44,7 +44,7 @@ weakIds (O.vector _ _) = []
 weakIds (O.symbol _ _ _) = []
 weakIds (O.edge _ _ _) = []
 weakIds (O.structuralSnapshot _ _ _ _) = []
-weakIds (O.legacy _ _) = []
+weakIds (O.legacy _ _ _) = []
 weakIds (O.staging _ _) = []
 weakIds (O.acceptedWork _ _) = []
 weakIds (O.cleanupWork _ ids payload) = ids
@@ -109,9 +109,9 @@ insertAdmissible world slot added valid fresh placed resolved privateRefs = reco
   shifted : All (O.SoundReferences (DB.write slot added world)) world
   shifted = All.map (λ {row} refs → All.map (λ {ref} proof → oldResolve world slot added fresh (O.owner (proj₂ row)) ref proof) refs) (O.Admissible.sound valid)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Pins = Protection.Model excluded
+module Model where
+  module M = E.Model
+  module Pins = Protection.Model
 
   insertionSafety : ∀ selection world slot added → Fresh world slot → M.Safety selection world (DB.write slot added world)
   insertionSafety selection world slot added fresh = record

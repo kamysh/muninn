@@ -162,3 +162,18 @@ familyDecisionUnique : ∀ policy (first second : FamilyRules policy) gitDefault
 familyDecisionUnique policy first second gitDefault path directory = cong₂ C.classify
   (resolveEquivalent gitDefault (FamilyRules.exclude first) (FamilyRules.exclude second) (toList path) directory)
   (resolveEquivalent false (FamilyRules.vendor first) (FamilyRules.vendor second) (toList path) directory)
+
+falseDefaultDominates : ∀ {inputs} (rules : Rules inputs) word directory →
+  resolve false rules word directory ≡ true → resolve true rules word directory ≡ true
+falseDefaultDominates empty word directory ()
+falseDefaultDominates (cons rule rest) word directory selected with S.pathMatches? rule word directory
+... | no absent = falseDefaultDominates rest word directory selected
+... | yes matched = selected
+
+keptWithGit : ∀ {inputs} (rules : Rules inputs) word directory gitDefault →
+  not (resolve gitDefault rules word directory) ≡ true → not (resolve false rules word directory) ≡ true
+keptWithGit rules word directory false kept = kept
+keptWithGit empty word directory true ()
+keptWithGit (cons rule rest) word directory true kept with S.pathMatches? rule word directory
+... | no absent = keptWithGit rest word directory true kept
+... | yes matched = kept

@@ -5,6 +5,8 @@
 -- FileMap.moveBase proves preservation when the current base is replaced.
 module Muninn.Worktree where
 
+open import Data.Bool using (Bool)
+
 open import Muninn.Types
 open import Data.List using (List)
 open import Data.List.Membership.Propositional using (_∈_)
@@ -88,6 +90,7 @@ record Checkout : Set where
 record FileEntry : Set where
   field version : VersionRef
         tier : Tier
+        gitDefault : Bool -- semantic selection metadata; receipt provenance is separate
 
 -- Extensional meaning of a finite path map, not a requirement to materialize
 -- one SQL row per inherited path. Paths must be validated by the implementation.

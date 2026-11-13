@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorkerTrace where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupEffects as Effects
 import Muninn.PolicyCleanupBatch as Batch
 import Muninn.PolicyCleanupWorkerProof as Proof
@@ -22,19 +23,20 @@ open import Data.Product using (Σ; _×_; _,_; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; sym; cong; trans; subst)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     module Policy = Stored.Family family pointer
-    open Proof.Model.Family excluded family pointer accepted rules intent request taskSlot
+    open Proof.Model.Family family pointer accepted rules validRules intent request taskSlot
       using (id; meaning; owner)
-    open Worker.Model.Family excluded family pointer accepted rules intent request taskSlot using (tick)
+    open Worker.Model.Family family pointer accepted rules validRules intent request taskSlot using (tick)
     module At (world : O.World) (current : Policy.Saved world) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
-      open Proof.Model.Family.At excluded family pointer accepted rules intent request taskSlot world current
+      module Step = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
+      open Proof.Model.Family.At family pointer accepted rules validRules intent request taskSlot world current
         using (performsEdit; tickUsesCurrent)
 
       tickTrace : ∀ receiptSlot names progress guidance →
@@ -44,9 +46,9 @@ module Model (excluded : List String → String → Bool) where
       tickTrace receiptSlot names progress guidance found seen actual available
         with performsEdit receiptSlot progress guidance actual available
       ... | key , ready , performed
-        with Batch.Model.Family.Current.trail excluded family pointer accepted rules intent id taskSlot
+        with Batch.Model.Family.Current.trail family pointer accepted rules validRules intent id taskSlot
           world current seen actual key Effects.unchanged
       ... | count , trail = count , subst (Step.Pass.Trace count world)
         (sym (trans (cong proj₂ (trans (tickUsesCurrent receiptSlot names progress guidance found seen) performed))
-          (Batch.Model.Family.Current.sameEffect excluded family pointer accepted rules intent id taskSlot
+          (Batch.Model.Family.Current.sameEffect family pointer accepted rules validRules intent id taskSlot
             world current seen actual key Effects.unchanged))) trail

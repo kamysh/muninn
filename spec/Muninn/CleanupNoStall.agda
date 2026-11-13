@@ -24,18 +24,18 @@ open import Relation.Nullary using (Dec; yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; trans; sym; cong)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Assessment = Classifier.Model excluded
+module Model where
+  module M = E.Model
+  module Assessment = Classifier.Model
   module Run (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Work = Loop.Model.Run excluded selection accepted intent
+    module Work = Loop.Model.Run selection accepted intent
     module Final = Work.Final
     module Pass = Work.Pass
     module Use = Work.Use
 
     module At (world : O.World) (valid : O.Admissible world)
       (released : Use.Released world) (quiet : Pass.NoEdit world) where
-      module Find = Blocker.Model.Current excluded selection accepted intent world
+      module Find = Blocker.Model.Current selection accepted intent world
       NoBlocker = ¬ (Σ (ℕ × O.Record) (λ row → row ∈ world × Find.Blocks row))
 
       sourceCandidate : NoBlocker → ∀ key → Final.Candidate key world →

@@ -5,6 +5,10 @@ module Muninn.ExclusionOutcomes where
 import Muninn.OwnedState as O
 import Muninn.ReceiptTypes as Receipt
 import Muninn.Config as Config
+import Muninn.PolicyRuleAdmission as Admission
+import Muninn.AdmittedSelection as Admitted
+import Muninn.OrderedSelection as Selection
+import Muninn.GitIgnore as Git
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false; not; _∧_; _∨_; if_then_else_)
 open import Data.String using (String)
@@ -14,6 +18,7 @@ open import Data.List.Membership.Propositional using (_∈_; _∉_)
 open import Data.List.Relation.Unary.Any using (here; there)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
+open import Data.Unit using (tt)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Relation.Nullary using (Dec; yes; no; does; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong)
@@ -38,10 +43,16 @@ record Rule : Set where
   constructor rule
   field family : ℕ
         exclusions : List String -- ordered EFFECTIVE defaults + family rules
+        admitted : Admission.Entries (map String.toList exclusions)
 open Rule public
 
-fromStoredPolicy : ℕ → Config.FamilyPolicy → Rule
-fromStoredPolicy owner policy = rule owner (Config.EffectiveConfig.exclude (Config.familyConfig policy))
+fromStoredPolicy : ℕ → (policy : Config.FamilyPolicy) → Admitted.FamilyEntries policy → Rule
+fromStoredPolicy owner policy valid = rule owner (Config.EffectiveConfig.exclude (Config.familyConfig policy))
+  (Admitted.FamilyEntries.exclude valid)
+
+excluded : Rule → Bool → String → Bool
+excluded selection gitDefault path = Selection.resolve gitDefault
+  (Admitted.compiledStrings (exclusions selection) (admitted selection)) (String.toList path) false
 
 targetOwner : Rule → O.Owner
 targetOwner selection = O.family (family selection)
@@ -55,10 +66,10 @@ data Gate : Set where
 -- control/data separation. A new owned constructor cannot inherit a default.
 data Role : Set where
   administrative holder artifact baselineAnchor : Role
-  baselineBinding : String → Role
+  baselineBinding : String → Bool → Role
   checkoutBinding : ℕ → String → Role
   snapshot : ℕ → Role
-  legacyFile : String → Role
+  legacyFile : String → Bool → Role
   graphContainer : Maybe ℕ → Bool → Role
   attached : O.Reference → Gate → Role
 
@@ -73,8 +84,8 @@ classify (O.note _) = administrative
 classify (O.notePosting _ _) = administrative
 classify (O.noteVector _ _) = administrative
 classify (O.fileVersion _) = artifact
-classify (O.baseBinding version path) = baselineBinding path
-classify (O.deltaBinding checkout version path) = checkoutBinding checkout path
+classify (O.baseBinding version path gitAnswer) = baselineBinding path (Git.ignored gitAnswer)
+classify (O.deltaBinding checkout version path gitAnswer) = checkoutBinding checkout path
 classify (O.basePointer _) = baselineAnchor
 classify (O.chunk version _) = attached (O.reference version O.fileVersionK) content
 classify (O.posting chunk _) = attached (O.reference chunk O.chunkK) content
@@ -83,7 +94,7 @@ classify (O.symbol version path _) = attached (O.reference version O.fileVersion
 classify (O.edge _ _ _) = artifact
 classify (O.structuralSnapshot _ _ _ _) = artifact
 classify (O.publishedView selected _) = snapshot selected
-classify (O.legacy path _) = legacyFile path
+classify (O.legacy path gitAnswer _) = legacyFile path (Git.ignored gitAnswer)
 classify (O.staging version _) = attached (O.reference version O.fileVersionK) transient
 classify (O.acceptedWork _ _) = holder
 classify (O.cleanupWork _ _ _) = administrative
@@ -102,6 +113,10 @@ classify (O.graphResource selected inUse _) = graphContainer selected inUse
 classify (O.logFile _) = administrative
 classify (O.bootstrapStage _) = administrative
 
+bindingPayload : O.Record → ℕ
+bindingPayload (O.recordOf owner (O.deltaBinding selected (just version) path answer)) = 1
+bindingPayload _ = 0
+
 snapshotCheckout : O.Record → Maybe ℕ
 snapshotCheckout (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) = just selected
 snapshotCheckout _ = nothing
@@ -111,10 +126,10 @@ indexedRole administrative = false
 indexedRole holder = false
 indexedRole artifact = true
 indexedRole baselineAnchor = true
-indexedRole (baselineBinding _) = true
+indexedRole (baselineBinding _ _) = true
 indexedRole (checkoutBinding _ _) = true
 indexedRole (snapshot _) = true
-indexedRole (legacyFile _) = true
+indexedRole (legacyFile _ _) = true
 indexedRole (graphContainer _ _) = true
 indexedRole (attached _ _) = true
 
@@ -170,10 +185,20 @@ pauseAndGitDoNotChangeAvailability retired pause git metadata since pause′ git
 
 -- The policy matcher is fixed once by the shared selection semantics (#26).
 -- It is not a field supplied by a cleanup operation. No raw rule parsing here.
-module Model (excluded : List String → String → Bool) where
+module Model where
+  includedWithGit : Rule → O.Owner → Bool → String → Bool
+  includedWithGit selection owner gitDefault path =
+    if sameOwner owner (targetOwner selection) then not (excluded selection gitDefault path) else true
+
   included : Rule → O.Owner → String → Bool
-  included selection owner path =
-    if sameOwner owner (targetOwner selection) then not (excluded (exclusions selection) path) else true
+  included selection owner path = includedWithGit selection owner false path
+
+  maskWithGit : ∀ selection owner gitDefault path → includedWithGit selection owner gitDefault path ≡ true →
+    included selection owner path ≡ true
+  maskWithGit selection owner gitDefault path kept with ownerEqual owner (targetOwner selection)
+  ... | no different = refl
+  ... | yes same = Selection.keptWithGit
+    (Admitted.compiledStrings (exclusions selection) (admitted selection)) (String.toList path) false gitDefault kept
 
   record Location : Set where
     constructor location
@@ -181,16 +206,16 @@ module Model (excluded : List String → String → Bool) where
           checkout : ℕ
           path : String
 
-  SearchVisible : Rule → Location → Set
-  SearchVisible selection whereAt = included selection (Location.owner whereAt) (Location.path whereAt) ≡ true
+  FamilyMaskVisible : Rule → Location → Set
+  FamilyMaskVisible selection whereAt = included selection (Location.owner whereAt) (Location.path whereAt) ≡ true
 
   allCheckoutsUseSameMask : ∀ selection owner path first second →
-    SearchVisible selection (location owner first path) ≡ SearchVisible selection (location owner second path)
+    FamilyMaskVisible selection (location owner first path) ≡ FamilyMaskVisible selection (location owner second path)
   allCheckoutsUseSameMask selection owner path first second = refl
 
   excludedCannotAppear : ∀ selection whereAt →
     included selection (Location.owner whereAt) (Location.path whereAt) ≡ false →
-    ¬ SearchVisible selection whereAt
+    ¬ FamilyMaskVisible selection whereAt
   excludedCannotAppear selection whereAt blocked visible with trans (sym visible) blocked
   ... | ()
 
@@ -224,7 +249,7 @@ module Model (excluded : List String → String → Bool) where
   anyCheckoutLive selection = anyRow (λ key value → liveValue selection value)
 
   deltaValue : O.Owner → ℕ → String → O.Record → Bool
-  deltaValue owner selected path (O.recordOf storedOwner (O.deltaBinding checkout version storedPath)) =
+  deltaValue owner selected path (O.recordOf storedOwner (O.deltaBinding checkout version storedPath gitAnswer)) =
     sameOwner owner storedOwner ∧ (sameNat selected checkout ∧ does (path String.≟ storedPath))
   deltaValue owner selected path _ = false
 
@@ -232,18 +257,29 @@ module Model (excluded : List String → String → Bool) where
   hasDelta owner selected path = anyRow (λ key value → deltaValue owner selected path value)
 
   bindingWithDelta : Bool → O.Owner → ℕ → String → ℕ → O.Record → Bool
-  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath)) =
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.baseBinding storedVersion storedPath gitAnswer)) =
     sameOwner owner storedOwner ∧ (does (path String.≟ storedPath) ∧
       (sameNat version storedVersion ∧ not overridden))
-  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath)) = false
-  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath)) =
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout nothing storedPath _)) = false
+  bindingWithDelta overridden owner selected path version (O.recordOf storedOwner (O.deltaBinding checkout (just storedVersion) storedPath gitAnswer)) =
     sameOwner owner storedOwner ∧ (sameNat checkout selected ∧
       (does (path String.≟ storedPath) ∧ sameNat version storedVersion))
   bindingWithDelta overridden owner selected path version _ = false
 
-  bindingValue : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
-  bindingValue selection world owner selected path version value =
+  bindingSelected : Rule → O.Record → Bool
+  bindingSelected selection (O.recordOf owner (O.baseBinding version path gitAnswer)) =
+    includedWithGit selection owner (Git.ignored gitAnswer) path
+  bindingSelected selection (O.recordOf owner (O.deltaBinding selected (just version) path gitAnswer)) =
+    includedWithGit selection owner (Git.ignored gitAnswer) path
+  bindingSelected selection _ = false
+
+  bindingRaw : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
+  bindingRaw selection world owner selected path version value =
     bindingWithDelta (hasDelta owner selected path world) owner selected path version value
+
+  bindingValue : Rule → O.World → O.Owner → ℕ → String → ℕ → O.Record → Bool
+  bindingValue selection world owner selected path version value = bindingSelected selection value ∧
+    bindingRaw selection world owner selected path version value
 
   versionAtPath : Rule → O.World → O.Owner → ℕ → String → ℕ → Bool
   versionAtPath selection world owner selected path version =
@@ -289,6 +325,10 @@ module Model (excluded : List String → String → Bool) where
   edgeVisible : Rule → O.World → O.Owner → ℕ → ℕ → Bool
   edgeVisible selection world owner selected key = edgeObservation selection world owner selected (DB.lookup key world)
 
+  deltaProjection : Bool → O.Owner → ℕ → ℕ → (path : String) → Git.Answer path → O.Record
+  deltaProjection true owner selected version path answer = O.recordOf owner (O.deltaBinding selected (just version) path answer)
+  deltaProjection false owner selected version path answer = O.recordOf owner (O.deltaBinding selected nothing path tt)
+
   -- A needed snapshot may contain both included and excluded members. Keeping
   -- its header does NOT make every old member permanently needed.
   project : Rule → O.World → O.Record → O.Record
@@ -298,6 +338,8 @@ module Model (excluded : List String → String → Bool) where
     (filterKeys (symbolVisible selection world owner selected) nodes)
     (filterKeys (edgeVisible selection world owner selected) edges) payload)
   ... | no _ = value
+  project selection world (O.recordOf owner (O.deltaBinding selected (just version) path answer)) =
+    deltaProjection (includedWithGit selection owner (Git.ignored answer) path) owner selected version path answer
   project selection world value = value
 
   rootedRole : Rule → O.World → Role → Bool
@@ -305,13 +347,12 @@ module Model (excluded : List String → String → Bool) where
   rootedRole selection world holder = true
   rootedRole selection world artifact = false
   rootedRole selection world baselineAnchor = familyRegistered selection world ∧ anyCheckoutLive selection world
-  rootedRole selection world (baselineBinding path) = familyRegistered selection world ∧
-    (anyCheckoutLive selection world ∧ included selection (targetOwner selection) path)
-  rootedRole selection world (checkoutBinding selected path) = familyRegistered selection world ∧
-    (checkoutLive selection world selected ∧ included selection (targetOwner selection) path)
+  rootedRole selection world (baselineBinding path gitDefault) = familyRegistered selection world ∧
+    (anyCheckoutLive selection world ∧ includedWithGit selection (targetOwner selection) gitDefault path)
+  rootedRole selection world (checkoutBinding selected path) = familyRegistered selection world ∧ checkoutLive selection world selected
   rootedRole selection world (snapshot selected) = familyRegistered selection world ∧ checkoutLive selection world selected
-  rootedRole selection world (legacyFile path) = familyRegistered selection world ∧
-    (legacyReadable selection world ∧ included selection (targetOwner selection) path)
+  rootedRole selection world (legacyFile path gitDefault) = familyRegistered selection world ∧
+    (legacyReadable selection world ∧ includedWithGit selection (targetOwner selection) gitDefault path)
   rootedRole selection world (graphContainer nothing inUse) = inUse ∧ (familyRegistered selection world ∧ anyCheckoutLive selection world)
   rootedRole selection world (graphContainer (just selected) inUse) = inUse ∧ (familyRegistered selection world ∧ checkoutLive selection world selected)
   rootedRole selection world (attached parent gate) = false

@@ -23,8 +23,8 @@ module DB = O.DB
 
 indexedNotReceipt : ∀ id slot value → E.indexed value ≡ true → Ledger.inRecord id slot value ≡ nothing
 indexedNotReceipt id slot (O.recordOf owner (O.fileVersion x)) proof = refl
-indexedNotReceipt id slot (O.recordOf owner (O.baseBinding x y)) proof = refl
-indexedNotReceipt id slot (O.recordOf owner (O.deltaBinding x y z)) proof = refl
+indexedNotReceipt id slot (O.recordOf owner (O.baseBinding x y z)) proof = refl
+indexedNotReceipt id slot (O.recordOf owner (O.deltaBinding x y z w)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.basePointer x)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.chunk x y)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.posting x y)) proof = refl
@@ -33,7 +33,7 @@ indexedNotReceipt id slot (O.recordOf owner (O.symbol x y z)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.edge x y z)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.publishedView x y)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.structuralSnapshot w x y z)) proof = refl
-indexedNotReceipt id slot (O.recordOf owner (O.legacy x y)) proof = refl
+indexedNotReceipt id slot (O.recordOf owner (O.legacy x y z)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.staging x y)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.graphResource x y z)) proof = refl
 indexedNotReceipt id slot (O.recordOf owner (O.registration x)) ()
@@ -89,11 +89,11 @@ findWrite : ∀ id key world old new → O.Unique world → DB.lookup key world 
 findWrite id key world old new unique found indexedOld indexedNew
   rewrite indexedNotReceipt id key new indexedNew = findDelete id key world old unique found indexedOld
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Needs = Need.Model excluded
+module Model where
+  module M = E.Model
+  module Needs = Need.Model
   module Core (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Work = Effects.Model.Core excluded selection accepted intent
+    module Work = Effects.Model.Core selection accepted intent
 
     preserves : ∀ id key world → O.Admissible world →
       Ledger.find id (Data.Product.proj₂ (DB.execute (Work.transaction key) world)) ≡ Ledger.find id world

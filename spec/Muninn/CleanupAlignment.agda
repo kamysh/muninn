@@ -35,21 +35,21 @@ filterRetain keep mask (key ∷ keys) positive with keep key in selected
 ... | false = filterRetain keep mask keys positive
 ... | true rewrite positive key selected = cong (key ∷_) (filterRetain keep mask keys positive)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
-  module BackViews = ReverseViews.Model excluded
-  module BackNeed = ReverseNeed.Model excluded
-  module Needs = Need.Model excluded
-  module Targets = Scope.Model excluded
-  module Store = Storage.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
+  module BackViews = ReverseViews.Model
+  module BackNeed = ReverseNeed.Model
+  module Needs = Need.Model
+  module Targets = Scope.Model
+  module Store = Storage.Model
 
   module Contract (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Pass = Progress.Model.Pass excluded selection accepted intent
-    module Core = Effects.Model.Core excluded selection accepted intent
-    module Hist = History.Model.History excluded selection accepted intent
+    module Pass = Progress.Model.Pass selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
+    module Hist = History.Model.History selection accepted intent
     module Steps = Obs.Step selection accepted intent
-    module Final = Completion.Model.Contract excluded selection accepted intent
+    module Final = Completion.Model.Contract selection accepted intent
 
     planOrigin : ∀ chosen world (plan : Core.Plan chosen world) key value →
       DB.lookup key (proj₂ (DB.execute (Core.compile chosen world plan) world)) ≡ just value → BackNeed.Origin selection world key value
@@ -70,18 +70,29 @@ module Model (excluded : List String → String → Bool) where
     stepOrigin chosen world = planOrigin chosen world (Core.decide chosen world)
 
     backwardPlain : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → ∀ key value →
-      DB.lookup key after ≡ just value → O.kind (O.body value) ≢ O.structuralSnapshotK → DB.lookup key before ≡ just value
+      DB.lookup key after ≡ just value → Storage.PlainKind value → DB.lookup key before ≡ just value
     backwardPlain (Pass.stop world) valid key value found nonSnapshot = found
     backwardPlain (Pass.edit chosen before ready later) valid key value found nonSnapshot =
       Obs.Support.backwardPlain (Steps.stepSupport chosen before valid) key value
         (backwardPlain later (Core.transactionAdmissible chosen before valid) key value found nonSnapshot) nonSnapshot
+
+    backwardDelta : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → ∀ key value →
+      DB.lookup key after ≡ just value → O.kind (O.body value) ≡ O.deltaBindingK →
+      Σ O.Record (λ old → DB.lookup key before ≡ just old × Storage.DeltaHistory old value)
+    backwardDelta (Pass.stop world) valid key value found kind = value , found , Storage.deltaUnchanged value kind
+    backwardDelta (Pass.edit chosen before ready later) valid key value found kind
+      with backwardDelta later (Core.transactionAdmissible chosen before valid) key value found kind
+    ... | middleValue , middleFound , laterHistory
+      with Obs.Support.backwardDelta (Steps.stepSupport chosen before valid) key middleValue middleFound (Storage.deltaBeforeKind laterHistory)
+    ... | old , present , firstHistory = old , present , Storage.deltaTrans firstHistory laterHistory
 
     traceSupport : ∀ {count before after} → Pass.Trace count before after → O.Admissible before → Obs.Support selection before after
     traceSupport trail valid = record
       { safe = Hist.traceSafety trail valid
       ; uniqueBefore = O.Admissible.unique valid
       ; uniqueAfter = O.Admissible.unique (Pass.traceAdmissible trail valid)
-      ; backwardPlain = backwardPlain trail valid }
+      ; backwardPlain = backwardPlain trail valid
+      ; backwardDelta = backwardDelta trail valid }
 
     traceNeededBackward : ∀ {count before after} → Pass.Trace count before after → O.Admissible before →
       M.familyRegistered selection before ≡ true → ∀ key → M.Needed selection after key → M.Needed selection before key
@@ -121,6 +132,11 @@ module Model (excluded : List String → String → Bool) where
       (filterRetain (M.edgeVisible selection after owner selected) (M.edgeVisible selection before owner selected) edges
         (λ key → BackViews.Reverse.edgeBackward selection before after support owner selected key registered))
 
+    earlierCanonical before after support registered value | Observations.delta owner selected version path answer =
+      trans (Storage.Model.projectWorldIndependent selection before after (M.project selection after value)
+        (λ equal → Storage.snapshotNotDelta (trans (sym equal) (Storage.Model.projectKind selection after value))))
+        (Storage.Model.projectIdempotent selection after value)
+
     canonicalRegistered : ∀ {count before after} → Pass.Trace count before after → O.Admissible before →
       M.familyRegistered selection before ≡ true → M.Complete selection accepted intent after after →
       ∀ key value → key ∈ M.Intent.keys intent → DB.lookup key before ≡ just value → M.Needed selection before key →
@@ -136,6 +152,15 @@ module Model (excluded : List String → String → Bool) where
       beforeFixed = trans (cong (M.project selection before) finalFixed)
         (trans (earlierCanonical before after (traceSupport trail valid) registered retained) (sym finalFixed))
 
+    deltaForeign : ∀ world owner selected version path (answer : O.SelectionFor version path) →
+      owner ≢ E.targetOwner selection →
+      M.project selection world (O.recordOf owner (O.deltaBinding selected version path answer)) ≡
+        O.recordOf owner (O.deltaBinding selected version path answer)
+    deltaForeign world owner selected nothing path answer different = refl
+    deltaForeign world owner selected (just version) path answer different with E.ownerEqual owner (E.targetOwner selection)
+    ... | yes same = ⊥-elim (different same)
+    ... | no other = refl
+
     canonical : ∀ {count before after} → Pass.Trace count before after → O.Admissible before →
       M.Complete selection accepted intent after after → ∀ key value → key ∈ M.Intent.keys intent →
       DB.lookup key before ≡ just value → M.Needed selection before key → DB.lookup key after ≡ just (M.project selection before value)
@@ -148,6 +173,13 @@ module Model (excluded : List String → String → Bool) where
     ...   | Observations.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
     ...     | no different = Pass.traceUnrelated trail key value found different
     ...     | yes owned = ⊥-elim (Observations.falseNotTrue (trans (sym registered)
+        (Targets.neededRegistration selection before key value found owned refl needed)))
+
+    canonical {before = before} {after = after} trail valid completed key value captured found needed
+      | false | Observations.delta owner selected version path answer with E.ownerEqual owner (E.targetOwner selection)
+    ... | no different = trans (Pass.traceUnrelated trail key value found different)
+        (cong just (sym (deltaForeign before owner selected version path answer different)))
+    ... | yes owned = ⊥-elim (Observations.falseNotTrue (trans (sym registered)
         (Targets.neededRegistration selection before key value found owned refl needed)))
 
     unneededPersists : ∀ {count before after} → Pass.Trace count before after → O.Admissible before →

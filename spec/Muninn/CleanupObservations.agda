@@ -19,7 +19,7 @@ open import Data.Maybe.Properties using (just-injective)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.Empty using (⊥-elim)
 open import Relation.Nullary using (yes; no; ¬_)
-open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong; cong₂)
+open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong; cong₂; subst)
 module DB = O.DB
 
 lookupMember : ∀ world key value → DB.lookup key world ≡ just value → (key , value) ∈ world
@@ -47,50 +47,51 @@ falseNotTrue ()
 
 data SnapshotView : O.Record → Set where
   snapshot : ∀ owner selected nodes edges payload → SnapshotView (O.recordOf owner (O.structuralSnapshot selected nodes edges payload))
-  plain : ∀ {value} → O.kind (O.body value) ≢ O.structuralSnapshotK → SnapshotView value
+  delta : ∀ owner selected version path answer → SnapshotView (O.recordOf owner (O.deltaBinding selected version path answer))
+  plain : ∀ {value} → Storage.PlainKind value → SnapshotView value
 
 snapshotView : ∀ value → SnapshotView value
 
-snapshotView (O.recordOf owner (O.registration _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.checkout _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.creationIntent _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.defaults _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.policyVersion _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.currentPolicy _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.note _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.notePosting _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.noteVector _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.fileVersion _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.baseBinding _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.deltaBinding _ _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.basePointer _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.chunk _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.posting _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.vector _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.symbol _ _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.edge _ _ _)) = plain (λ ())
+snapshotView (O.recordOf owner (O.registration _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.checkout _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.creationIntent _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.defaults _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.policyVersion _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.currentPolicy _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.note _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.notePosting _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.noteVector _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.fileVersion _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.baseBinding _ _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.deltaBinding selected version path answer)) = delta owner selected version path answer
+snapshotView (O.recordOf owner (O.basePointer _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.chunk _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.posting _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.vector _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.symbol _ _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.edge _ _ _)) = plain ((λ ()) , (λ ()))
 snapshotView (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) = snapshot owner selected nodes edges payload
-snapshotView (O.recordOf owner (O.legacy _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.staging _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.acceptedWork _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.cleanupWork _ _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.activeReader _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.continuation _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.receipt _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.migration _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.usage _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.bootstrap _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.modelCache _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.coordination _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.schemaResource _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.graphResource _ _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.publishedView _ _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.logFile _)) = plain (λ ())
-snapshotView (O.recordOf owner (O.bootstrapStage _)) = plain (λ ())
+snapshotView (O.recordOf owner (O.legacy _ _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.staging _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.acceptedWork _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.cleanupWork _ _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.activeReader _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.continuation _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.receipt _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.migration _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.usage _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.bootstrap _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.modelCache _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.coordination _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.schemaResource _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.graphResource _ _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.publishedView _ _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.logFile _)) = plain ((λ ()) , (λ ()))
+snapshotView (O.recordOf owner (O.bootstrapStage _)) = plain ((λ ()) , (λ ()))
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Store = Storage.Model excluded
+module Model where
+  module M = E.Model
+  module Store = Storage.Model
 
   indexedIgnoresControls : ∀ selection value → E.indexed value ≡ true →
     (M.registeredValue selection value ≡ false) × ((M.legacyValue selection value ≡ false) × (M.liveValue selection value ≡ false))
@@ -105,8 +106,8 @@ module Model (excluded : List String → String → Bool) where
   indexedIgnoresControls selection (O.recordOf owner (O.notePosting _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.noteVector _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.fileVersion _)) indexed = refl , refl , refl
-  indexedIgnoresControls selection (O.recordOf owner (O.baseBinding _ _)) indexed = refl , refl , refl
-  indexedIgnoresControls selection (O.recordOf owner (O.deltaBinding _ _ _)) indexed = refl , refl , refl
+  indexedIgnoresControls selection (O.recordOf owner (O.baseBinding _ _ _)) indexed = refl , refl , refl
+  indexedIgnoresControls selection (O.recordOf owner (O.deltaBinding _ _ _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.basePointer _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.chunk _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.posting _ _)) indexed = refl , refl , refl
@@ -114,7 +115,7 @@ module Model (excluded : List String → String → Bool) where
   indexedIgnoresControls selection (O.recordOf owner (O.symbol _ _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.edge _ _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.structuralSnapshot _ _ _ _)) indexed = refl , refl , refl
-  indexedIgnoresControls selection (O.recordOf owner (O.legacy _ _)) indexed = refl , refl , refl
+  indexedIgnoresControls selection (O.recordOf owner (O.legacy _ _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.staging _ _)) indexed = refl , refl , refl
   indexedIgnoresControls selection (O.recordOf owner (O.acceptedWork _ _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.cleanupWork _ _ _)) ()
@@ -134,30 +135,37 @@ module Model (excluded : List String → String → Bool) where
   indexedIgnoresControls selection (O.recordOf owner (O.logFile _)) ()
   indexedIgnoresControls selection (O.recordOf owner (O.bootstrapStage _)) ()
 
-  projectionPlain : ∀ selection world value → O.kind (O.body value) ≢ O.structuralSnapshotK → M.project selection world value ≡ value
-  projectionPlain selection world value nonSnapshot with Store.shape selection world value
-  ... | Store.plain exact = exact
-  ... | Store.snapshot owner selected nodes edges payload = ⊥-elim (nonSnapshot refl)
+  projectionPlain : ∀ selection world value → Storage.PlainKind value → M.project selection world value ≡ value
+  projectionPlain = Store.projectPlain
 
   neededSame : ∀ selection before after key value → M.Safety selection before after →
-    DB.lookup key before ≡ just value → M.Needed selection before key → O.kind (O.body value) ≢ O.structuralSnapshotK →
+    DB.lookup key before ≡ just value → M.Needed selection before key → Storage.PlainKind value →
     DB.lookup key after ≡ just value
-  neededSame selection before after key value safe found needed nonSnapshot with M.Safety.needed safe key value found needed
-  ... | retained , present , projected , nodes , edges = trans present (cong just
-      (trans (sym (projectionPlain selection before retained retainedNonSnapshot))
-        (trans projected (projectionPlain selection before value nonSnapshot))))
-    where
-    sameKind : O.kind (O.body retained) ≡ O.kind (O.body value)
-    sameKind = trans (sym (Store.projectKind selection before retained))
-      (trans (cong (λ v → O.kind (O.body v)) projected) (Store.projectKind selection before value))
-    retainedNonSnapshot : O.kind (O.body retained) ≢ O.structuralSnapshotK
-    retainedNonSnapshot equal = nonSnapshot (trans (sym sameKind) equal)
+  neededSame selection before after key value safe found needed facts with M.Safety.needed safe key value found needed
+  ... | retained , present , projected , nodes , edges = trans present
+    (cong just (Store.injectivePlain selection before value facts retained projected))
+
+  deltaStable : ∀ owner selected path {old new} → Storage.DeltaHistory old new →
+    M.deltaValue owner selected path old ≡ M.deltaValue owner selected path new
+  deltaStable owner selected path (Storage.deltaUnchanged value kind) = refl
+  deltaStable owner selected path (Storage.deltaErased storedOwner checkout version storedPath answer) = refl
+
+  deltaProjectionStable : ∀ selection world owner selected path value →
+    M.deltaValue owner selected path (M.project selection world value) ≡ M.deltaValue owner selected path value
+  deltaProjectionStable selection world owner selected path value with Store.shape selection world value
+  ... | Store.plain same = cong (M.deltaValue owner selected path) same
+  ... | Store.hiddenDelta storedOwner checkout version storedPath answer same = cong (M.deltaValue owner selected path) same
+  ... | Store.snapshot storedOwner checkout nodes edges payload with E.ownerEqual storedOwner (E.targetOwner selection)
+  ...   | yes same = refl
+  ...   | no different = refl
 
   record Support (selection : E.Rule) (before after : O.World) : Set where
     field safe : M.Safety selection before after
           uniqueBefore : O.Unique before
           uniqueAfter : O.Unique after
-          backwardPlain : ∀ key value → DB.lookup key after ≡ just value → O.kind (O.body value) ≢ O.structuralSnapshotK → DB.lookup key before ≡ just value
+          backwardPlain : ∀ key value → DB.lookup key after ≡ just value → Storage.PlainKind value → DB.lookup key before ≡ just value
+          backwardDelta : ∀ key value → DB.lookup key after ≡ just value → O.kind (O.body value) ≡ O.deltaBindingK →
+            Σ O.Record (λ old → DB.lookup key before ≡ just old × Storage.DeltaHistory old value)
 
   metadataIndex : ∀ (test : O.Record → Bool) value → (E.indexed value ≡ true → test value ≡ false) → test value ≡ true → E.indexed value ≡ false
   metadataIndex test value ignored positive with E.indexed value in indexed
@@ -200,8 +208,9 @@ module Model (excluded : List String → String → Bool) where
 
   falseObservation : ∀ selection before after test → Support selection before after →
     (∀ key owner selected nodes edges payload → test key (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)) ≡ false) →
+    (∀ key {old new} → Storage.DeltaHistory old new → test key old ≡ test key new) →
     E.anyRow test before ≡ false → E.anyRow test after ≡ false
-  falseObservation selection before after test support ignore negative with E.anyRow test after in result
+  falseObservation selection before after test support ignore stable negative with E.anyRow test after in result
   ... | false = refl
   ... | true with anyWitness test after result
   ...   | (key , value) , present , positive with snapshotView value
@@ -210,22 +219,28 @@ module Model (excluded : List String → String → Bool) where
         (anyPresent test before key value (lookupMember before key value
           (Support.backwardPlain support key value (Order.memberLookup after key value (Support.uniqueAfter support) present) nonSnapshot)) positive)) negative))
 
+  ...     | delta owner selected version path answer with Support.backwardDelta support key value
+      (Order.memberLookup after key value (Support.uniqueAfter support) present) refl
+  ...       | old , found , history = ⊥-elim (Effects.trueIsNotFalse (trans (sym
+        (anyPresent test before key old (lookupMember before key old found)
+          (trans (stable key history) positive))) negative))
+
   deltaAbsence : ∀ selection before after owner selected path → Support selection before after →
     M.hasDelta owner selected path before ≡ false → M.hasDelta owner selected path after ≡ false
   deltaAbsence selection before after owner selected path support = falseObservation selection before after
     (λ key value → M.deltaValue owner selected path value) support (λ key o s ns es payload → refl)
+      (λ key history → deltaStable owner selected path history)
 
   module Step (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Core = Effects.Model.Core excluded selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
 
-    changedSnapshot : ∀ world value → Core.Changed world value → O.kind (O.body value) ≡ O.structuralSnapshotK
-    changedSnapshot world value changed with Store.shape selection world value
-    ... | Store.plain exact = ⊥-elim (Core.changedIsActual world value changed exact)
-    ... | Store.snapshot owner selected nodes edges payload = refl
+    changedPlain : ∀ world value → Core.Changed world value → ¬ Storage.PlainKind value
+    changedPlain world value changed facts = Core.changedIsActual world value changed
+      (Store.projectPlain selection world value facts)
 
     backwardPlan : ∀ key world (plan : Core.Plan key world) other value →
       DB.lookup other (proj₂ (DB.execute (Core.compile key world plan) world)) ≡ just value →
-      O.kind (O.body value) ≢ O.structuralSnapshotK → DB.lookup other world ≡ just value
+      Storage.PlainKind value → DB.lookup other world ≡ just value
     backwardPlan key world (Core.retain denied) other value found nonSnapshot = found
     backwardPlan key world (Core.erase ready) other value found nonSnapshot with key ≟ other
     ... | yes refl with trans (sym (DB.deleteAbsent key world)) found
@@ -233,15 +248,37 @@ module Model (excluded : List String → String → Bool) where
     backwardPlan key world (Core.erase ready) other value found nonSnapshot | no distinct = trans (sym (DB.deletePreservesOther key other world distinct)) found
     backwardPlan key world (Core.trim (stored , present , captured , owned , indexed , needed , unprotected , changed)) other value found nonSnapshot with key ≟ other
     ... | no distinct = trans (sym (DB.writePreservesOther key other (M.project selection world stored) world distinct)) found
-    ... | yes refl = ⊥-elim (nonSnapshot (trans (sym (cong (λ v → O.kind (O.body v)) sameValue))
-        (trans (Store.projectKind selection world stored) (changedSnapshot world stored changed))))
+    ... | yes refl = ⊥-elim (changedPlain world stored changed
+        ((λ equal → proj₁ nonSnapshot (trans (sym sameKind) equal)) ,
+         (λ equal → proj₂ nonSnapshot (trans (sym sameKind) equal))))
       where
       sameValue : M.project selection world stored ≡ value
       sameValue = just-injective (trans (sym (DB.writeVisible key (M.project selection world stored) world)) found)
+      sameKind : O.kind (O.body stored) ≡ O.kind (O.body value)
+      sameKind = trans (sym (Store.projectKind selection world stored)) (cong (λ v → O.kind (O.body v)) sameValue)
+
+    backwardDeltaPlan : ∀ key world (plan : Core.Plan key world) other value →
+      DB.lookup other (proj₂ (DB.execute (Core.compile key world plan) world)) ≡ just value →
+      O.kind (O.body value) ≡ O.deltaBindingK →
+      Σ O.Record (λ old → DB.lookup other world ≡ just old × Storage.DeltaHistory old value)
+    backwardDeltaPlan key world (Core.retain denied) other value found kind = value , found , Storage.deltaUnchanged value kind
+    backwardDeltaPlan key world (Core.erase ready) other value found kind with key ≟ other
+    ... | yes refl with trans (sym (DB.deleteAbsent key world)) found
+    ...   | ()
+    backwardDeltaPlan key world (Core.erase ready) other value found kind | no distinct =
+      value , trans (sym (DB.deletePreservesOther key other world distinct)) found , Storage.deltaUnchanged value kind
+    backwardDeltaPlan key world (Core.trim (stored , present , captured , owned , indexed , needed , unprotected , changed)) other value found kind with key ≟ other
+    ... | no distinct = value , trans (sym (DB.writePreservesOther key other (M.project selection world stored) world distinct)) found , Storage.deltaUnchanged value kind
+    ... | yes refl = stored , present , subst (Storage.DeltaHistory stored) same
+        (Store.deltaOrigin selection world stored (trans (cong (λ row → O.kind (O.body row)) same) kind))
+      where
+      same : M.project selection world stored ≡ value
+      same = just-injective (trans (sym (DB.writeVisible key (M.project selection world stored) world)) found)
 
     stepSupport : ∀ key world → O.Admissible world → Support selection world (proj₂ (DB.execute (Core.transaction key) world))
     stepSupport key world valid = record
       { safe = Core.transactionSafety key world
       ; uniqueBefore = O.Admissible.unique valid
       ; uniqueAfter = O.Admissible.unique (Core.transactionAdmissible key world valid)
-      ; backwardPlain = backwardPlan key world (Core.decide key world) }
+      ; backwardPlain = backwardPlan key world (Core.decide key world)
+      ; backwardDelta = backwardDeltaPlan key world (Core.decide key world) }

@@ -22,14 +22,14 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; subst)
 module DB = O.DB
 module Exec = O.Execution
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Current (selection : E.Rule) (before : O.World) (valid : O.Admissible before) where
     intent : M.Intent selection before
     intent = M.captureIntent selection before (O.Admissible.unique valid)
-    module Work = Loop.Model.Run excluded selection before intent
-    module Gate = Admission.Model.Family excluded selection
+    module Work = Loop.Model.Run selection before intent
+    module Gate = Admission.Model.Family selection
 
     result = Work.Pass.run before
     after = Work.Pass.Result.after result
@@ -47,7 +47,7 @@ module Model (excluded : List String → String → Bool) where
     noFence released key (claimed , value , found , owned , indexed , inj₁ unneeded) =
       noPending released key (value , found , coveredAfter key value found owned , owned , indexed , inj₁ unneeded)
     noFence released key (claimed , value , found , owned , indexed , inj₂ noncanonical)
-      with Classifier.Model.Assessment.needed? excluded selection after key
+      with Classifier.Model.Assessment.needed? selection after key
     ... | yes needed = noncanonical (Work.canonicalAtRest after key value
       (Work.Use.releasedTrace trail valid released) (Work.Pass.Result.noEdit result)
       found (coveredAfter key value found owned) needed)

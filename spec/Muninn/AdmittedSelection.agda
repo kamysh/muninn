@@ -21,17 +21,14 @@ record FamilyEntries (policy : C.FamilyPolicy) : Set where
   field exclude : A.Entries (map toList (C.EffectiveConfig.exclude (C.familyConfig policy)))
         vendor : A.Entries (map toList (C.EffectiveConfig.vendor (C.familyConfig policy)))
 
+compiledStrings : ∀ texts → A.Entries (map toList texts) → O.Rules (map (λ text → A.normalize (toList text)) texts)
+compiledStrings [] A.none = O.empty
+compiledStrings (text ∷ rest) (A.more entry entries) = O.cons (A.Entry.compiled entry) (compiledStrings rest entries)
+
 compiledFamily : ∀ policy → FamilyEntries policy → O.FamilyRules policy
 compiledFamily policy entries = record
-  { exclude = subst O.Rules (symMap (C.EffectiveConfig.exclude (C.familyConfig policy)))
-      (compiledRules (FamilyEntries.exclude entries))
-  ; vendor = subst O.Rules (symMap (C.EffectiveConfig.vendor (C.familyConfig policy)))
-      (compiledRules (FamilyEntries.vendor entries))
-  }
-  where
-  symMap : ∀ texts → map A.normalize (map toList texts) ≡ map (λ text → A.normalize (toList text)) texts
-  symMap [] = refl
-  symMap (text ∷ rest) rewrite symMap rest = refl
+  { exclude = compiledStrings _ (FamilyEntries.exclude entries)
+  ; vendor = compiledStrings _ (FamilyEntries.vendor entries) }
 
 admitFamily : ∀ policy → Maybe (FamilyEntries policy)
 admitFamily policy with A.admitAll (map toList (C.EffectiveConfig.exclude (C.familyConfig policy)))

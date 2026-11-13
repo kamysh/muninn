@@ -7,13 +7,15 @@ its goal. The closed role classifier covers every owned body constructor.
 ## Policy and current use
 
 A rule names one resolved family and its ordered effective exclusion rules,
-including stored defaults. The policy matcher is installed once by the shared
-selection model (#26), rather than supplied by a cleanup handler. Rule parsing
-is not implemented in this slice.
+including stored defaults. Strict admission evidence accompanies saved rules,
+and the shared selection model compiles and resolves their actual syntax.
+Cleanup handlers cannot substitute a matcher. See
+[concrete selection and Git authority](SELECTION-INTEGRATION.md).
 
-The new-search mask depends on family and path, not checkout scheduling flags.
-General laws establish agreement across checkouts and exclusion from new search
-visibility. Paused and Git-suspended checkouts use the same mask and remain
+The family mask depends on family and path, not checkout scheduling flags.
+The full selection decision also uses the Git default saved with each published
+path. General laws establish agreement of the family mask across checkouts;
+actual binding visibility uses the concrete Git-aware decision. Paused and Git-suspended checkouts use the same mask and remain
 potential sources of shared data; retirement is a distinct typed observation.
 
 Owned metadata now exposes registry retirement/legacy-read use, checkout
@@ -30,8 +32,8 @@ existence cannot keep an inactive old graph representation alive.
 ## Lasting need and temporary protection
 
 Need is the least closure of explicit roots and the fixed dependency relation:
-current included bindings, current snapshots/resources, metadata and unrelated
-owners. Referenced records must resolve to the expected kind/owner. Shared
+current included content bindings, required delta absence markers, current
+snapshots/resources, metadata and unrelated owners. Referenced records must resolve to the expected kind/owner. Shared
 analysis footprint propagates between a live version and its chunks, postings,
 vectors and eligible path-specific symbols. Snapshot edges retain their valid
 endpoint symbols. Staging is temporary rather than a permanent cache root.
@@ -47,7 +49,8 @@ while a captured, permanently unneeded record is retained only by such a lease.
 
 A structural snapshot may contain included and excluded members together.
 Its independent projection preserves the header/ownership and eligible members
-while filtering excluded nodes and edges. Soundness, completeness and
+while filtering excluded nodes and edges. An excluded delta binding retains
+only its absence marker, dropping its obsolete version reference. Soundness, completeness and
 idempotence laws govern that filtering. Keeping the header does not make all
 its old members needed.
 

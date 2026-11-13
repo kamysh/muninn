@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorkerProof where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupEffects as Effects
 import Muninn.CleanupProgress as Progress
 import Muninn.PolicyCleanupWorker as Worker
@@ -49,24 +50,25 @@ executionMapping f transaction world rewrite evaluationMapping f transaction wor
 ... | DB.committed value after = refl
 ... | DB.aborted value = refl
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : M.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : M.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     id = Input.Mutation.operationId request
     meaning = Identity.mutation Identity.kApplyPolicy request
     owner = O.family family
     module Policy = Stored.Family family pointer
-    open Worker.Model.Family excluded family pointer accepted rules intent request taskSlot using (tick)
-    open Batch.Model.Family excluded family pointer accepted rules intent id taskSlot using (batch)
+    open Worker.Model.Family family pointer accepted rules validRules intent request taskSlot using (tick)
+    open Batch.Model.Family family pointer accepted rules validRules intent id taskSlot using (batch)
 
     module At (world : O.World) (current : Policy.Saved world) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
-      module Decisions = Decision.Model.Family.Current excluded family pointer accepted rules intent id taskSlot current
-      open Worker.Model.Family.Current excluded family pointer accepted rules intent request taskSlot current using (perform)
+      module Step = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
+      module Decisions = Decision.Model.Family.Current family pointer accepted rules validRules intent id taskSlot current
+      open Worker.Model.Family.Current family pointer accepted rules validRules intent request taskSlot current using (perform)
 
       -- If any captured edit is eligible, the worker selects an actual batch
       -- rather than waiting for a different protected record.
@@ -94,5 +96,5 @@ module Model (excluded : List String → String → Bool) where
         with performsEdit receiptSlot progress guidance actual available
       ... | key , ready , performed = subst (λ after → Progress.mass after < Progress.mass world)
         (sym (cong proj₂ (trans (tickUsesCurrent receiptSlot names progress guidance found seen) performed)))
-        (Batch.Model.Family.Current.productive excluded family pointer accepted rules intent id taskSlot
+        (Batch.Model.Family.Current.productive family pointer accepted rules validRules intent id taskSlot
           world current seen actual key Effects.unchanged ready)

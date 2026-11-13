@@ -189,8 +189,8 @@ foundInKeys ((other , stored) ∷ rows) key value found with key ≟ other
 ... | yes same = here same
 ... | no different = there (foundInKeys rows key value found)
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Assessment (selection : E.Rule) (world : O.World) where
     ReferenceEvidence : M.Mode → ℕ → ℕ → Set

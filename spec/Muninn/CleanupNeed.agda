@@ -23,16 +23,17 @@ open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; _≢_; refl; sym; trans; cong; cong₂; subst)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
-  module View = Views.Model excluded
-  module Store = Storage.Model excluded
-  module Target = Scope.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
+  module View = Views.Model
+  module Store = Storage.Model
+  module Target = Scope.Model
 
   projectClass : ∀ selection world value → E.classify (O.body (M.project selection world value)) ≡ E.classify (O.body value)
   projectClass selection world value with Store.shape selection world value
   ... | Store.plain exact = cong (λ v → E.classify (O.body v)) exact
+  ... | Store.hiddenDelta owner selected version path answer same = cong (λ v → E.classify (O.body v)) same
   ... | Store.snapshot owner selected nodes edges payload with E.ownerEqual owner (E.targetOwner selection)
   ...   | yes same = refl
   ...   | no different = refl
@@ -62,10 +63,10 @@ module Model (excluded : List String → String → Bool) where
   rolePositive selection before after E.artifact support ()
   rolePositive selection before after (E.attached parent gate) support ()
   rolePositive selection before after (E.baselineAnchor) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) (M.anyCheckoutLive selection before) (rooted))) (Obs.anyCheckoutPositive selection before after support (Scope.andRight (M.familyRegistered selection before) (M.anyCheckoutLive selection before) (rooted))))
-  rolePositive selection before after (E.baselineBinding path) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted))) (Views.andBoth (Obs.anyCheckoutPositive selection before after support (Scope.andLeft (M.anyCheckoutLive selection before) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))) (Scope.andRight (M.anyCheckoutLive selection before) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))))
-  rolePositive selection before after (E.checkoutBinding selected path) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) ((M.checkoutLive selection before selected) ∧ (M.included selection (E.targetOwner selection) path)) (rooted))) (Views.andBoth (Obs.checkoutPositive selection before after selected support (Scope.andLeft (M.checkoutLive selection before selected) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.checkoutLive selection before selected) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))) (Scope.andRight (M.checkoutLive selection before selected) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.checkoutLive selection before selected) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))))
+  rolePositive selection before after (E.baselineBinding path gitDefault) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted))) (Views.andBoth (Obs.anyCheckoutPositive selection before after support (Scope.andLeft (M.anyCheckoutLive selection before) (M.includedWithGit selection (E.targetOwner selection) gitDefault path) (Scope.andRight (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted)))) (Scope.andRight (M.anyCheckoutLive selection before) (M.includedWithGit selection (E.targetOwner selection) gitDefault path) (Scope.andRight (M.familyRegistered selection before) ((M.anyCheckoutLive selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted)))))
+  rolePositive selection before after (E.checkoutBinding selected path) support rooted = Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft _ _ rooted)) (Obs.checkoutPositive selection before after selected support (Scope.andRight _ _ rooted))
   rolePositive selection before after (E.snapshot selected) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) (M.checkoutLive selection before selected) (rooted))) (Obs.checkoutPositive selection before after selected support (Scope.andRight (M.familyRegistered selection before) (M.checkoutLive selection before selected) (rooted))))
-  rolePositive selection before after (E.legacyFile path) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted))) (Views.andBoth (Obs.legacyPositive selection before after support (Scope.andLeft (M.legacyReadable selection before) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))) (Scope.andRight (M.legacyReadable selection before) (M.included selection (E.targetOwner selection) path) (Scope.andRight (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.included selection (E.targetOwner selection) path)) (rooted)))))
+  rolePositive selection before after (E.legacyFile path gitDefault) support rooted = (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted))) (Views.andBoth (Obs.legacyPositive selection before after support (Scope.andLeft (M.legacyReadable selection before) (M.includedWithGit selection (E.targetOwner selection) gitDefault path) (Scope.andRight (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted)))) (Scope.andRight (M.legacyReadable selection before) (M.includedWithGit selection (E.targetOwner selection) gitDefault path) (Scope.andRight (M.familyRegistered selection before) ((M.legacyReadable selection before) ∧ (M.includedWithGit selection (E.targetOwner selection) gitDefault path)) (rooted)))))
   rolePositive selection before after (E.graphContainer Data.Maybe.nothing inUse) support rooted = (Views.andBoth (Scope.andLeft (inUse) ((M.familyRegistered selection before) ∧ (M.anyCheckoutLive selection before)) (rooted)) (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) (M.anyCheckoutLive selection before) (Scope.andRight (inUse) ((M.familyRegistered selection before) ∧ (M.anyCheckoutLive selection before)) (rooted)))) (Obs.anyCheckoutPositive selection before after support (Scope.andRight (M.familyRegistered selection before) (M.anyCheckoutLive selection before) (Scope.andRight (inUse) ((M.familyRegistered selection before) ∧ (M.anyCheckoutLive selection before)) (rooted))))))
   rolePositive selection before after (E.graphContainer (just selected) inUse) support rooted = (Views.andBoth (Scope.andLeft (inUse) ((M.familyRegistered selection before) ∧ (M.checkoutLive selection before selected)) (rooted)) (Views.andBoth (Obs.registrationPositive selection before after support (Scope.andLeft (M.familyRegistered selection before) (M.checkoutLive selection before selected) (Scope.andRight (inUse) ((M.familyRegistered selection before) ∧ (M.checkoutLive selection before selected)) (rooted)))) (Obs.checkoutPositive selection before after selected support (Scope.andRight (M.familyRegistered selection before) (M.checkoutLive selection before selected) (Scope.andRight (inUse) ((M.familyRegistered selection before) ∧ (M.checkoutLive selection before selected)) (rooted))))))
 
@@ -81,10 +82,10 @@ module Model (excluded : List String → String → Bool) where
   ... | E.administrative = refl
   ... | E.artifact = refl
   ... | E.baselineAnchor = refl
-  ... | E.baselineBinding path = refl
+  ... | E.baselineBinding path gitDefault = refl
   ... | E.checkoutBinding selected path = refl
   ... | E.snapshot selected = refl
-  ... | E.legacyFile path = refl
+  ... | E.legacyFile path gitDefault = refl
   ... | E.graphContainer selected inUse = refl
   ... | E.attached parent gate = refl
 
@@ -95,10 +96,10 @@ module Model (excluded : List String → String → Bool) where
   memberNotHolder selection world value ref present | E.administrative = λ ()
   memberNotHolder selection world value ref present | E.artifact = λ ()
   memberNotHolder selection world value ref present | E.baselineAnchor = λ ()
-  memberNotHolder selection world value ref present | E.baselineBinding path = λ ()
+  memberNotHolder selection world value ref present | E.baselineBinding path gitDefault = λ ()
   memberNotHolder selection world value ref present | E.checkoutBinding selected path = λ ()
   memberNotHolder selection world value ref present | E.snapshot selected = λ ()
-  memberNotHolder selection world value ref present | E.legacyFile path = λ ()
+  memberNotHolder selection world value ref present | E.legacyFile path gitDefault = λ ()
   memberNotHolder selection world value ref present | E.graphContainer selected inUse = λ ()
   memberNotHolder selection world value ref present | E.attached parent gate = λ ()
 
@@ -128,6 +129,10 @@ module Model (excluded : List String → String → Bool) where
             (Storage.filterSubset _ edges key filtered)
             (View.View.edgePositive selection before after selected key valid support needed (E.filterKeysSound _ edges key filtered)))))
 
+  projectedRefsPositive selection before after value ref valid support needed present | Observations.delta owner selected version path answer =
+    subst (λ row → ref ∈ O.references (O.body row))
+      (Store.projectWorldIndependent selection before after value (λ ())) present
+
   referencePersist : ∀ selection before after original retained ref → O.Admissible before → Obs.Support selection before after →
     M.Needed selection before (O.target ref) → M.project selection before retained ≡ M.project selection before original →
     ref ∈ M.referencesFor M.permanent selection before original → ref ∈ M.referencesFor M.permanent selection after retained
@@ -142,11 +147,14 @@ module Model (excluded : List String → String → Bool) where
     nonHolderRetained : E.classify (O.body retained) ≢ E.holder
     nonHolderRetained sameRole = nonHolder (trans (sym (projectionClass selection before retained original same)) sameRole)
 
-  attachedNonSnapshot : ∀ selection world value ref → M.parentOf M.permanent selection world value ≡ just ref → O.kind (O.body value) ≢ O.structuralSnapshotK
+  attachedNonSnapshot : ∀ selection world value ref → M.parentOf M.permanent selection world value ≡ just ref → Storage.PlainKind value
   attachedNonSnapshot selection world value ref parent with Observations.snapshotView value
   ... | Observations.plain nonSnapshot = nonSnapshot
   ... | Observations.snapshot owner selected nodes edges payload with parent
   ...   | ()
+
+  attachedNonSnapshot selection world value ref parent | Observations.delta owner selected version path answer with parent
+  ... | ()
 
   neededResolves : ∀ selection before after source ref →
     M.Safety selection before after → M.Needed selection before (O.target ref) →

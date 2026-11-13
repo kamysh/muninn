@@ -2,6 +2,7 @@
 module Muninn.CleanupNeedScope where
 
 import Muninn.OwnedState as O
+import Muninn.GitIgnore as Git
 import Muninn.ExclusionOutcomes as E
 import Muninn.ExclusionClassifier as C
 import Muninn.CleanupCompletion as Completion
@@ -72,8 +73,8 @@ bodyIndexed (O.recordOf owner (O.note _)) = refl
 bodyIndexed (O.recordOf owner (O.notePosting _ _)) = refl
 bodyIndexed (O.recordOf owner (O.noteVector _ _)) = refl
 bodyIndexed (O.recordOf owner (O.fileVersion _)) = refl
-bodyIndexed (O.recordOf owner (O.baseBinding _ _)) = refl
-bodyIndexed (O.recordOf owner (O.deltaBinding _ _ _)) = refl
+bodyIndexed (O.recordOf owner (O.baseBinding _ _ _)) = refl
+bodyIndexed (O.recordOf owner (O.deltaBinding _ _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.basePointer _)) = refl
 bodyIndexed (O.recordOf owner (O.chunk _ _)) = refl
 bodyIndexed (O.recordOf owner (O.posting _ _)) = refl
@@ -81,7 +82,7 @@ bodyIndexed (O.recordOf owner (O.vector _ _)) = refl
 bodyIndexed (O.recordOf owner (O.symbol _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.edge _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.structuralSnapshot _ _ _ _)) = refl
-bodyIndexed (O.recordOf owner (O.legacy _ _)) = refl
+bodyIndexed (O.recordOf owner (O.legacy _ _ _)) = refl
 bodyIndexed (O.recordOf owner (O.staging _ _)) = refl
 bodyIndexed (O.recordOf owner (O.acceptedWork _ _)) = refl
 bodyIndexed (O.recordOf owner (O.cleanupWork _ _ _)) = refl
@@ -109,8 +110,8 @@ andRight : ∀ a b → a ∧ b ≡ true → b ≡ true
 andRight true b proof = proof
 andRight false b ()
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   unindexedTargets : ∀ selection world value → E.indexed value ≡ false →
     All (λ ref → kindIndexed (O.expected ref) ≡ false) (M.referencesFor M.permanent selection world value)
@@ -125,8 +126,8 @@ module Model (excluded : List String → String → Bool) where
   unindexedTargets selection world (O.recordOf owner (O.notePosting _ _)) proof = refl ∷ []
   unindexedTargets selection world (O.recordOf owner (O.noteVector _ _)) proof = refl ∷ []
   unindexedTargets selection world (O.recordOf owner (O.fileVersion _)) ()
-  unindexedTargets selection world (O.recordOf owner (O.baseBinding _ _)) ()
-  unindexedTargets selection world (O.recordOf owner (O.deltaBinding _ _ _)) ()
+  unindexedTargets selection world (O.recordOf owner (O.baseBinding _ _ _)) ()
+  unindexedTargets selection world (O.recordOf owner (O.deltaBinding _ _ _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.basePointer _)) ()
   unindexedTargets selection world (O.recordOf owner (O.chunk _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.posting _ _)) ()
@@ -134,7 +135,7 @@ module Model (excluded : List String → String → Bool) where
   unindexedTargets selection world (O.recordOf owner (O.symbol _ _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.edge _ _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.structuralSnapshot _ _ _ _)) ()
-  unindexedTargets selection world (O.recordOf owner (O.legacy _ _)) ()
+  unindexedTargets selection world (O.recordOf owner (O.legacy _ _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.staging _ _)) ()
   unindexedTargets selection world (O.recordOf owner (O.acceptedWork _ _)) proof = []
   unindexedTargets selection world (O.recordOf owner (O.cleanupWork _ _ _)) proof = []
@@ -167,8 +168,8 @@ module Model (excluded : List String → String → Bool) where
   parentIndexed selection world (O.recordOf owner (O.notePosting _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.noteVector _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.fileVersion _)) ref ()
-  parentIndexed selection world (O.recordOf owner (O.baseBinding _ _)) ref ()
-  parentIndexed selection world (O.recordOf owner (O.deltaBinding _ _ _)) ref ()
+  parentIndexed selection world (O.recordOf owner (O.baseBinding _ _ _)) ref ()
+  parentIndexed selection world (O.recordOf owner (O.deltaBinding _ _ _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.basePointer _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.chunk _ _)) ref found with just-injective found
   ... | refl = refl
@@ -183,7 +184,7 @@ module Model (excluded : List String → String → Bool) where
   ... | refl = refl
   parentIndexed selection world (O.recordOf owner (O.edge _ _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.structuralSnapshot _ _ _ _)) ref ()
-  parentIndexed selection world (O.recordOf owner (O.legacy _ _)) ref ()
+  parentIndexed selection world (O.recordOf owner (O.legacy _ _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.staging _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.acceptedWork _ _)) ref ()
   parentIndexed selection world (O.recordOf owner (O.cleanupWork _ _ _)) ref ()
@@ -218,13 +219,13 @@ module Model (excluded : List String → String → Bool) where
   rootRegistration selection world (E.attached parent gate) indexed ()
   rootRegistration selection world E.baselineAnchor indexed rooted =
     andLeft _ (M.anyCheckoutLive selection world) rooted
-  rootRegistration selection world (E.baselineBinding path) indexed rooted =
-    andLeft _ (M.anyCheckoutLive selection world ∧ M.included selection (E.targetOwner selection) path) rooted
+  rootRegistration selection world (E.baselineBinding path gitDefault) indexed rooted =
+    andLeft _ (M.anyCheckoutLive selection world ∧ M.includedWithGit selection (E.targetOwner selection) gitDefault path) rooted
   rootRegistration selection world (E.checkoutBinding selected path) indexed rooted =
-    andLeft _ (M.checkoutLive selection world selected ∧ M.included selection (E.targetOwner selection) path) rooted
+    andLeft _ (M.checkoutLive selection world selected) rooted
   rootRegistration selection world (E.snapshot selected) indexed rooted = andLeft _ (M.checkoutLive selection world selected) rooted
-  rootRegistration selection world (E.legacyFile path) indexed rooted =
-    andLeft _ (M.legacyReadable selection world ∧ M.included selection (E.targetOwner selection) path) rooted
+  rootRegistration selection world (E.legacyFile path gitDefault) indexed rooted =
+    andLeft _ (M.legacyReadable selection world ∧ M.includedWithGit selection (E.targetOwner selection) gitDefault path) rooted
   rootRegistration selection world (E.graphContainer Data.Maybe.nothing inUse) indexed rooted =
     andLeft _ (M.anyCheckoutLive selection world) (andRight inUse _ rooted)
   rootRegistration selection world (E.graphContainer (just selected) inUse) indexed rooted =
@@ -291,9 +292,12 @@ module Model (excluded : List String → String → Bool) where
   permanentTargets selection world (O.recordOf owner (O.notePosting _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.noteVector _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.fileVersion _)) = []
-  permanentTargets selection world (O.recordOf owner (O.baseBinding _ _)) = (λ ()) ∷ []
-  permanentTargets selection world (O.recordOf owner (O.deltaBinding selected Data.Maybe.nothing path)) = (λ ()) ∷ []
-  permanentTargets selection world (O.recordOf owner (O.deltaBinding selected (just version) path)) = (λ ()) ∷ (λ ()) ∷ []
+  permanentTargets selection world (O.recordOf owner (O.baseBinding _ _ _)) = (λ ()) ∷ []
+  permanentTargets selection world (O.recordOf owner (O.deltaBinding selected Data.Maybe.nothing path gitAnswer)) = (λ ()) ∷ []
+  permanentTargets selection world (O.recordOf owner (O.deltaBinding selected (just version) path gitAnswer))
+    with M.includedWithGit selection owner (Git.ignored gitAnswer) path
+  ... | true = (λ ()) ∷ (λ ()) ∷ []
+  ... | false = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.basePointer _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.chunk _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.posting _ _)) = (λ ()) ∷ []
@@ -305,7 +309,7 @@ module Model (excluded : List String → String → Bool) where
     (constantOtherTarget (E.filterKeys (M.symbolVisible selection world owner selected) nodes) O.symbolK (λ ()))
     (constantOtherTarget (E.filterKeys (M.edgeVisible selection world owner selected) edges) O.edgeK (λ ()))
   ... | no different = (λ ()) ∷ Order.join (constantOtherTarget nodes O.symbolK (λ ())) (constantOtherTarget edges O.edgeK (λ ()))
-  permanentTargets selection world (O.recordOf owner (O.legacy _ _)) = []
+  permanentTargets selection world (O.recordOf owner (O.legacy _ _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.staging _ _)) = (λ ()) ∷ []
   permanentTargets selection world (O.recordOf owner (O.acceptedWork _ _)) = []
   permanentTargets selection world (O.recordOf owner (O.cleanupWork _ _ _)) = []
@@ -325,7 +329,7 @@ module Model (excluded : List String → String → Bool) where
   permanentTargets selection world (O.recordOf owner (O.logFile _)) = []
   permanentTargets selection world (O.recordOf owner (O.bootstrapStage _)) = []
 
-  parentNotSnapshot : ∀ selection world value ref → M.parentOf M.permanent selection world value ≡ just ref → O.expected ref ≢ O.structuralSnapshotK
+  parentNotSnapshot : ∀ selection world value ref → M.parentOf M.permanent selection world value ≡ just ref → (O.expected ref ≢ O.structuralSnapshotK) × (O.expected ref ≢ O.deltaBindingK)
 
   parentNotSnapshot selection world (O.recordOf owner (O.registration _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.checkout _)) ref ()
@@ -337,23 +341,23 @@ module Model (excluded : List String → String → Bool) where
   parentNotSnapshot selection world (O.recordOf owner (O.notePosting _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.noteVector _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.fileVersion _)) ref ()
-  parentNotSnapshot selection world (O.recordOf owner (O.baseBinding _ _)) ref ()
-  parentNotSnapshot selection world (O.recordOf owner (O.deltaBinding _ _ _)) ref ()
+  parentNotSnapshot selection world (O.recordOf owner (O.baseBinding _ _ _)) ref ()
+  parentNotSnapshot selection world (O.recordOf owner (O.deltaBinding _ _ _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.basePointer _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.chunk _ _)) ref found with just-injective found
-  ... | refl = λ ()
+  ... | refl = (λ ()) , (λ ())
   parentNotSnapshot selection world (O.recordOf owner (O.posting _ _)) ref found with just-injective found
-  ... | refl = λ ()
+  ... | refl = (λ ()) , (λ ())
   parentNotSnapshot selection world (O.recordOf owner (O.vector _ _)) ref found with just-injective found
-  ... | refl = λ ()
+  ... | refl = (λ ()) , (λ ())
   parentNotSnapshot selection world (O.recordOf owner (O.symbol version path payload)) ref found with M.versionPublishedAtPath selection world owner path version
   ... | false with found
   ...   | ()
   parentNotSnapshot selection world (O.recordOf owner (O.symbol version path payload)) ref found | true with just-injective found
-  ... | refl = λ ()
+  ... | refl = (λ ()) , (λ ())
   parentNotSnapshot selection world (O.recordOf owner (O.edge _ _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.structuralSnapshot _ _ _ _)) ref ()
-  parentNotSnapshot selection world (O.recordOf owner (O.legacy _ _)) ref ()
+  parentNotSnapshot selection world (O.recordOf owner (O.legacy _ _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.staging _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.acceptedWork _ _)) ref ()
   parentNotSnapshot selection world (O.recordOf owner (O.cleanupWork _ _ _)) ref ()

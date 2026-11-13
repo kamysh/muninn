@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupWorkerFinish where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.PolicyCleanupBatch as Batch
 import Muninn.PolicyCleanupWorker as Worker
 import Muninn.PolicyCleanupWorkerProof as Proof
@@ -25,15 +26,16 @@ open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; trans)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     module Policy = Stored.Family family pointer
-    open Proof.Model.Family excluded family pointer accepted rules intent request taskSlot
+    open Proof.Model.Family family pointer accepted rules validRules intent request taskSlot
       using (id; meaning; owner)
-    open Worker.Model.Family excluded family pointer accepted rules intent request taskSlot using (tick)
+    open Worker.Model.Family family pointer accepted rules validRules intent request taskSlot using (tick)
 
     module At (world : O.World) (current : Policy.Saved world)
       (seen : Policy.observe world ≡ just current) (valid : O.Admissible world)
@@ -41,21 +43,21 @@ module Model (excluded : List String → String → Bool) where
       (guidance : String → Dialogue.Prompt)
       (located : DB.lookup receiptSlot world ≡ just (Ledger.recordAt {id = id} owner (Receipt.active meaning names progress)))
       (found : Ledger.find id world ≡ just (Ledger.found receiptSlot owner (Receipt.active meaning names progress))) where
-      module Step = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
-      module Decisions = Decision.Model.Family.Current excluded family pointer accepted rules intent id taskSlot current
-      open Worker.Model.Family.Current excluded family pointer accepted rules intent request taskSlot current
+      module Step = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
+      module Decisions = Decision.Model.Family.Current family pointer accepted rules validRules intent id taskSlot current
+      open Worker.Model.Family.Current family pointer accepted rules validRules intent request taskSlot current
         using (perform; finishStepDefinition)
-      open Proof.Model.Family.At excluded family pointer accepted rules intent request taskSlot world current
+      open Proof.Model.Family.At family pointer accepted rules validRules intent request taskSlot world current
         using (tickUsesCurrent)
       continuation = "Cleanup is waiting for remaining work."
       missing = Ledger.continueDialogue receiptSlot progress (guidance "I cannot read the current repository settings.")
 
       module Verified (ready : Task.Ready world) (quiet : Step.Pass.NoEdit world) where
-        open Completion.Model.Family.At.Verified excluded family pointer accepted rules intent request taskSlot
+        open Completion.Model.Family.At.Verified family pointer accepted rules validRules intent request taskSlot
           world current seen valid progress continuation guidance missing receiptSlot names located found ready
           public using (reply; after; committed; currentOutcome)
-        open Finish.Model.Family excluded family pointer accepted rules intent request taskSlot using (finish)
+        open Finish.Model.Family family pointer accepted rules validRules intent request taskSlot using (finish)
 
         selected : Decisions.next ≡ Decision.doFinish
         selected = Decisions.nextForCompletion (proj₁ ready) quiet (proj₂ ready)

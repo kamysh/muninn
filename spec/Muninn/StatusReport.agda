@@ -188,8 +188,8 @@ cleanupMessage noTrackedCleanup = "No cleanup work is currently recorded. Check 
 -- Completion is a claim about the independent exclusion outcome, not the
 -- presence of a finished receipt or the absence of a currently tracked task.
 import Muninn.ExclusionOutcomes as Exclusion
-module CleanupVerification (excluded : List String → String → Data.Bool.Bool) where
-  module E = Exclusion.Model excluded
+module CleanupVerification where
+  module E = Exclusion.Model
 
   data Report (selection : Exclusion.Rule) (accepted : O.World)
     (intent : E.Intent selection accepted) (before after : O.World) : Set where

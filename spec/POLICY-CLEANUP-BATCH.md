@@ -45,8 +45,9 @@ check and all sibling tasks to finish.
 
 This is #122 under #84 and #25. Complete policy acceptance/supersession reporting,
 automatic follow-up choice, holder lifecycle, fair scheduling and assembled
-original-request convergence remain integration work. The matcher is still the
-shared policy parameter until #26 supplies its agreed syntax and traversal laws.
+original-request convergence remain integration work. Selection now uses the
+actual admitted stored rules and saved Git defaults through #26; the batch no
+longer accepts a matcher parameter.
 This bounded single-edit building block does not prescribe a new physical SQL
 layout or establish a runtime throughput measurement.
 

@@ -66,9 +66,9 @@ snapshotFromFacts world owner selected snapshot (O.recordOf actualOwner (O.struc
   with owned | just-injective checkout
 ... | refl | refl = nodes , edges , payload , found
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Targets = Scope.Model excluded
+module Model where
+  module M = E.Model
+  module Targets = Scope.Model
 
   storedSnapshotNotRoot : ∀ selection world selected nodes edges payload →
     M.rooted selection world (O.recordOf (E.targetOwner selection) (O.structuralSnapshot selected nodes edges payload)) ≡ false
@@ -99,7 +99,7 @@ module Model (excluded : List String → String → Bool) where
 
 
   module Cleanup (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Aligned = Alignment.Model.Contract excluded selection accepted intent
+    module Aligned = Alignment.Model.Contract selection accepted intent
     module Pass = Aligned.Pass
 
     validAfterCleanup : ∀ {count before after} → Pass.Trace count before after →
@@ -107,8 +107,8 @@ module Model (excluded : List String → String → Bool) where
     validAfterCleanup {before = before} {after = after} trail storeValid viewsValid = record
       { onePerCheckout = λ first second owner selected old current found present →
           Valid.onePerCheckout viewsValid first second owner selected old current
-            (Aligned.backwardPlain trail storeValid first _ found (λ ()))
-            (Aligned.backwardPlain trail storeValid second _ present (λ ()))
+            (Aligned.backwardPlain trail storeValid first _ found ((λ ()) , (λ ())))
+            (Aligned.backwardPlain trail storeValid second _ present ((λ ()) , (λ ())))
       ; sameCheckout = keepsCheckout }
       where
       keepsCheckout : ∀ pointer owner selected snapshot →
@@ -116,7 +116,7 @@ module Model (excluded : List String → String → Bool) where
         SnapshotAt after owner selected snapshot
       keepsCheckout pointer owner selected snapshot found
         with Valid.sameCheckout viewsValid pointer owner selected snapshot
-          (Aligned.backwardPlain trail storeValid pointer _ found (λ ()))
+          (Aligned.backwardPlain trail storeValid pointer _ found ((λ ()) , (λ ())))
       ... | nodes , edges , payload , prior =
         let
           stored = O.recordOf owner (O.publishedView selected snapshot)

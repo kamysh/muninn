@@ -5,10 +5,11 @@ module Muninn.PolicyRuleAdmission where
 import Muninn.RulePatterns as R
 import Muninn.GlobBody as B
 import Muninn.StrictGlob as S
+open import Data.String using (String; toList)
 open import Data.Char using (Char; isSpace; toℕ)
 import Data.Nat as Nat
 open import Data.Bool using (true; false)
-open import Data.List using (List; []; _∷_; reverse)
+open import Data.List using (List; []; _∷_; _++_; reverse; map)
 import Data.List.Relation.Unary.All as All
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Product using (Σ; _,_; proj₁; proj₂)
@@ -89,3 +90,12 @@ admitAllComplete none = none , refl
 admitAllComplete (more entry rest) with admitComplete entry
 ... | actual , headKnown rewrite headKnown with admitAllComplete rest
 ...   | actualRest , tailKnown rewrite tailKnown = more actual actualRest , refl
+
+appendEntries : ∀ {first second} → Entries first → Entries second → Entries (first ++ second)
+appendEntries none later = later
+appendEntries (more entry rest) later = more entry (appendEntries rest later)
+
+appendStrings : ∀ (first second : List String) → Entries (map toList first) → Entries (map toList second) →
+  Entries (map toList (first ++ second))
+appendStrings [] second none later = later
+appendStrings (first ∷ rest) second (more entry earlier) later = more entry (appendStrings rest second earlier later)

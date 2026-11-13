@@ -35,14 +35,14 @@ filterAll : ∀ keep keys → (∀ key → key ∈ keys → keep key ≡ true) �
 filterAll keep [] positive = refl
 filterAll keep (key ∷ keys) positive rewrite positive key (here refl) = cong (key ∷_) (filterAll keep keys (λ k present → positive k (there present)))
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
-  module Obs = Observations.Model excluded
-  module Pins = Protection.Model excluded
-  module Needs = Need.Model excluded
-  module Store = Storage.Model excluded
-  module View = Views.Model excluded
-  module BackNeed = ReverseNeed.Model excluded
+module Model where
+  module M = E.Model
+  module Obs = Observations.Model
+  module Pins = Protection.Model
+  module Needs = Need.Model
+  module Store = Storage.Model
+  module View = Views.Model
+  module BackNeed = ReverseNeed.Model
 
   heldRaw : ∀ value ref → ref ∈ M.heldReferences value → ref ∈ O.references (O.body value)
   heldRaw value ref present with E.classify (O.body value)
@@ -53,35 +53,38 @@ module Model (excluded : List String → String → Bool) where
   ... | ()
   heldRaw value ref present | E.baselineAnchor with present
   ... | ()
-  heldRaw value ref present | E.baselineBinding path with present
+  heldRaw value ref present | E.baselineBinding path gitDefault with present
   ... | ()
   heldRaw value ref present | E.checkoutBinding selected path with present
   ... | ()
   heldRaw value ref present | E.snapshot selected with present
   ... | ()
-  heldRaw value ref present | E.legacyFile path with present
+  heldRaw value ref present | E.legacyFile path gitDefault with present
   ... | ()
   heldRaw value ref present | E.graphContainer selected inUse with present
   ... | ()
   heldRaw value ref present | E.attached parent gate with present
   ... | ()
 
-  temporaryChildPlain : ∀ selection world value ref → M.parentOf M.temporary selection world value ≡ just ref → O.kind (O.body value) ≢ O.structuralSnapshotK
+  temporaryChildPlain : ∀ selection world value ref → M.parentOf M.temporary selection world value ≡ just ref → Storage.PlainKind value
   temporaryChildPlain selection world value ref attached with Observations.snapshotView value
   ... | Observations.plain nonSnapshot = nonSnapshot
   ... | Observations.snapshot owner selected nodes edges payload with attached
   ...   | ()
 
-  holdingChildPlain : ∀ flag selection world value ref → M.parentOf (M.temporaryFor flag) selection world value ≡ just ref → O.kind (O.body value) ≢ O.structuralSnapshotK
+  temporaryChildPlain selection world value ref attached | Observations.delta owner selected version path answer with attached
+  ... | ()
+
+  holdingChildPlain : ∀ flag selection world value ref → M.parentOf (M.temporaryFor flag) selection world value ≡ just ref → Storage.PlainKind value
   holdingChildPlain true selection world value ref ()
   holdingChildPlain false selection world value ref attached = temporaryChildPlain selection world value ref attached
 
   module Loop (selection : E.Rule) (accepted : O.World) (intent : M.Intent selection accepted) where
-    module Pass = Progress.Model.Pass excluded selection accepted intent
-    module Core = Effects.Model.Core excluded selection accepted intent
-    module Final = Completion.Model.Contract excluded selection accepted intent
-    module Aligned = Alignment.Model.Contract excluded selection accepted intent
-    module Hist = History.Model.History excluded selection accepted intent
+    module Pass = Progress.Model.Pass selection accepted intent
+    module Core = Effects.Model.Core selection accepted intent
+    module Final = Completion.Model.Contract selection accepted intent
+    module Aligned = Alignment.Model.Contract selection accepted intent
+    module Hist = History.Model.History selection accepted intent
     module Steps = Obs.Step selection accepted intent
 
     metadataEarlier : ∀ chosen before key value → DB.lookup key (Pass.next chosen before) ≡ just value → E.indexed value ≡ false → DB.lookup key before ≡ just value
@@ -148,12 +151,15 @@ module Model (excluded : List String → String → Bool) where
       edgeVisible member present = View.View.edgePositive selection before after selected member valid support
         (Hist.edgeNeeded before key selected nodes edges payload member valid found needed present (edgeBefore member present)) (edgeBefore member present)
 
+    canonicalPositive before after key value valid support found needed canonical | Observations.delta owner selected version path answer =
+      trans (sym (Store.projectWorldIndependent selection before after value (λ ()))) canonical
+
     Released : O.World → Set
     Released world = ∀ key → Final.Pending key world → ¬ M.Protected selection world key
 
     releasedStep : ∀ chosen before → O.Admissible before → Released before → Released (Pass.next chosen before)
     releasedStep chosen before valid released key pending@(value , found , captured , owned , indexed , remaining) protected
-      with Classifier.Model.Assessment.needed? excluded selection before key
+      with Classifier.Model.Assessment.needed? selection before key
     ... | no unneeded = released key (value , earlier , captured , owned , indexed , inj₁ unneeded) originalProtection
       where
       originalProtection = protectedBackward chosen before valid key protected

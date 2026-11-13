@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupCompletionProof where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.CleanupAlignment as Alignment
 import Muninn.PolicyCleanupFinish as Finish
 import Muninn.PolicyCleanupBatch as Batch
@@ -23,16 +24,17 @@ open import Data.Product using (_×_; _,_)
 open import Relation.Binary.PropositionalEquality using (_≡_; cong; trans)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (rules : List String)
-    (intent : Outcome.Intent (E.rule family rules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList rules))
+    (intent : Outcome.Intent (E.rule family rules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     id = Input.Mutation.operationId request
     meaning = Identity.mutation Identity.kApplyPolicy request
     module Policy = Stored.Family family pointer
-    open Finish.Model.Family excluded family pointer accepted rules intent request taskSlot
+    open Finish.Model.Family family pointer accepted rules validRules intent request taskSlot
       using (finish; usesCurrent; result)
 
     module At (before : O.World) (current : Policy.Saved before)
@@ -42,13 +44,13 @@ module Model (excluded : List String → String → Bool) where
       (missing : Ledger.Reply) (receiptSlot : ℕ) (names : Receipt.Names id meaning)
       (located : DB.lookup receiptSlot before ≡ just (Ledger.recordAt {id = id} (O.family family) (Receipt.active meaning names progress)))
       (found : Ledger.find id before ≡ just (Ledger.found receiptSlot (O.family family) (Receipt.active meaning names progress))) where
-      module Selected = Batch.Model.Family.Selected excluded family pointer accepted rules intent id taskSlot current
-      module Task = Finalization.Model.Task excluded Selected.selection accepted Selected.intent id taskSlot
+      module Selected = Batch.Model.Family.Selected family pointer accepted rules validRules intent id taskSlot current
+      module Task = Finalization.Model.Task Selected.selection accepted Selected.intent id taskSlot
 
       module Verified (verified : Task.Ready before) where
         open Task.Current before valid verified (result current) continuation guidance meaning names receiptSlot progress located found
           public using (reply; after; commits; checkedOutcome)
-        open Alignment.Model.Contract excluded Selected.selection accepted Selected.intent using (completeFromNoPending)
+        open Alignment.Model.Contract Selected.selection accepted Selected.intent using (completeFromNoPending)
 
         committed : DB.execute (finish progress continuation guidance missing) before ≡ (reply , after)
         committed = trans

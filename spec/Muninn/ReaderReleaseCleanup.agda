@@ -16,17 +16,17 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; trans; sym
 module DB = O.DB
 module Exec = O.Execution
 
-module Model (excluded : List String → String → Bool) where
-  module M = E.Model excluded
+module Model where
+  module M = E.Model
 
   module Current (selection : E.Rule) (before : O.World) (valid : O.Admissible before)
     (owner : O.Owner) (finished : ℕ) (actual : Release.ReaderAt owner finished before) where
-    module Holds = Release.Model.Family excluded selection
+    module Holds = Release.Model.Family selection
     module Gate = Holds.Gate
     after = DB.delete finished before
     validAfter = O.deleteUnreferencedPreservesAdmissibility finished before valid
       (Release.privateUnreferenced before owner finished valid actual)
-    module Resume = Resumption.Model.Current excluded selection after validAfter
+    module Resume = Resumption.Model.Current selection after validAfter
     module Work = Resume.Work
 
     -- Other holders may still be using unrelated or canonical needed records.

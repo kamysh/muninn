@@ -4,6 +4,7 @@ module Muninn.PolicyCleanupFinish where
 
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
+import Muninn.PolicyRuleAdmission as Admission
 import Muninn.StoredPolicy as Stored
 import Muninn.PolicyCleanupBatch as Batch
 import Muninn.CleanupFinalization as Finalization
@@ -22,16 +23,17 @@ open import Relation.Nullary using (yes; no; ¬_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 module DB = O.DB
 
-module Model (excluded : List String → String → Bool) where
-  module Outcome = E.Model excluded
+module Model where
+  module Outcome = E.Model
 
   module Family (family pointer : ℕ) (accepted : O.World) (originalRules : List String)
-    (original : Outcome.Intent (E.rule family originalRules) accepted)
+    (validRules : Admission.Entries (Data.List.map Data.String.toList originalRules))
+    (original : Outcome.Intent (E.rule family originalRules validRules) accepted)
     (request : Input.Mutation (Input.PolicyTarget × Input.PolicyDraft)) (taskSlot : ℕ) where
     id = Input.Mutation.operationId request
     meaning = Identity.mutation Identity.kApplyPolicy request
     acceptedRevision = suc (Input.PolicyTarget.expectedRevision (proj₁ (Input.Mutation.input request)))
-    module Work = Batch.Model.Family excluded family pointer accepted originalRules original id taskSlot
+    module Work = Batch.Model.Family family pointer accepted originalRules validRules original id taskSlot
     module Policy = Work.Policy
 
     result : ∀ {world} → Policy.Saved world → String
@@ -41,7 +43,7 @@ module Model (excluded : List String → String → Bool) where
 
     module Current {world : O.World} (current : Policy.Saved world) where
       module Step = Work.Selected current
-      module Task = Finalization.Model.Task excluded Step.selection accepted Step.intent id taskSlot
+      module Task = Finalization.Model.Task Step.selection accepted Step.intent id taskSlot
 
       update : Receipt.Work → String → (String → Dialogue.Prompt) → DB.Transaction Ledger.Reply
       update progress continuation guidance = DB.scan λ snapshot →
