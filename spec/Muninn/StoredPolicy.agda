@@ -26,6 +26,7 @@ policyFrom info frozen = record
   { family = O.PolicyVersionInfo.familyId info
   ; name = I.PolicyDraft.name (O.PolicyVersionInfo.contents info)
   ; index = I.PolicyDraft.index (O.PolicyVersionInfo.contents info)
+  ; limits = I.PolicyDraft.limits (O.PolicyVersionInfo.contents info)
   ; watcher = I.PolicyDraft.watcher (O.PolicyVersionInfo.contents info)
   ; embeddings = I.PolicyDraft.embeddings (O.PolicyVersionInfo.contents info)
   ; revision = O.PolicyVersionInfo.revision info

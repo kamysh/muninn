@@ -60,6 +60,7 @@ import Muninn.ViewPublication
 import Muninn.CurrentReader
 import Muninn.StoredPolicy
 import Muninn.PolicyCleanupBatch
+import Muninn.PolicyCleanupWorkerVerified
 import Muninn.GlobMatching
 import Muninn.GlobLexing
 import Muninn.GlobRanges
