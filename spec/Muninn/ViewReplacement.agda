@@ -9,6 +9,8 @@ import Muninn.CleanupStorage as Storage
 import Muninn.CleanupReleased as Released
 import Muninn.PublishedViews as Views
 import Muninn.ReceiptLedger as Ledger
+import Muninn.PendingRemoval as Removal
+import Data.Bool.Properties as BoolProperties
 import Muninn.Dialogue as D
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false)
@@ -118,10 +120,11 @@ module Model (excluded : List String → String → Bool) where
         Views.snapshotFromFacts world owner selected newRoot value found (snapshotKind value selected matches) owned matches
 
       Ready : O.World → Set
-      Ready world = PointerAt world × TargetAt world
+      Ready world = PointerAt world × (TargetAt world × (Removal.pending owner world ≡ false))
 
       ready? : ∀ world → Dec (Ready world)
-      ready? world = C.both (pointerAt? world) (targetAt? world)
+      ready? world = C.both (pointerAt? world)
+        (C.both (targetAt? world) (Removal.pending owner world BoolProperties.≟ false))
 
       replaceSnapshot : String → String → O.World → DB.Transaction String
       replaceSnapshot result continuation world with ready? world
@@ -142,6 +145,14 @@ module Model (excluded : List String → String → Bool) where
       continues world result continuation unresolved with ready? world
       ... | yes verified = ⊥-elim (unresolved verified)
       ... | no same = refl
+
+      removalStopsPublication : ∀ world result continuation → Removal.pending owner world ≡ true →
+        DB.evaluate (replace result continuation) world ≡ DB.aborted continuation
+      removalStopsPublication world result continuation pending = continues world result continuation noReady
+        where
+        noReady : ¬ Ready world
+        noReady (_ , (_ , notRemoving)) rewrite pending with notRemoving
+        ... | ()
 
       committedReady : ∀ world result continuation reply after →
         DB.evaluate (replace result continuation) world ≡ DB.committed reply after →
@@ -187,7 +198,7 @@ module Model (excluded : List String → String → Bool) where
       module Current (before : O.World) (valid : O.Admissible before) (viewsValid : Views.Valid before)
         (verified : Ready before) where
         located = pointerFound before (proj₁ verified)
-        target = targetFound before (proj₂ verified)
+        target = targetFound before (proj₁ (proj₂ verified))
         after = DB.write pointer newRecord before
 
         oldSound : All (O.Resolves before owner) (O.references (O.body oldRecord))

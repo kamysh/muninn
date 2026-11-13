@@ -11,6 +11,7 @@ import Muninn.CleanupAdmissionStorage as Insert
 import Muninn.CleanupObservations as Observations
 import Muninn.CleanupProtection as Protection
 import Muninn.ReceiptLedger as Ledger
+import Muninn.PendingRemoval as Removal
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
@@ -174,13 +175,24 @@ module Model (excluded : List String → String → Bool) where
     ...       | yes allowed = DB.put slot (reader refs payload) (DB.commit (ready slot))
 
     admit : ∀ {A : Set} slot refs payload → (ℕ → A) → (O.World → A) → DB.Transaction A
-    admit slot refs payload ready replan = DB.scan (admitSnapshot slot refs payload ready replan)
+    admit slot refs payload ready replan = DB.scan λ world → choose (Removal.pending (E.targetOwner selection) world) world
+      where
+      choose : Bool → O.World → DB.Transaction _
+      choose true world = DB.commit (replan world)
+      choose false world = admitSnapshot slot refs payload ready replan world
+
+    removalStopsNewReaders : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world →
+      Removal.pending (E.targetOwner selection) world ≡ true →
+      DB.execute (admit slot refs payload ready replan) world ≡ (replan world , world)
+    removalStopsNewReaders slot refs payload ready replan world pending rewrite pending = refl
 
     effects : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world →
       (proj₂ (DB.execute (admit slot refs payload ready replan) world) ≡ world) ⊎
       (Insert.Fresh world slot × (Resolved world refs × (Clean (proposed world slot refs payload) refs ×
         (Allowed world slot refs payload × (proj₂ (DB.execute (admit slot refs payload ready replan) world) ≡ proposed world slot refs payload)))))
-    effects slot refs payload ready replan world with F.member slot (Insert.reserved world)
+    effects slot refs payload ready replan world with Removal.pending (E.targetOwner selection) world
+    ... | true = inj₁ refl
+    ... | false with F.member slot (Insert.reserved world)
     ... | yes reserved = inj₁ refl
     ... | no fresh with resolved? world refs
     ...   | no unresolved = inj₁ refl
@@ -259,7 +271,9 @@ module Model (excluded : List String → String → Bool) where
 
     replansWhenHeld : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world → ¬ Allowed world slot refs payload →
       DB.execute (admit slot refs payload ready replan) world ≡ (replan world , world)
-    replansWhenHeld slot refs payload ready replan world blocked with F.member slot (Insert.reserved world)
+    replansWhenHeld slot refs payload ready replan world blocked with Removal.pending (E.targetOwner selection) world
+    ... | true = refl
+    ... | false with F.member slot (Insert.reserved world)
     ... | yes reserved = refl
     ... | no fresh with resolved? world refs
     ...   | no unresolved = refl
@@ -269,10 +283,10 @@ module Model (excluded : List String → String → Bool) where
     ...       | no waiting = refl
     ...       | yes allowed = ⊥-elim (blocked allowed)
 
-    accepts : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world → Insert.Fresh world slot → Resolved world refs →
+    accepts : ∀ {A : Set} slot refs payload (ready : ℕ → A) replan world → Removal.pending (E.targetOwner selection) world ≡ false → Insert.Fresh world slot → Resolved world refs →
       Clean (proposed world slot refs payload) refs → Allowed world slot refs payload →
       DB.execute (admit slot refs payload ready replan) world ≡ (ready slot , proposed world slot refs payload)
-    accepts slot refs payload ready replan world fresh resolved clean allowed with F.member slot (Insert.reserved world)
+    accepts slot refs payload ready replan world notRemoving fresh resolved clean allowed rewrite notRemoving with F.member slot (Insert.reserved world)
     ... | yes reserved = ⊥-elim (fresh reserved)
     ... | no fresh′ with resolved? world refs
     ...   | no unresolved = ⊥-elim (unresolved resolved)

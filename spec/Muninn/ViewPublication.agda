@@ -13,12 +13,13 @@ import Muninn.ViewReplacement as Replacement
 import Muninn.PublicationVisibility as Visibility
 import Muninn.PublishedViews as Views
 import Muninn.ReceiptLedger as Ledger
+import Muninn.PendingRemoval as Removal
 import Muninn.ReceiptTypes as R
 import Muninn.CatalogInputs as I
 import Muninn.RequestIdentity as Identity
 import Muninn.Dialogue as D
 open import Data.Nat using (ℕ; _≟_)
-open import Data.Bool using (Bool; true)
+open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
 open import Data.List using (List; [])
 import Data.List.Relation.Unary.All as All
@@ -128,6 +129,7 @@ module Model (excluded : List String → String → Bool) where
         (sourceFound : DB.lookup source before ≡ just (O.recordOf owner (O.structuralSnapshot selected nodes edges payload)))
         (published : DB.lookup pointer before ≡ just (O.recordOf owner (O.publishedView selected source)))
         (registered : M.familyRegistered selection before ≡ true) (live : M.checkoutLive selection before selected ≡ true)
+        (notRemoving : Removal.pending owner (Prepare.Current.after before valid viewsValid pointer source selected nodes edges payload sourceFound published registered live) ≡ false)
         (guidance : String → D.Prompt)
         (id : I.OperationId) (input : Identity.Meaning) (names : R.Names id input)
         (receiptSlot : ℕ) (progress : R.Work)
@@ -143,7 +145,7 @@ module Model (excluded : List String → String → Bool) where
         ready : Switch.Ready inserted
         ready =
           (Switch.oldRecord , Copy.oldLookup pointer _ published , refl , refl) ,
-          (copied , Copy.copiedVisible , Copy.copiedOwner , Store.projectCheckout selection before Copy.original)
+          (copied , Copy.copiedVisible , Copy.copiedOwner , Store.projectCheckout selection before Copy.original) , notRemoving
 
         module Changed = Switch.Current inserted Copy.afterValid Copy.viewsAfter ready
         changed = Changed.after

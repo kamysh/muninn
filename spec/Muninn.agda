@@ -39,6 +39,9 @@ import Muninn.LockOwnership
 import Muninn.Retirement
 import Muninn.RepositoryRegistration
 import Muninn.RepositoryIdentity
+import Muninn.RepositoryRemoval
+import Muninn.SharedResultRemoval
+import Muninn.RemovalOutcome
 import Muninn.ApplicationWorld
 import Muninn.KnowledgeState
 import Muninn.ProfileRecreation
