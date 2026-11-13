@@ -76,11 +76,13 @@ rows, not a status flag. Search hiding or saving a policy is insufficient.
 
 ## Remaining work
 
-#69 supplies exact finite need/protection classification; #70 must implement
-and prove cleanup convergence against this fixed contract under #67.
-#23 remains open for outcome/core integration. Policy acceptance/supersession
-and the evolving worker are #24/#25; they must compose permitted metadata
-transitions with the cleanup-core frame and release obsolete work protections.
+The existing finite classifier and cleanup transactions use this contract.
+`ExclusionRecovery` now connects their actual finite pass to the common
+interruption protocol and proves retry convergence once pending temporary holds
+are released, including after a reader releases its hold, provided the original
+capture still covers the current family records. Newly introduced blockers and
+the full worker lifecycle remain #67/#70/#77/#81/#84 and #25. Policy supersession and the worker
+must compose permitted metadata transitions with the cleanup-core frame.
 
 Raw selection semantics, analysis validity, publication/read-state consistency,
 structural retrieval and implementation projection remain their respective

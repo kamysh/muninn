@@ -312,8 +312,13 @@ remaining adapter/dispatcher obligations](IDENTITY-ADMISSION.md).
 owned record category and defines complete-world capture, safety and completion
 contracts. Mixed snapshots are projected without retaining excluded members;
 rootless components cannot justify their own retention. See [the outcome model
-and cleanup-core boundary](EXCLUSION-OUTCOMES.md). Cleanup convergence is #67;
-no runtime cleanup is implemented here.
+and cleanup-core boundary](EXCLUSION-OUTCOMES.md). `ExclusionRecovery` connects
+actual committed cleanup passes to the common interruption and retry protocol.
+Every interrupted prefix preserves the original safety contract. A retry uses
+the same captured IDs and reaches the independent outcome after temporary holds
+are released, subject to complete coverage of the current family records.
+Scheduling, newly introduced blockers and the assembled worker remain separate
+obligations; no runtime cleanup is implemented here.
 
 ## Finite exclusion classification
 
