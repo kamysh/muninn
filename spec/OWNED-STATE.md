@@ -23,11 +23,11 @@ cache delegation and output streams; test fixtures were excluded from ownership.
 | `crates/core/src/store.rs:81-168`, `graph.rs:98-113,235-345` | `graphResource`, `symbol`, `edge`; includes primary and older linked-checkout AGE graphs, all four vertex and edge labels, and AGE-owned schema resources |
 | `crates/core/src/store.rs:17-28,68-74`, `db.rs:184-205`, `family_store/preparation.rs` | `schemaResource`, `migration`; public and family migration receipts remain distinct from AGE readiness |
 | `crates/core/src/store.rs:257-336`, `worktrees/mod.rs:750-780` | `legacy`; legacy chunks without a file-version reference remain visible rather than disappearing from the modeled world |
-| `migrations/public/001_init.sql`: `mcp_usage` | `usage`; scoped to a family when known, otherwise to the installation |
+| `migrations/public/001_init.sql`: `mcp_usage` | `usage`; each logical record identifies the families it concerns, including records held at installation scope |
 | `crates/core/src/store.rs:430-515`, `family_store/preparation.rs` | `coordination`; saved preemption/preparation metadata is represented; session advisory locks themselves are external live capabilities |
 | `crates/core/src/config.rs:254-256,347-363` | `bootstrap`; current installation configuration is a host file, not a family policy row |
 | `crates/core/src/embeddings.rs:111-149` | `modelCache`; a shared local-model resource, including its external-cache ownership boundary |
-| `crates/mcp/src/main.rs:277-366`: rolling file logger and retention task | `logFile`; installation-owned MCP log files are distinct from external system journal files |
+| `crates/mcp/src/main.rs:277-366`: rolling file logger and retention task | `logFile`; individual entries in installation-owned MCP log files, distinct from external system journal files. `RepositoryHistory` also models retained and buffered entries for forgetting |
 | `crates/cli/src/main.rs:314-331`: owner-only temporary config before atomic replacement | `bootstrapStage`; includes a temporary file left by interruption before replacement/cleanup |
 
 DDL indexes, sequences, generated columns and AGE catalogs belong to the resource

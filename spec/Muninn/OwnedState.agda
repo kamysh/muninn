@@ -21,6 +21,7 @@ import Muninn.ReceiptTypes as Receipt
 import Muninn.CatalogInputs as Input
 import Muninn.Config as Config
 import Muninn.Worktree as Worktree
+import Muninn.RepositoryHistory as History
 import Data.List.Relation.Unary.All as All
 
 data Owner : Set where
@@ -88,7 +89,8 @@ data Body : Set where
   continuation : List ℕ → String → Body
   receipt : Receipt.Entry → Body
   graphResource : Maybe ℕ → Bool → String → Body -- selected checkout, current read use
-  migration usage bootstrap modelCache coordination schemaResource logFile bootstrapStage : String → Body
+  usage logFile : History.Entry → Body
+  migration bootstrap modelCache coordination schemaResource bootstrapStage : String → Body
 
 kind : Body → Kind
 kind (registration _) = registrationK
@@ -293,6 +295,8 @@ executionBookkeeping bootstrapStageK = false
 -- Searches retain the selected snapshot, never its mutable current selector.
 privateTarget : Kind → Bool
 privateTarget publishedViewK = true
+privateTarget usageK = true
+privateTarget logFileK = true
 privateTarget kind = executionBookkeeping kind
 
 PublicReference : Reference → Set

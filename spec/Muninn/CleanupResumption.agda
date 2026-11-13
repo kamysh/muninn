@@ -9,8 +9,9 @@ import Muninn.ExclusionClassifier as Classifier
 import Muninn.CleanupLoop as Loop
 import Muninn.CleanupAdmission as Admission
 import Muninn.CleanupAdmissionStorage as Insert
+import Muninn.PendingRemoval as Removal
 open import Data.Nat using (ℕ)
-open import Data.Bool using (Bool)
+open import Data.Bool using (Bool; false)
 open import Data.String using (String)
 open import Data.List using (List)
 open import Data.Maybe using (just)
@@ -58,12 +59,12 @@ module Model (excluded : List String → String → Bool) where
 
     admitsCurrent : ∀ {A : Set} (request : Catalog.Request) slot refs payload
       (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) →
-      Work.Use.Released before → Insert.Fresh after slot → Gate.Resolved after refs →
+      Work.Use.Released before → Removal.pending (E.targetOwner selection) after ≡ false → Insert.Fresh after slot → Gate.Resolved after refs →
       Gate.Clean (Gate.proposed after slot refs payload) refs →
       DB.execute (Gate.admit slot refs payload (ready request) (replan request)) after ≡
         (ready request slot , Gate.proposed after slot refs payload)
-    admitsCurrent request slot refs payload ready replan released fresh resolved clean =
-      Gate.accepts slot refs payload (ready request) (replan request) after fresh resolved clean
+    admitsCurrent request slot refs payload ready replan released notRemoving fresh resolved clean =
+      Gate.accepts slot refs payload (ready request) (replan request) after notRemoving fresh resolved clean
         (allowed released slot refs payload)
 
     prepend : ∀ {A : Set} {count start finish} → Work.Pass.Trace count start finish →
@@ -87,25 +88,25 @@ module Model (excluded : List String → String → Bool) where
 
     readerCompletes : ∀ {A : Set} (request : Catalog.Request) slot refs payload
       (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) →
-      Work.Use.Released before → Insert.Fresh after slot → Gate.Resolved after refs →
+      Work.Use.Released before → Removal.pending (E.targetOwner selection) after ≡ false → Insert.Fresh after slot → Gate.Resolved after refs →
       Gate.Clean (Gate.proposed after slot refs payload) refs →
       Exec.Completed (Exec.atomic (Gate.admit slot refs payload (ready request) (replan request)) Exec.done)
         after (ready request slot) (Gate.proposed after slot refs payload)
-    readerCompletes request slot refs payload ready replan released fresh resolved clean =
+    readerCompletes request slot refs payload ready replan released notRemoving fresh resolved clean =
       subst (λ outcome → Exec.Completed
         (Exec.atomic (Gate.admit slot refs payload (ready request) (replan request)) Exec.done)
         after (proj₁ outcome) (proj₂ outcome))
-        (admitsCurrent request slot refs payload ready replan released fresh resolved clean)
+        (admitsCurrent request slot refs payload ready replan released notRemoving fresh resolved clean)
         (Exec.committed Exec.stop)
 
     finishes : ∀ {A : Set} (request : Catalog.Request) slot refs payload
       (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) →
-      Work.Use.Released before → Insert.Fresh after slot → Gate.Resolved after refs →
+      Work.Use.Released before → Removal.pending (E.targetOwner selection) after ≡ false → Insert.Fresh after slot → Gate.Resolved after refs →
       Gate.Clean (Gate.proposed after slot refs payload) refs →
       Exec.Completed (workflow request slot refs payload ready replan)
         before (ready request slot) (Gate.proposed after slot refs payload)
-    finishes request slot refs payload ready replan released fresh resolved clean =
-      prependCompleted trail (readerCompletes request slot refs payload ready replan released fresh resolved clean)
+    finishes request slot refs payload ready replan released notRemoving fresh resolved clean =
+      prependCompleted trail (readerCompletes request slot refs payload ready replan released notRemoving fresh resolved clean)
 
     savedWorkset : ∀ {A : Set} (request : Catalog.Request) slot refs payload
       (ready : Catalog.Request → ℕ → A) (replan : Catalog.Request → O.World → A) task requestId ids note →

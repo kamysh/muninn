@@ -12,6 +12,7 @@ import Muninn.ViewReplacement as Replacement
 import Muninn.PublishedViews as Views
 import Muninn.PublicationVisibility as Visibility
 import Muninn.ReceiptLedger as Ledger
+import Muninn.PendingRemoval as Removal
 open import Data.Nat using (ℕ; _≟_)
 open import Data.Bool using (Bool; true; false)
 open import Data.String using (String)
@@ -149,12 +150,12 @@ module Model (excluded : List String → String → Bool) where
       ; found = found; rightKind = refl; rightOwner = O.own } All.∷ All.[]
 
     accepts : ∀ {A : Set} world root payload (ready : ℕ → ℕ → A) replan → Views.Valid world →
-      currentRoot world ≡ just root → Gate.Clean (Gate.proposed world (Allocation.freshId world) (references root) payload) (references root) →
+      currentRoot world ≡ just root → Removal.pending (E.targetOwner selection) world ≡ false → Gate.Clean (Gate.proposed world (Allocation.freshId world) (references root) payload) (references root) →
       Gate.Allowed world (Allocation.freshId world) (references root) payload →
       DB.execute (admit payload ready replan) world ≡
         (ready root (Allocation.freshId world) , Gate.proposed world (Allocation.freshId world) (references root) payload)
-    accepts world root payload ready replan valid observed clean allowed = trans (fromCurrent world root payload ready replan observed)
-      (Fresh.admits (references root) payload (ready root) replan world (resolved world root valid observed) clean allowed)
+    accepts world root payload ready replan valid observed notRemoving clean allowed = trans (fromCurrent world root payload ready replan observed)
+      (Fresh.admits (references root) payload (ready root) replan world notRemoving (resolved world root valid observed) clean allowed)
 
     insertedViews : ∀ world slot refs payload → Insert.Fresh world slot → Views.Valid world →
       Views.Valid (Gate.proposed world slot refs payload)
@@ -225,9 +226,9 @@ module Model (excluded : List String → String → Bool) where
         (needed root observed)
 
       finishes : ∀ {A : Set} root payload (ready : ℕ → ℕ → A) replan →
-        Prepared.Work.Use.Released before → currentRoot after ≡ just root →
+        Prepared.Work.Use.Released before → currentRoot after ≡ just root → Removal.pending (E.targetOwner selection) after ≡ false →
         DB.execute (admit payload ready replan) after ≡
           (ready root (Allocation.freshId after) , Gate.proposed after (Allocation.freshId after) (references root) payload)
-      finishes root payload ready replan released observed = accepts after root payload ready replan viewsAfter observed
+      finishes root payload ready replan released observed notRemoving = accepts after root payload ready replan viewsAfter observed notRemoving
         (cleanCurrent after root payload viewsAfter observed (canonical released root observed))
         (Prepared.allowed released (Allocation.freshId after) (references root) payload)

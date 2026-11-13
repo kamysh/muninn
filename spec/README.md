@@ -167,6 +167,10 @@ with Rust or database transactions.
 
 `Retirement` requires 60 seconds of confirmed absence before retirement. Uncertain inspection is not absence; verified identity reactivates the registration. Retired index data is reclaimed as soon as the existing cleanup transaction establishes that it is unneeded and unprotected, without an additional retention period.
 
+## Repository removal
+
+`RepositoryRemoval` models unregistration and forgetting as an accepted request, waits for earlier readers and work, and commits removal with permanent request-ID markers. Unregistration preserves modeled notes and settings; forgetting removes records owned by the family. Simultaneous removal requests share cleanup, with an explicit forget selecting the wider scope. The model checks that a pending removal prevents reader admission, publication and reactivation. The proofs cover interruption, admissible store state and preservation of unrelated modeled records. Completed receipts whose recorded request ownership includes the family are compacted in full. Forgetting also removes repository-attributed usage records, log entries and buffered entries before completion. The model requires accurate ownership attribution; correspondence to real saved results, log files and runtime effects remains a separate obligation.
+
 ## Fair scheduling
 
 `FairScheduling` reserves configurable interactive capacity, yields a single shared slot when an interactive request waits, and gives waiting background work fair turns under an explicit productive-work assumption. Yield preserves the accepted job, authorization and committed results. Runtime scheduler correspondence remains a separate obligation.
