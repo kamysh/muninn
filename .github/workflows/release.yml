@@ -28,10 +28,27 @@ jobs:
       - name: Build
         run: nix build .#muninn-static
 
+      # macOS 26 taskgated rejects the linker-emitted adhoc signature on the
+      # MCP binaries (SIGKILL at exec, "Taskgated Invalid Signature") even
+      # though codesign --verify passes. Re-sign with Apple's codesign and
+      # smoke-execute each binary: exec is the only check that catches it.
+      - name: Re-sign and smoke-test darwin binaries
+        if: matrix.artifact == 'darwin-arm64'
+        run: |
+          mkdir -p bin-dist
+          cp result/bin/muninn result/bin/muninn-index result/bin/muninn-mcp bin-dist/
+          codesign --force --sign - bin-dist/muninn bin-dist/muninn-index bin-dist/muninn-mcp
+          codesign --verify --strict bin-dist/muninn bin-dist/muninn-index bin-dist/muninn-mcp
+          bin-dist/muninn --version
+          bin-dist/muninn-index --version
+          bin-dist/muninn-mcp --version
+
       - name: Package
         run: |
+          pkg_dir=result/bin
+          [ "${{ matrix.artifact }}" = darwin-arm64 ] && pkg_dir=bin-dist
           tar -czf muninn-${{ matrix.artifact }}.tar.gz \
-            -C result/bin \
+            -C "$pkg_dir" \
             muninn muninn-index muninn-mcp
 
       - uses: actions/upload-artifact@v4
