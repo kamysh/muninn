@@ -198,6 +198,16 @@ All responses preserve numerical and page bounds and expose actual semantic
 coverage. Source-provider and final dispatch correspondence remain the
 existing series obligations.
 
+## Structural search candidates
+
+`StructuralSearch` returns name-based relationship candidates over the selected
+published structural snapshot, not compiler-resolved bindings. Both endpoints
+must be stored symbols visible under the current policy with actual source
+evidence, and the edge must be family-owned and in the selected view. Ordering
+is related-symbol path, position, then edge identity; every candidate is
+retained. See [structural search](STRUCTURAL-SEARCH.md). Payload decoding and
+implementation correspondence remain separate obligations.
+
 ## Checkout publication
 
 `ContentPublication` fixes the publication result independently of the storage transaction: the current family selection policy is applied to the completed selected file map, the shared base advances for a base publication, other checkouts retain their completed maps filtered by the current policy, and stored rows are checked against those calculated maps. `ContentViews` projects actual base and delta binding rows into logical maps; `GenericFileMap` supplies the logical map algebra. `Plan` proves map resolution and minimal overlays; `PolicyGuard` reads the expected immutable policy pointer inside the shared transaction and returns to the corrective dialogue when it changed; `Outcome` fixes the real final world including other-checkout isolation, structural snapshot publication, captured obsolete references and the durable cleanup task; `Prepared` carries the adapter's actual `ReceiptLedger.Effect` with its commit proof and the fixed outcome; `Run` composes the guarded effect with the receipt checkpoint and proves commit, retry, boundary and convergence. Storage realization and Rust correspondence remain separate obligations (#51, #52).
