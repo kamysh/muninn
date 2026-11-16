@@ -104,6 +104,11 @@ import Muninn.ExclusionClassifier
 import Muninn.ContentPublication
 import Muninn.ContentViews
 import Muninn.GenericFileMap
+import Muninn.RetrievalNumerics
+import Muninn.RetrievalText
+import Muninn.RetrievalSelection
+import Muninn.RetrievalCorpus
+import Muninn.Retrieval
 import Muninn.ExclusionOutcomes
 
 open import Muninn.Float        public
