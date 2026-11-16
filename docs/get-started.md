@@ -110,6 +110,22 @@ curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.4/${TARBALL}" 
 chmod +x "$HOME/.local/bin/muninn" "$HOME/.local/bin/muninn-index" "$HOME/.local/bin/muninn-mcp"
 ```
 
+**Verify the download** — each release publishes a `${TARBALL}.sha256` file:
+
+```sh
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.4/${TARBALL}" -o "${TARBALL}"
+curl -fL "https://github.com/kamysh/muninn/releases/download/v1.2.4/${TARBALL}.sha256" -o "${TARBALL}.sha256"
+sha256sum -c "${TARBALL}.sha256"   # macOS: shasum -a 256 -c "${TARBALL}.sha256"
+```
+
+**macOS only — quarantine flag.** macOS adds a quarantine attribute to files downloaded via a *browser*, which blocks them from running. If you downloaded the archive with a browser, remove it:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/muninn ~/.local/bin/muninn-index ~/.local/bin/muninn-mcp
+```
+
+`curl` downloads do **not** set this attribute, so the command above is unnecessary if you used the `curl` snippet.
+
 To build instead, follow [Building and testing](development.md#building-and-testing).
 For an upgrade of a running installation, follow [Upgrading](upgrading.md).
 

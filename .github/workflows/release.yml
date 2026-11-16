@@ -50,11 +50,18 @@ jobs:
           tar -czf muninn-${{ matrix.artifact }}.tar.gz \
             -C "$pkg_dir" \
             muninn muninn-index muninn-mcp
+          if command -v sha256sum >/dev/null; then
+            sha256sum "muninn-${{ matrix.artifact }}.tar.gz" > "muninn-${{ matrix.artifact }}.tar.gz.sha256"
+          else
+            shasum -a 256 "muninn-${{ matrix.artifact }}.tar.gz" > "muninn-${{ matrix.artifact }}.tar.gz.sha256"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: muninn-${{ matrix.artifact }}
-          path: muninn-${{ matrix.artifact }}.tar.gz
+          path: |
+            muninn-${{ matrix.artifact }}.tar.gz
+            muninn-${{ matrix.artifact }}.tar.gz.sha256
 
   release:
     needs: build
@@ -71,8 +78,11 @@ jobs:
         with:
           files: |
             muninn-linux-amd64/muninn-linux-amd64.tar.gz
+            muninn-linux-amd64/muninn-linux-amd64.tar.gz.sha256
             muninn-linux-arm64/muninn-linux-arm64.tar.gz
+            muninn-linux-arm64/muninn-linux-arm64.tar.gz.sha256
             muninn-darwin-arm64/muninn-darwin-arm64.tar.gz
+            muninn-darwin-arm64/muninn-darwin-arm64.tar.gz.sha256
 
       # Keep only THIS release's per-platform binaries as Actions artifacts.
       # The distributable binaries live on the GitHub Release (published above)
