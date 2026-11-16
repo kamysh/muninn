@@ -5,7 +5,7 @@ module Muninn.NoteRequests where
 import Muninn.CatalogInputs as C
 import Muninn.KnowledgeState as K
 import Muninn.RequestState as Requests
-import Muninn.Dialogue as D
+import Muninn.RequestDialogue as D
 import Muninn.Worktree as W
 open import Muninn.Knowledge using (KnowledgeId; KnowledgeItem; ValidKnowledgeItem)
 open import Data.Maybe using (Maybe; just; nothing)

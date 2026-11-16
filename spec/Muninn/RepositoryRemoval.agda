@@ -2,6 +2,7 @@
 -- Remove or forget an existing family using the shared transaction semantics.
 module Muninn.RepositoryRemoval where
 
+import Muninn.PolicyRuleAdmission
 import Muninn.OwnedState as O
 import Muninn.ExclusionOutcomes as E
 import Muninn.RemovalStore as Store
@@ -33,8 +34,8 @@ module Family (family : ℕ) (familyId : Worktree.FamilyId) (scope : Store.Scope
   (requestId : Input.OperationId) (requestMeaning : Identity.Meaning) where
   owner = O.family family
   module Rows = Store.Family family scope
-  module Visibility = E.Model (λ _ _ → false)
-  selection = E.rule family []
+  module Visibility = E.Model
+  selection = E.rule family [] Muninn.PolicyRuleAdmission.Entries.none
 
   -- Concurrent removal requests for this same family share one cleanup.
   matchesTarget : Input.FamilyTarget → Bool
