@@ -187,6 +187,10 @@ with Rust or database transactions.
 
 `FirstSearch` retains the query and selected checkout across reconnection, arranges authorized indexing when no view is available, and continues once a view is ready. Coverage distinguishes unavailable, stale, partial, Git-suspended and observed-current states. Result evidence requires the selected stored view and the admitted family selection rules. The Git and filesystem observations must correspond to actual external state.
 
+## Checkout publication
+
+`ContentPublication` fixes the publication result independently of the storage transaction: the current family selection policy is applied to the completed selected file map, the shared base advances for a base publication, other checkouts retain their completed maps filtered by the current policy, and stored rows are checked against those calculated maps. `ContentViews` projects actual base and delta binding rows into logical maps; `GenericFileMap` supplies the logical map algebra. `Plan` proves map resolution and minimal overlays; `PolicyGuard` reads the expected immutable policy pointer inside the shared transaction and returns to the corrective dialogue when it changed; `Outcome` fixes the real final world including other-checkout isolation, structural snapshot publication, captured obsolete references and the durable cleanup task; `Prepared` carries the adapter's actual `ReceiptLedger.Effect` with its commit proof and the fixed outcome; `Run` composes the guarded effect with the receipt checkpoint and proves commit, retry, boundary and convergence. Storage realization and Rust correspondence remain separate obligations (#51, #52).
+
 ## Continuation state
 
 `Muninn.Continuation` describes an idle continuation, a running call, a
