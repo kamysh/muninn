@@ -4,11 +4,10 @@
 -- Uses Agda's built-in IEEE 754 Float primitives directly so the module
 -- is compatible with --safe mode.
 --
--- Implementation note: in the Rust implementation Float corresponds to
--- f32 (IEEE 754 single-precision, 32-bit), not the 64-bit double that
--- Agda's built-in Float provides.  The spec uses Float as an
--- over-approximation.  Precision loss is intentional: pgvector and the
--- embedding libraries (fastembed, Voyage, OpenAI) all operate on f32.
+-- Agda primitives here are IEEE 754 binary64. Stored vectors are binary32;
+-- RetrievalNumerics.Stored32 requires exact widening of their encoded values.
+-- Retrieval scores are calculated in binary64 against those stored values.
+-- A wider Float alone is not evidence that a value is valid for storage.
 module Muninn.Float where
 
 open import Data.Nat using (ℕ)
