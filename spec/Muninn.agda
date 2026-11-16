@@ -109,6 +109,7 @@ import Muninn.RetrievalText
 import Muninn.RetrievalSelection
 import Muninn.RetrievalCorpus
 import Muninn.Retrieval
+import Muninn.StructuralSearch
 import Muninn.ExclusionOutcomes
 
 open import Muninn.Float        public
