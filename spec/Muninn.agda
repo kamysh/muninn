@@ -101,6 +101,9 @@ import Muninn.CleanupCompletion
 import Muninn.CleanupProgress
 import Muninn.CleanupEffects
 import Muninn.ExclusionClassifier
+import Muninn.ContentPublication
+import Muninn.ContentViews
+import Muninn.GenericFileMap
 import Muninn.ExclusionOutcomes
 
 open import Muninn.Float        public
