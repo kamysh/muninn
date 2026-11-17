@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "operation": "exclusion",
+  "boundaries": [
+    {
+      "name": "exclusion.admission",
+      "spec": "CleanupAdmission",
+      "description": "Reader admission against pending cleanup worksets in one shared transaction"
+    },
+    {
+      "name": "exclusion.batch-deletion",
+      "spec": "CleanupEffects, CleanupLoop",
+      "description": "Each bounded deletion/projection batch commits as its own progress checkpoint"
+    },
+    {
+      "name": "exclusion.receipt-checkpoint",
+      "spec": "PolicyCleanupBatch, PolicyCleanupScheduledRun",
+      "description": "Receipt progress checkpoint written with the batch transaction"
+    },
+    {
+      "name": "exclusion.followup-capture",
+      "spec": "CleanupScheduling",
+      "description": "Follow-up workset capture commits atomically with the parent task and receipt"
+    },
+    {
+      "name": "exclusion.finalization",
+      "spec": "CleanupFinalization",
+      "description": "Task removal and receipt update commit after verified completion"
+    }
+  ],
+  "adapter_registration": {
+    "rust": "crates/core/src/cleanup/mod.rs",
+    "symbol": "CRASH_BOUNDARIES",
+    "status": "absent"
+  }
+}
