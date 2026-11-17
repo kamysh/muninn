@@ -239,6 +239,26 @@
       "table": "repos"
     },
     {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 81,
+      "table": "chunks"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 127,
+      "table": "cleanup_work"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 136,
+      "table": "receipts"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 144,
+      "table": "receipt_markers"
+    },
+    {
       "file": "crates/core/src/family_policy/registration.rs",
       "line": 251,
       "table": "repos"
@@ -610,7 +630,7 @@
     },
     {
       "file": "crates/mcp/src/admin.rs",
-      "line": 161,
+      "line": 173,
       "table": "repos"
     },
     {

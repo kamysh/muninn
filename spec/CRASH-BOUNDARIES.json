@@ -29,8 +29,8 @@
     }
   ],
   "adapter_registration": {
-    "rust": "crates/core/src/cleanup/mod.rs",
+    "rust": "crates/core/src/cleanup.rs",
     "symbol": "CRASH_BOUNDARIES",
-    "status": "absent"
+    "status": "present"
   }
 }
