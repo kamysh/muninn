@@ -82,6 +82,7 @@ import Muninn.PublishedViews
 import Muninn.OwnedState
 import Muninn.Catalog
 import Muninn.CatalogSources
+import Muninn.Dispatcher
 import Muninn.CLIInterrupt
 import Muninn.DaemonWake
 import Muninn.PolicyCleanupFollowupRun
