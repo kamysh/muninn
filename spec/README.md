@@ -208,6 +208,18 @@ is related-symbol path, position, then edge identity; every candidate is
 retained. See [structural search](STRUCTURAL-SEARCH.md). Payload decoding and
 implementation correspondence remain separate obligations.
 
+## Record and effect correspondence
+
+`RECORD-CORRESPONDENCE.json` maps every formal `OwnedState.Body` constructor to
+its physical realization (table, column, derived representation or an explicit
+unmapped status), and `check_record_correspondence.py` enforces both directions
+against the workspace write statements: undeclared statements, missing
+manifest entries and drifted sites all fail. Seven categories stay explicitly
+unmapped (acceptedWork, activeReader, cleanupWork, continuation, legacy,
+receipt, staging) as separate repair work. See
+[record correspondence](RECORD-CORRESPONDENCE.md). Matching names does not
+prove transition semantics; crash injection and the final audit remain #53/#54.
+
 ## Proof-carrying dispatcher
 
 `Dispatcher` is the only executable entry into the closed catalog: a request
