@@ -1,3 +1,4 @@
+mod admin;
 mod tools;
 
 use clap::Parser;
@@ -210,7 +211,183 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 },
                                 "required": ["repo"]
                             }
-                        }
+                        },
+                        {
+                            "name": "inspect_policy",
+                            "description": "Inspect the current stored policy and effective configuration for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "check_policy",
+                            "description": "Validate a policy draft without writing anything.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "apply_policy",
+                            "description": "Apply a validated policy draft atomically.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "preflight_family",
+                            "description": "Creation defaults and advice for an unregistered directory.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "register_family",
+                            "description": "Register a directory with a frozen creation policy.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "start_family",
+                            "description": "Authorize indexing for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "reindex_family",
+                            "description": "Run the foreground index for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "pause_family",
+                            "description": "Pause indexing while preserving accepted work.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "resume_family",
+                            "description": "Resume paused indexing.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "cancel_work",
+                            "description": "Cancel accepted work for one operation; committed results stay.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "operation_id": {"type": "string"}
+                                },
+                                "required": ["repo", "operation_id"]
+                            }
+                        },
+                        {
+                            "name": "inspect_status",
+                            "description": "The family's registration, indexing and usage snapshot.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "unregister_family",
+                            "description": "Retire a registered family without deleting index data.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "forget_repository",
+                            "description": "Unregister and delete all owned index data.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "recreate_index",
+                            "description": "Recreate derived index data for an embedding profile change.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "convert_directory",
+                            "description": "Keep a registered directory usable after it becomes a Git repository.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "continue_request",
+                            "description": "Resume saved work or return the saved result for an operation ID.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "operation_id": {"type": "string"}, "message": {"type": "string"}
+                                },
+                                "required": ["operation_id", "message"]
+                            }
+                        },
                     ]
                 }
             })
@@ -425,6 +602,17 @@ mod usage_tests;
 #[cfg(test)]
 mod worktree_tests;
 
+fn repo_arg(args: &serde_json::Value) -> anyhow::Result<&str> {
+    args["repo"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'repo'"))
+}
+
+fn draft_arg(args: &serde_json::Value) -> anyhow::Result<&serde_json::Value> {
+    args.get("draft")
+        .ok_or_else(|| anyhow::anyhow!("missing 'draft'"))
+}
+
 async fn dispatch_tool(
     ctx: &SearchContext,
     name: &str,
@@ -474,6 +662,42 @@ async fn dispatch_tool(
             let resp = tools::list_knowledge(ctx, &repo).await?;
             Ok(resp)
         }
+        "inspect_policy" => Ok(admin::inspect_policy(ctx, repo_arg(&args)?).await?),
+        "check_policy" => Ok(admin::check_policy(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "apply_policy" => Ok(admin::apply_policy(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "preflight_family" => Ok(admin::preflight_family(ctx, repo_arg(&args)?).await?),
+        "register_family" => {
+            Ok(admin::register_family(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "start_family" => Ok(admin::start_family(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "reindex_family" => Ok(admin::reindex_family(ctx, repo_arg(&args)?).await?),
+        "pause_family" => Ok(admin::pause_family(ctx, repo_arg(&args)?).await?),
+        "resume_family" => Ok(admin::resume_family(ctx, repo_arg(&args)?).await?),
+        "cancel_work" => Ok(admin::cancel_work(
+            ctx,
+            repo_arg(&args)?,
+            args["operation_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'operation_id'"))?,
+        )
+        .await?),
+        "inspect_status" => Ok(admin::inspect_status(ctx, repo_arg(&args)?).await?),
+        "unregister_family" => Ok(admin::unregister_family(ctx, repo_arg(&args)?).await?),
+        "forget_repository" => Ok(admin::forget_repository(ctx, repo_arg(&args)?).await?),
+        "recreate_index" => {
+            Ok(admin::recreate_index(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "convert_directory" => {
+            Ok(admin::convert_directory(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "continue_request" => Ok(admin::continue_request(
+            ctx,
+            args["operation_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'operation_id'"))?,
+            args["message"].as_str().map(str::to_string),
+        )
+        .await?),
         other => Err(anyhow::anyhow!("unknown tool: {}", other)),
     }
 }

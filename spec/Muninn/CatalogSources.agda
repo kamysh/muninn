@@ -11,7 +11,7 @@ open import Data.List using (List; []; _∷_)
 open import Data.Product using (_,_)
 
 data Source : Set where
-  cliMain cliReadonly cliWrites cliRemoval tuiMain tuiBackend tuiGlobal mcpMain mcpTools indexerMain watcher diagnostics database familyStore familyPreparation resolver worktrees pipeline store knowledgeStore : Source
+  cliMain cliReadonly cliWrites cliRemoval tuiMain tuiBackend tuiGlobal mcpMain mcpTools mcpAdmin indexerMain watcher diagnostics database familyStore familyPreparation resolver worktrees pipeline store knowledgeStore : Source
 
 path : Source → String
 path cliMain = "crates/cli/src/main.rs"
@@ -23,6 +23,7 @@ path tuiBackend = "crates/cli/src/tui/backend.rs"
 path tuiGlobal = "crates/cli/src/tui/global.rs"
 path mcpMain = "crates/mcp/src/main.rs"
 path mcpTools = "crates/mcp/src/tools.rs"
+path mcpAdmin = "crates/mcp/src/admin.rs"
 path indexerMain = "crates/indexer/src/main.rs"
 path watcher = "crates/indexer/src/watcher.rs"
 path diagnostics = "crates/indexer/src/logging.rs"
@@ -76,6 +77,26 @@ mcpSite searchKnowledge = site mcpTools "search_knowledge"
 mcpSite deleteKnowledge = site mcpTools "delete_knowledge"
 mcpSite listKnowledge = site mcpTools "list_knowledge"
 
+mcpAdminSite : McpAdministration → Site
+mcpAdminSite inspect = site mcpAdmin "inspect_policy"
+mcpAdminSite check = site mcpAdmin "check_policy"
+mcpAdminSite apply = site mcpAdmin "apply_policy"
+mcpAdminSite inventory = site mcpAdmin "preflight_family"
+mcpAdminSite registerFamily = site mcpAdmin "register_family"
+mcpAdminSite startFamily = site mcpAdmin "start_family"
+mcpAdminSite reindexFamily = site mcpAdmin "reindex_family"
+mcpAdminSite pauseFamily = site mcpAdmin "pause_family"
+mcpAdminSite resumeFamily = site mcpAdmin "resume_family"
+mcpAdminSite cancelWork = site mcpAdmin "cancel_work"
+mcpAdminSite inspectStatus = site mcpAdmin "inspect_status"
+mcpAdminSite unregisterFamily = site mcpAdmin "unregister_family"
+mcpAdminSite forgetRepository = site mcpAdmin "forget_repository"
+mcpAdminSite recreateDerived = site mcpAdmin "recreate_index"
+mcpAdminSite convert = site mcpAdmin "convert_directory"
+
+mcpContinuationSite : Site
+mcpContinuationSite = site mcpAdmin "continue_request"
+
 tuiSite : TuiEffect → Site
 tuiSite inspectDraft = site tuiBackend "load"
 tuiSite previewDraft = site tuiBackend "check"
@@ -89,8 +110,8 @@ userCoverage : UserAdapter → Coverage
 userCoverage (cliAdapter leaf) = sourceRecorded (cliSite leaf)
 userCoverage (mcpAdapter tool) = sourceRecorded (mcpSite tool)
 userCoverage (tuiAdapter effect) = sourceRecorded (tuiSite effect)
-userCoverage (plannedAdministration admin) = missing (site mcpMain "dispatch_tool") 52
-userCoverage conversationContinuation = missing (site mcpMain "handle_request") 52
+userCoverage (plannedAdministration admin) = sourceRecorded (mcpAdminSite admin)
+userCoverage conversationContinuation = sourceRecorded mcpContinuationSite
 
 jobCoverage : Job → Coverage
 jobCoverage preparePublic = sourceRecorded (site database "run_migrations")

@@ -18,10 +18,12 @@ CREATE TABLE staging (
 
 CREATE TABLE accepted_work (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    operation_id text NOT NULL,
     captured_ids uuid[] NOT NULL DEFAULT '{}',
     payload text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX accepted_work_operation_idx ON accepted_work (operation_id);
 
 CREATE TABLE cleanup_work (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

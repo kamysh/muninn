@@ -364,52 +364,57 @@
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 65,
+      "line": 67,
       "table": "accepted_work"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 87,
-      "table": "cleanup_work"
+      "line": 86,
+      "table": "accepted_work"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 101,
+      "line": 108,
       "table": "cleanup_work"
     },
     {
       "file": "crates/core/src/owned_control.rs",
       "line": 122,
-      "table": "active_readers"
+      "table": "cleanup_work"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 136,
+      "line": 143,
       "table": "active_readers"
     },
     {
       "file": "crates/core/src/owned_control.rs",
       "line": 157,
-      "table": "continuations"
+      "table": "active_readers"
     },
     {
       "file": "crates/core/src/owned_control.rs",
       "line": 178,
+      "table": "continuations"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 199,
       "table": "receipts"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 213,
+      "line": 234,
       "table": "receipts"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 233,
+      "line": 254,
       "table": "receipts"
     },
     {
       "file": "crates/core/src/owned_control.rs",
-      "line": 249,
+      "line": 302,
       "table": "receipt_markers"
     },
     {
@@ -604,8 +609,13 @@
       "template": "s"
     },
     {
+      "file": "crates/mcp/src/admin.rs",
+      "line": 161,
+      "table": "repos"
+    },
+    {
       "file": "crates/mcp/src/main.rs",
-      "line": 413,
+      "line": 590,
       "table": "mcp_usage"
     }
   ]

@@ -181,9 +181,9 @@ def dispatched(ts):
                     i += 1
         if name is not None:
             calls = [ts[j + 3] for j in range(body_start, i - 4)
-                     if ts[j:j+3] == ['tools', ':', ':'] and ts[j+4] == '(']
+                     if ts[j:j+3] in (['tools', ':', ':'], ['admin', ':', ':']) and ts[j+4] == '(']
             if len(calls) != 1:
-                raise ValueError(f'{name}: expected exactly one direct tools handler call')
+                raise ValueError(f'{name}: expected exactly one direct handler call')
             names.append((name, calls[0]))
     if not fallback:
         raise ValueError('missing dispatch fallback')
@@ -275,15 +275,22 @@ def main():
     sites = re.findall(r'^mcpSite\s+(\w+)\s*=\s*site\s+mcpTools\s+"([^"\\]+)"\s*$', inventory, re.M)
     check('formal source sites', [constructor for constructor, _ in declarations],
           [constructor for constructor, _ in sites])
-    site_by_constructor = dict(sites)
-    expected = [name for _, name in declarations]
+    admin_sites = re.findall(r'^mcpAdminSite\s+(\w+)\s*=\s*site\s+mcpAdmin\s+"([^"\\]+)"\s*$', inventory, re.M)
+    check('administration source sites', [constructor for constructor, _ in planned[:-1]],
+          [constructor for constructor, _ in admin_sites])
+    continuation_sites = re.findall(r'^mcpContinuationSite\s*=\s*site\s+mcpAdmin\s+"([^"\\]+)"\s*$', inventory, re.M)
+    if len(continuation_sites) != 1:
+        raise ValueError('expected one continuation source site')
+    site_by_constructor = dict(sites + admin_sites + [('conversationContinuation', continuation_sites[0])])
+    expected = [name for _, name in declarations + planned]
     check('advertised tools', expected, advertised(rust))
     check('dispatch arms', [name + ':' + site_by_constructor[constructor]
-                            for constructor, name in declarations],
+                            for constructor, name in declarations + planned],
           [name + ':' + handler for name, handler in dispatched(rust)])
     check_implementations(tokens((ROOT / 'crates/mcp/src/tools.rs').read_text()), sites)
+    check_implementations(tokens((ROOT / 'crates/mcp/src/admin.rs').read_text()), admin_sites)
     print(f'{len(expected)} advertised and dispatched tools match the formal wire names')
-    print(f'{len(planned)} planned administration and continuation entries are not yet implemented.')
+    print(f'{len(planned) - len(admin_sites) - 1} planned administration and continuation entries are not yet implemented.')
     print('Proof registration and Rust effect correspondence remain unchecked (#51, #52).')
 
 

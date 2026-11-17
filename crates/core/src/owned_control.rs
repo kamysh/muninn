@@ -51,10 +51,12 @@ pub async fn insert_staging(client: &Client, schema: &str, payload: &str) -> Res
     Ok(id)
 }
 
-/// Accepted work: the captured record identities and the work payload.
+/// Accepted work: the owning operation, captured record identities and the
+/// work payload.
 pub async fn accept_work(
     client: &Client,
     schema: &str,
+    operation_id: &str,
     captured_ids: &[Uuid],
     payload: &str,
 ) -> Result<Uuid> {
@@ -62,14 +64,33 @@ pub async fn accept_work(
     client
         .execute(
             &format!(
-                "INSERT INTO {} (id, captured_ids, payload) VALUES ($1,$2,$3)",
+                "INSERT INTO {} (id, operation_id, captured_ids, payload) VALUES ($1,$2,$3,$4)",
                 qualified(schema, "accepted_work")
             ),
-            &[&id, &captured_ids, &payload],
+            &[&id, &operation_id, &captured_ids, &payload],
         )
         .await
         .context("insert accepted work")?;
     Ok(id)
+}
+
+/// Cancel: remove accepted work for one operation; committed results stay.
+pub async fn cancel_accepted_work(
+    client: &Client,
+    schema: &str,
+    operation_id: &str,
+) -> Result<u64> {
+    let rows = client
+        .execute(
+            &format!(
+                "DELETE FROM {} WHERE operation_id = $1",
+                qualified(schema, "accepted_work")
+            ),
+            &[&operation_id],
+        )
+        .await
+        .context("cancel accepted work")?;
+    Ok(rows)
 }
 
 /// Cleanup task: the owning operation, captured identities and payload.
@@ -239,6 +260,38 @@ pub async fn finish_receipt(
         .await
         .context("finish receipt")?;
     Ok(rows)
+}
+
+/// Saved receipt for one operation ID, if present in this family schema.
+pub async fn read_receipt(
+    client: &impl GenericClient,
+    schema: &str,
+    operation_id: &str,
+) -> Result<Option<Receipt>> {
+    let row = client
+        .query_opt(
+            &format!(
+                "SELECT state, input, work, result FROM {} WHERE operation_id = $1",
+                qualified(schema, "receipts")
+            ),
+            &[&operation_id],
+        )
+        .await
+        .context("read receipt")?;
+    Ok(row.map(|row| Receipt {
+        state: row.get(0),
+        input: row.get(1),
+        work: row.get(2),
+        result: row.get(3),
+    }))
+}
+
+/// Receipt projection used by the continuation adapter.
+pub struct Receipt {
+    pub state: String,
+    pub input: Option<serde_json::Value>,
+    pub work: Option<serde_json::Value>,
+    pub result: Option<serde_json::Value>,
 }
 
 /// Installation-owned ID-only marker; a used operation ID never permits
