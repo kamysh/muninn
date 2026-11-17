@@ -208,6 +208,17 @@ is related-symbol path, position, then edge identity; every candidate is
 retained. See [structural search](STRUCTURAL-SEARCH.md). Payload decoding and
 implementation correspondence remain separate obligations.
 
+## Proof-carrying dispatcher
+
+`Dispatcher` is the only executable entry into the closed catalog: a request
+can execute only by carrying the proof instance its operation requires
+(outcome goal, preservation frame and the complete interruption/retry contract,
+all independently fixed). There is no raw-script constructor, local editing has
+no executable state, and every executable state provably carries its
+registration and full instance. See [the dispatcher contract](DISPATCHER.md).
+Catalog/coverage consistency is enforced mechanically by the three catalog
+checkers (#48–#50); Rust correspondence and the final audit remain #52–#54.
+
 ## Checkout publication
 
 `ContentPublication` fixes the publication result independently of the storage transaction: the current family selection policy is applied to the completed selected file map, the shared base advances for a base publication, other checkouts retain their completed maps filtered by the current policy, and stored rows are checked against those calculated maps. `ContentViews` projects actual base and delta binding rows into logical maps; `GenericFileMap` supplies the logical map algebra. `Plan` proves map resolution and minimal overlays; `PolicyGuard` reads the expected immutable policy pointer inside the shared transaction and returns to the corrective dialogue when it changed; `Outcome` fixes the real final world including other-checkout isolation, structural snapshot publication, captured obsolete references and the durable cleanup task; `Prepared` carries the adapter's actual `ReceiptLedger.Effect` with its commit proof and the fixed outcome; `Run` composes the guarded effect with the receipt checkpoint and proves commit, retry, boundary and convergence. Storage realization and Rust correspondence remain separate obligations (#51, #52).
