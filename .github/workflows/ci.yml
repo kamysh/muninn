@@ -16,7 +16,9 @@ jobs:
       - name: Rust lint
         run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
       - name: Rust unit tests
-        run: nix develop --command cargo test --workspace --all-targets
+        # The disposable-database integration suite (crates/core/tests) needs
+        # the postgres-ai harness and runs locally via muninn-setup/test-all.sh.
+        run: nix develop --command cargo test --workspace --lib --bins
       - name: Agda aggregate
         run: nix develop --command sh -c 'cd spec && agda Muninn.agda'
       - name: Catalog checkers
