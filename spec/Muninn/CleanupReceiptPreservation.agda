@@ -83,6 +83,19 @@ findDelete id key ((other , stored) ∷ rest) value (absent , unique) found inde
 ... | just receipt = refl
 ... | nothing = findDelete id key rest value unique found indexed
 
+findDeleteNonReceipt : ∀ id key world value → O.Unique world → DB.lookup key world ≡ just value →
+  Ledger.inRecord id key value ≡ nothing → Ledger.find id (DB.delete key world) ≡ Ledger.find id world
+findDeleteNonReceipt id key [] value unique () noMatch
+findDeleteNonReceipt id key ((other , stored) ∷ rest) value (absent , unique) found noMatch with key ≟ other
+... | yes refl with key ≟ key
+...   | no different = ⊥-elim (different refl)
+...   | yes same rewrite missingDelete key rest absent |
+      subst (λ v → Ledger.inRecord id key v ≡ nothing) (sym (just-injective found)) noMatch = refl
+findDeleteNonReceipt id key ((other , stored) ∷ rest) value (absent , unique) found noMatch | no different
+  with Ledger.inRecord id other stored
+... | just receipt = refl
+... | nothing = findDeleteNonReceipt id key rest value unique found noMatch
+
 findWrite : ∀ id key world old new → O.Unique world → DB.lookup key world ≡ just old →
   E.indexed old ≡ true → E.indexed new ≡ true →
   Ledger.find id (DB.write key new world) ≡ Ledger.find id world

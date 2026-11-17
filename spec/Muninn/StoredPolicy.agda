@@ -95,6 +95,15 @@ module Family (family pointer : ℕ) where
   ...   | refl with just-injective (trans (sym defaultsAt) otherDefaults)
   ...     | refl = refl
 
+  -- The same saved rows determine the same admitted rule, including evidence.
+  ruleDeterministic : ∀ world (first second : Saved world) → rule first ≡ rule second
+  ruleDeterministic world (saved version initial info frozen pointerAt versionAt defaultsAt)
+    (saved otherVersion otherInitial otherInfo otherFrozen otherPointer otherAt otherDefaults)
+    with just-injective (trans (sym pointerAt) otherPointer)
+  ... | refl with just-injective (trans (sym versionAt) otherAt)
+  ...   | refl with just-injective (trans (sym defaultsAt) otherDefaults)
+  ...     | refl = refl
+
   defaultsExact : ∀ world version initial info frozen pointerAt versionAt defaultsAt →
     map policy (defaultsValue world version initial info pointerAt versionAt (just (O.recordOf owner (O.defaults frozen))) defaultsAt) ≡
       just (policyFrom info frozen)
