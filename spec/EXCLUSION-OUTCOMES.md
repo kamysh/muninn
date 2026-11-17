@@ -109,3 +109,14 @@ structural retrieval and implementation projection remain their respective
 contracts (#26/#29/#30/#42/#46/#51/#52). The present theorems do not establish
 Rust/SQL correspondence or live database cleanup. No Rust, worker, service,
 installation or deployment changes are included.
+
+`PolicyCleanupRecoveryVerified` connects reader release, database resumption,
+the actual worker transactions and follow-up completion to the original
+request. Interrupted worker paths can be retried using committed state;
+the proof preserves the original cleanup outcome across the steps before
+and after interruption. For a captured set covering the affected family
+records, the worker derives completion after holders release their references
+rather than assuming blockers disappear. Follow-up finalization preserves
+the parent task and advances its existing receipt. External database
+availability, worker scheduling and eventual release remain assumptions;
+runtime correspondence stays a separate obligation.
