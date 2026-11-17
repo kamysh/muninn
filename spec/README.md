@@ -208,6 +208,16 @@ is related-symbol path, position, then edge identity; every candidate is
 retained. See [structural search](STRUCTURAL-SEARCH.md). Payload decoding and
 implementation correspondence remain separate obligations.
 
+## Crash injection for exclusion
+
+`CRASH-BOUNDARIES.json` names the exclusion operation's commit boundaries
+(admission, deletion batches, receipt checkpoints, follow-up capture,
+finalization) and `muninn-setup/crash-injection-check.sh` checks them inside
+the guarded disposable fixture against the adapter's `CRASH_BOUNDARIES`
+registration. The check stays red until the adapter registers every boundary;
+retry assertions land with the adapter and never as a happy-path substitute.
+See [crash injection](CRASH-INJECTION.md).
+
 ## Record and effect correspondence
 
 `RECORD-CORRESPONDENCE.json` maps every formal `OwnedState.Body` constructor to
