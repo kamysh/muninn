@@ -4,7 +4,8 @@ The user approved one semantic contract for equivalent CLI, MCP and TUI intents,
 with resumable background jobs registered separately. `CatalogInputs` defines
 structural input types; `Catalog` maps closed adapters to their shared intents;
 `CatalogSources` assigns every request an independent outcome owner and an
-explicit current-source or missing-adapter record. No new wire names are added.
+explicit current-source or missing-adapter record. Approved administration wire
+names are specified in `Catalog`; their runtime adapters remain absent.
 
 This is the closed inventory, not the proof-requiring execution dispatcher.
 `sourceRecorded` means that a matching Rust declaration exists, not that its
@@ -124,3 +125,18 @@ Exact adapters and mechanical coverage remain #48 and #52.
 The closed catalog must also name missing corrective conversation, operation-ID,
 continuation and background-work adapters. Missing implementation must be explicit;
 neither a raw script entry nor a permissive fallback establishes coverage.
+
+## Mechanical MCP catalog check
+
+`scripts/check_mcp_catalog.py` compares the literal advertised tools, dispatch
+arms, formal wire names, decoder clauses, intent assignments and source-site
+handler identities. It also checks the current initialization, tool-list and
+tool-call transport routes. Unsupported source forms, duplicates and mismatches
+are rejected. `tests/test_mcp_catalog.py` exercises missing, extra, duplicate,
+misrouted and unsupported entries.
+
+The checker validates the separately named planned administration and
+continuation entries and reports that their current runtime adapters are absent.
+As agreed for #48, proof-carrying operation enforcement and the mandatory gate
+belong to #51; Rust effect correspondence remains #52. Matching names and
+sites do not claim handler correctness.

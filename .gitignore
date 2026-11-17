@@ -5,3 +5,4 @@ result
 .claude/
 .fastembed_cache/
 /.direnv/
+__pycache__/

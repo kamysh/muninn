@@ -86,10 +86,80 @@ tuiIntent startSavedPolicy = start
 tuiIntent refreshCurrent = inspectPolicy
 tuiIntent saveGlobalSettings = replaceGlobal
 
--- Approved administration scope, with NO new wire names assigned here.
+-- Approved administration scope. These wire names are specified but the
+-- corresponding runtime adapters are not yet implemented.
 data McpAdministration : Set where
   inspect check apply inventory registerFamily startFamily reindexFamily pauseFamily : McpAdministration
   resumeFamily cancelWork inspectStatus unregisterFamily forgetRepository recreateDerived convert : McpAdministration
+
+adminWireName : McpAdministration → String
+adminWireName inspect = "inspect_policy"
+adminWireName check = "check_policy"
+adminWireName apply = "apply_policy"
+adminWireName inventory = "preflight_family"
+adminWireName registerFamily = "register_family"
+adminWireName startFamily = "start_family"
+adminWireName reindexFamily = "reindex_family"
+adminWireName pauseFamily = "pause_family"
+adminWireName resumeFamily = "resume_family"
+adminWireName cancelWork = "cancel_work"
+adminWireName inspectStatus = "inspect_status"
+adminWireName unregisterFamily = "unregister_family"
+adminWireName forgetRepository = "forget_repository"
+adminWireName recreateDerived = "recreate_index"
+adminWireName convert = "convert_directory"
+
+decodeAdmin : String → Maybe McpAdministration
+decodeAdmin "inspect_policy" = just inspect
+decodeAdmin "check_policy" = just check
+decodeAdmin "apply_policy" = just apply
+decodeAdmin "preflight_family" = just inventory
+decodeAdmin "register_family" = just registerFamily
+decodeAdmin "start_family" = just startFamily
+decodeAdmin "reindex_family" = just reindexFamily
+decodeAdmin "pause_family" = just pauseFamily
+decodeAdmin "resume_family" = just resumeFamily
+decodeAdmin "cancel_work" = just cancelWork
+decodeAdmin "inspect_status" = just inspectStatus
+decodeAdmin "unregister_family" = just unregisterFamily
+decodeAdmin "forget_repository" = just forgetRepository
+decodeAdmin "recreate_index" = just recreateDerived
+decodeAdmin "convert_directory" = just convert
+decodeAdmin _ = nothing
+
+adminRoundTrip : ∀ operation → decodeAdmin (adminWireName operation) ≡ just operation
+adminRoundTrip inspect = refl
+adminRoundTrip check = refl
+adminRoundTrip apply = refl
+adminRoundTrip inventory = refl
+adminRoundTrip registerFamily = refl
+adminRoundTrip startFamily = refl
+adminRoundTrip reindexFamily = refl
+adminRoundTrip pauseFamily = refl
+adminRoundTrip resumeFamily = refl
+adminRoundTrip cancelWork = refl
+adminRoundTrip inspectStatus = refl
+adminRoundTrip unregisterFamily = refl
+adminRoundTrip forgetRepository = refl
+adminRoundTrip recreateDerived = refl
+adminRoundTrip convert = refl
+
+adminNotCurrent : ∀ operation → decodeTool (adminWireName operation) ≡ nothing
+adminNotCurrent inspect = refl
+adminNotCurrent check = refl
+adminNotCurrent apply = refl
+adminNotCurrent inventory = refl
+adminNotCurrent registerFamily = refl
+adminNotCurrent startFamily = refl
+adminNotCurrent reindexFamily = refl
+adminNotCurrent pauseFamily = refl
+adminNotCurrent resumeFamily = refl
+adminNotCurrent cancelWork = refl
+adminNotCurrent inspectStatus = refl
+adminNotCurrent unregisterFamily = refl
+adminNotCurrent forgetRepository = refl
+adminNotCurrent recreateDerived = refl
+adminNotCurrent convert = refl
 
 adminIntent : McpAdministration → Intent
 adminIntent inspect = inspectPolicy
@@ -107,6 +177,16 @@ adminIntent unregisterFamily = unregister
 adminIntent forgetRepository = forget
 adminIntent recreateDerived = recreateIndex
 adminIntent convert = convertDirectory
+
+-- The shared conversation has its own planned MCP entry.
+continuationWireName : String
+continuationWireName = "continue_request"
+
+continuationNotCurrent : decodeTool continuationWireName ≡ nothing
+continuationNotCurrent = refl
+
+continuationNotAdmin : decodeAdmin continuationWireName ≡ nothing
+continuationNotAdmin = refl
 
 data UserAdapter : Set where
   cliAdapter : CliLeaf → UserAdapter
