@@ -1,0 +1,79 @@
+{
+  "jobs": {
+    "preparePublic": {"status": "sourceRecorded", "source": "database", "symbol": "run_migrations", "path": "crates/core/src/db.rs", "issue": null},
+    "prepareFamily": {"status": "sourceRecorded", "source": "familyPreparation", "symbol": "prepare_family", "path": "crates/core/src/family_store/preparation.rs", "issue": null},
+    "prepareGraph": {"status": "sourceRecorded", "source": "store", "symbol": "ensure_graph", "path": "crates/core/src/store.rs", "issue": null},
+    "fleetScan": {"status": "sourceRecorded", "source": "indexerMain", "symbol": "scan_and_dispatch", "path": "crates/indexer/src/main.rs", "issue": null},
+    "discoverCheckouts": {"status": "sourceRecorded", "source": "resolver", "symbol": "list_git_worktrees", "path": "crates/core/src/repo_resolver.rs", "issue": null},
+    "observeCheckout": {"status": "sourceRecorded", "source": "familyStore", "symbol": "record_checkout_observation", "path": "crates/core/src/family_store/mod.rs", "issue": null},
+    "reconcileFamily": {"status": "sourceRecorded", "source": "worktrees", "symbol": "reconcile_family", "path": "crates/core/src/worktrees/mod.rs", "issue": null},
+    "reconcileCheckout": {"status": "sourceRecorded", "source": "worktrees", "symbol": "reconcile_requested_checkout", "path": "crates/core/src/worktrees/mod.rs", "issue": null},
+    "watchBatch": {"status": "sourceRecorded", "source": "watcher", "symbol": "watch_repo", "path": "crates/indexer/src/watcher.rs", "issue": null},
+    "analyzeFile": {"status": "sourceRecorded", "source": "pipeline", "symbol": "index_file", "path": "crates/core/src/pipeline.rs", "issue": null},
+    "publishCheckout": {"status": "sourceRecorded", "source": "worktrees", "symbol": "reconcile_requested_checkout", "path": "crates/core/src/worktrees/mod.rs", "issue": null},
+    "embedCode": {"status": "sourceRecorded", "source": "pipeline", "symbol": "backfill_once", "path": "crates/core/src/pipeline.rs", "issue": null},
+    "embedNote": {"status": "missing", "source": "knowledgeStore", "symbol": "upsert", "path": "crates/core/src/knowledge.rs", "issue": 43},
+    "reclaimExcluded": {"status": "missing", "source": "worktrees", "symbol": "garbage_collect", "path": "crates/core/src/worktrees/mod.rs", "issue": 25},
+    "reclaimRetired": {"status": "missing", "source": "familyStore", "symbol": "retire_if_missing", "path": "crates/core/src/family_store/mod.rs", "issue": 33},
+    "handoff": {"status": "sourceRecorded", "source": "store", "symbol": "unlock", "path": "crates/core/src/store.rs", "issue": null},
+    "recoverOperation": {"status": "missing", "source": "familyStore", "symbol": "reserve_family", "path": "crates/core/src/family_store/mod.rs", "issue": 21},
+    "recordUsage": {"status": "sourceRecorded", "source": "mcpMain", "symbol": "record_usage", "path": "crates/mcp/src/main.rs", "issue": null},
+    "appendLog": {"status": "sourceRecorded", "source": "mcpMain", "symbol": "init_logging", "path": "crates/mcp/src/main.rs", "issue": null},
+    "pruneLogs": {"status": "sourceRecorded", "source": "mcpMain", "symbol": "prune_log_dir", "path": "crates/mcp/src/main.rs", "issue": null},
+    "flushDiagnostics": {"status": "sourceRecorded", "source": "diagnostics", "symbol": "flush_stderr", "path": "crates/indexer/src/logging.rs", "issue": null}
+  },
+  "calls": {
+    "main:main": {
+      ".execute": {"count": 2, "targets": ["control:notification"]},
+      "db::connect_listener": {"count": 1, "targets": ["control:startup", "control:notification"]},
+      "db::connect_with_app_name": {"count": 2, "targets": ["control:startup"]},
+      "db::run_migrations": {"count": 1, "targets": ["job:preparePublic"]},
+      "scan_and_dispatch": {"count": 2, "targets": ["job:fleetScan"]},
+      "tokio::signal::ctrl_c": {"count": 1, "targets": ["control:shutdown"]},
+      "wait_for_dispatch": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
+    },
+    "main:wait_for_dispatch": {
+      "tokio::time::sleep": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
+    },
+    "main:scan_and_dispatch": {
+      "db::connect_with_app_name": {"count": 2, "targets": ["job:reconcileFamily", "job:watchBatch"]},
+      "db::run_repo_migrations": {"count": 1, "targets": ["job:prepareFamily"]},
+      "family_store::retire_if_missing": {"count": 1, "targets": ["job:reclaimRetired"]},
+      "index_repo": {"count": 1, "targets": ["job:reconcileFamily"]},
+      "pipeline::backfill_once": {"count": 1, "targets": ["job:embedCode"]},
+      "store::is_preempt_requested": {"count": 1, "targets": ["job:handoff"]},
+      "store::list_repos": {"count": 1, "targets": ["job:fleetScan"]},
+      "store::notify_repos_changed": {"count": 1, "targets": ["control:notification"]},
+      "store::repo_schema": {"count": 1, "targets": ["job:prepareFamily"]},
+      "store::try_lock": {"count": 1, "targets": ["job:handoff"]},
+      "store::unlock": {"count": 2, "targets": ["job:handoff"]},
+      "tokio::spawn": {"count": 2, "targets": ["job:reconcileFamily", "job:watchBatch"]},
+      "tokio::time::interval": {"count": 1, "targets": ["job:handoff"]},
+      "watcher::watch_repo": {"count": 1, "targets": ["job:watchBatch"]}
+    },
+    "watcher:watch_repo": {
+      "db::run_repo_migrations": {"count": 1, "targets": ["job:prepareFamily"]},
+      "index_file": {"count": 1, "targets": ["job:analyzeFile"]},
+      "notify::recommended_watcher": {"count": 1, "targets": ["job:watchBatch"]},
+      "pipeline::path_excluded": {"count": 2, "targets": ["job:watchBatch"]},
+      "store::delete_file_chunks": {"count": 1, "targets": ["job:watchBatch"]},
+      "store::repo_schema": {"count": 1, "targets": ["job:prepareFamily"]},
+      "tokio::time::timeout": {"count": 1, "targets": ["job:watchBatch"]},
+      "watch_family": {"count": 1, "targets": ["job:reconcileFamily", "job:watchBatch"]}
+    },
+    "watcher:watch_family": {
+      "notify::recommended_watcher": {"count": 1, "targets": ["job:watchBatch"]},
+      "pipeline::index_repo": {"count": 1, "targets": ["job:reconcileFamily"]},
+      "tokio::time::sleep": {"count": 2, "targets": ["job:watchBatch"]},
+      "worktrees::reconcile_changed_family": {"count": 1, "targets": ["job:reconcileFamily"]}
+    },
+    "logging:start_summaries": {
+      ".flush_stderr": {"count": 1, "targets": ["job:flushDiagnostics"]},
+      "tokio::spawn": {"count": 1, "targets": ["job:flushDiagnostics"]},
+      "tokio::time::sleep": {"count": 1, "targets": ["job:flushDiagnostics"]}
+    },
+    "logging:flush_stderr": {
+      ".flush": {"count": 1, "targets": ["job:flushDiagnostics"]}
+    }
+  }
+}
