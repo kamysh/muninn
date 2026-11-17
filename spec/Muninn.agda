@@ -82,6 +82,7 @@ import Muninn.PublishedViews
 import Muninn.OwnedState
 import Muninn.Catalog
 import Muninn.CatalogSources
+import Muninn.CLIInterrupt
 import Muninn.Dialogue
 import Muninn.RequestIdentity
 import Muninn.ReceiptLedger

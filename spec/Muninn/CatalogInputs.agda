@@ -203,3 +203,16 @@ ControlInput listTools = ⊤
 ControlInput notification = NotificationInput
 ControlInput openEditor = Editor × Maybe Locator
 ControlInput interrupt = OperationId
+
+-- Local editing cannot carry an arbitrary database script. Effectful Save,
+-- Check, Start and Refresh use their shared public intents above.
+data UiAction : Set where
+  openView editField advanced editMore rules defaults selectRule addRule close back : UiAction
+  loadCurrent keepDraft confirmSave confirmDiscard confirmLoad confirmKeep confirmRemove : UiAction
+  removeRule moveRule selectProvider editText selectSecret focus scroll helpModal : UiAction
+
+record UiInput : Set where
+  field editor : Editor
+        action : UiAction
+        selection : ℕ
+        text : String
