@@ -4,9 +4,10 @@
 module Muninn.Catalog where
 
 open import Muninn.CatalogInputs
-open import Data.String using (String)
+open import Data.String using (String; _≟_)
 open import Data.List using (List; []; _∷_)
 import Data.Empty
+open import Relation.Nullary using (yes; no)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; trans; sym)
 
@@ -195,6 +196,17 @@ data UserAdapter : Set where
   plannedAdministration : McpAdministration → UserAdapter
   conversationContinuation : UserAdapter
 
+-- Planned names enter the same closed request catalog, while remaining
+-- explicitly distinct from adapters implemented in the current Rust server.
+decodeMcp : String → Maybe UserAdapter
+decodeMcp name with decodeTool name
+... | just tool = just (mcpAdapter tool)
+... | nothing with decodeAdmin name
+...   | just operation = just (plannedAdministration operation)
+...   | nothing with name Data.String.≟ continuationWireName
+...     | yes _ = just conversationContinuation
+...     | no _ = nothing
+
 canonicalIntent : UserAdapter → Intent
 canonicalIntent (cliAdapter leaf) = cliIntent leaf
 canonicalIntent (mcpAdapter tool) = mcpIntent tool
@@ -207,6 +219,7 @@ data Request : Set where
   user : (adapter : UserAdapter) → IntentInput (canonicalIntent adapter) → Request
   background : (job : Job) → JobInput job → Request
   control : (event : Control) → ControlInput event → Request
+  localUi : UiInput → Request
 
 data OutcomeOwner : Set where
   connection configuration selection registration indexing removal retrieval structure : OutcomeOwner
@@ -277,6 +290,7 @@ owner : Request → OutcomeOwner
 owner (user adapter input) = intentOwner (canonicalIntent adapter)
 owner (background job input) = jobOwner job
 owner (control event input) = controlOwner event
+owner (localUi input) = interface
 
 -- Changing transport cannot change the assigned independent outcome owner.
 sameIntentSameOutcomeOwner : ∀ first second input otherInput →
@@ -300,3 +314,33 @@ unknownNotAdvertised : ∀ name → decodeTool name ≡ nothing →
 unknownNotAdvertised name unknown tool same
   with trans (sym (wireRoundTrip tool)) (trans (cong decodeTool same) unknown)
 ... | ()
+
+currentMcpRoundTrip : ∀ tool → decodeMcp (wireName tool) ≡ just (mcpAdapter tool)
+currentMcpRoundTrip searchHybrid = refl
+currentMcpRoundTrip searchFulltext = refl
+currentMcpRoundTrip searchSemantic = refl
+currentMcpRoundTrip searchStructural = refl
+currentMcpRoundTrip recordKnowledge = refl
+currentMcpRoundTrip searchKnowledge = refl
+currentMcpRoundTrip deleteKnowledge = refl
+currentMcpRoundTrip listKnowledge = refl
+
+adminMcpRoundTrip : ∀ operation → decodeMcp (adminWireName operation) ≡ just (plannedAdministration operation)
+adminMcpRoundTrip inspect = refl
+adminMcpRoundTrip check = refl
+adminMcpRoundTrip apply = refl
+adminMcpRoundTrip inventory = refl
+adminMcpRoundTrip registerFamily = refl
+adminMcpRoundTrip startFamily = refl
+adminMcpRoundTrip reindexFamily = refl
+adminMcpRoundTrip pauseFamily = refl
+adminMcpRoundTrip resumeFamily = refl
+adminMcpRoundTrip cancelWork = refl
+adminMcpRoundTrip inspectStatus = refl
+adminMcpRoundTrip unregisterFamily = refl
+adminMcpRoundTrip forgetRepository = refl
+adminMcpRoundTrip recreateDerived = refl
+adminMcpRoundTrip convert = refl
+
+continuationMcpRoundTrip : decodeMcp continuationWireName ≡ just conversationContinuation
+continuationMcpRoundTrip = refl
