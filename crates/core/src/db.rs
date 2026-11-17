@@ -288,6 +288,7 @@ mod migration_tests {
                     "public-family-lifecycle",
                     "public-family-registration-intent",
                     "public-live-family-paths",
+                    "receipt-markers",
                 ],
             ),
             (
@@ -301,6 +302,7 @@ mod migration_tests {
                     "repo-worktree-file-deltas",
                     "repo-worktree-base-indexes",
                     "repo-worktree-structural-snapshots",
+                    "repo-owned-control-records",
                 ],
             ),
         ] {

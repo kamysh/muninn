@@ -20,15 +20,16 @@ template fails; a write-site table missing from the physical map fails. A
 mapped category must name a realization. Unfamiliar source forms fail rather
 than pass silently.
 
-## Honest gaps
+## Realized categories
 
-Seven record categories have no current Rust realization and stay explicit in
-the manifest: `acceptedWork`, `activeReader`, `cleanupWork`, `continuation`,
-`legacy`, `receipt`, `staging`. Repairing them is separate work; this contract
-records them rather than weakening the formal goal to match the
-implementation. `logFile` is local log files, not database rows; system
-categories (migrations, bootstrap, model cache, coordination, schema
-resources) map to their infrastructure roles.
+Every formal record category has a physical realization: the seven previously
+unmapped categories now have family-owned tables (`legacy_files`, `staging`,
+`accepted_work`, `cleanup_work`, `active_readers`, `continuations`,
+`receipts`) plus the installation-owned `receipt_markers` table for ID-only
+markers, all written through `crates/core/src/owned_control.rs` and declared
+as write sites in the manifest. `logFile` is local log files, not database
+rows; system categories (migrations, bootstrap, model cache, coordination,
+schema resources) map to their infrastructure roles.
 
 ## Boundary
 

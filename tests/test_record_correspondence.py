@@ -46,10 +46,9 @@ class CorrespondenceCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             check.main_with(changed)
 
-    def test_unmapped_status_is_explicit(self):
-        unmapped = sorted(name for name, entry in self.manifest['formal'].items()
-                          if entry['status'] == 'unmapped')
-        self.assertTrue(unmapped, 'unmapped categories must stay explicit in the manifest')
+    def test_statuses_are_valid(self):
+        for name, entry in self.manifest['formal'].items():
+            self.assertIn(entry['status'], check.STATUSES, name)
 
 
 def main_with(manifest):
