@@ -208,6 +208,16 @@ is related-symbol path, position, then edge identity; every candidate is
 retained. See [structural search](STRUCTURAL-SEARCH.md). Payload decoding and
 implementation correspondence remain separate obligations.
 
+## Final coverage audit
+
+[AUDIT.md](AUDIT.md) records the complete verification pass (aggregate plus
+all mechanical checkers and their tests) and the honest gap list: seven
+unrealized record categories (#202), the absent exclusion adapter (#203), the
+unimplemented administration MCP adapters (#204), the missing CLI interrupt
+handler, and runtime correspondence as an explicit boundary for every
+operation family. The audit never claims that type checking proves Rust
+correct.
+
 ## Record and effect correspondence
 
 `RECORD-CORRESPONDENCE.json` maps every formal `OwnedState.Body` constructor to
