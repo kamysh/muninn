@@ -140,3 +140,30 @@ continuation entries and reports that their current runtime adapters are absent.
 As agreed for #48, proof-carrying operation enforcement and the mandatory gate
 belong to #51; Rust effect correspondence remains #52. Matching names and
 sites do not claim handler correctness.
+
+## Mechanical CLI and TUI catalog check
+
+`scripts/check_cli_catalog.py` compares the current command and editor enum
+variants with the reviewed mappings in `CLI-TUI-COVERAGE.json` and the closed
+formal catalog. It checks command arguments, parser attributes, global scope,
+startup/help/version and foreground-interrupt routes, plus editor backend
+sources and calls. The captured parser attributes are a drift baseline; they
+do not prove branch behavior. `tests/test_cli_catalog.py` exercises missing,
+extra, duplicate and misrouted entries.
+
+Foreground interruption pauses the current accepted work through the shared
+`IndexWorkControl` transition (`CLIInterrupt`); binding the operation id to the
+family holding that work and the runtime dispatcher remain #51/#52 obligations.
+
+## Mechanical daemon job and scheduling check
+
+`scripts/check_daemon_catalog.py` compares all formal job source assignments
+with `DAEMON-COVERAGE.json`, verifies recorded definitions, and inventories
+startup, notification, polling, watching, discovery, retirement, backfill and
+cleanup routes. `tests/test_daemon_catalog.py` exercises missing, extra,
+duplicate and misrouted entries.
+
+`DaemonWake` binds a notification or the polling fallback to the same fleet
+scan job and states the finite scheduling rules; the listener close waits for
+the next poll. Proof-carrying dispatch enforcement belongs to #51 and effect
+correspondence to #52.

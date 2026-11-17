@@ -94,6 +94,7 @@ normalize : Catalog.Request → Maybe Meaning
 normalize (Catalog.user adapter input) = userMeaning (Catalog.canonicalIntent adapter) input
 normalize (Catalog.background job input) = just (durableJob job input)
 normalize (Catalog.control event input) = nothing
+normalize (Catalog.localUi input) = nothing
 
 -- Read/control/UI requests do not acquire permanent used-ID markers.
 -- Work arranged by those requests has a separately registered job identity.

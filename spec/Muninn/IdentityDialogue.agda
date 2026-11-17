@@ -81,6 +81,7 @@ continuationId : C.Request → Maybe I.OperationId
 continuationId (C.user adapter input) = continuationInput (C.canonicalIntent adapter) input
 continuationId (C.background job input) = nothing
 continuationId (C.control event input) = nothing
+continuationId (C.localUi input) = nothing
 
 automaticId : C.Request → Maybe I.OperationId
 automaticId request with N.normalize request
