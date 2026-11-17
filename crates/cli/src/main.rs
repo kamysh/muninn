@@ -389,6 +389,7 @@ async fn handle_global_config(op: &ConfigOp) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    muninn_core::db::exit_on_migration_failure();
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {

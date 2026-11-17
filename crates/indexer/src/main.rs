@@ -30,6 +30,7 @@ struct Cli {}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    db::exit_on_migration_failure();
     let _cli = Cli::parse();
     let repeated_events = logging::RepeatedEvents::default();
     tracing_subscriber::fmt()
@@ -366,7 +367,7 @@ async fn scan_and_dispatch(
                 )
                 .await
                 {
-                    tracing::error!("schema backfill for {} failed: {}", repo_path_str, e);
+                    tracing::error!("schema backfill for {} failed: {:#}", repo_path_str, e);
                     reindexing2.lock().await.remove(&repo_id);
                     return;
                 }
@@ -476,12 +477,17 @@ async fn scan_and_dispatch(
             if !handle.is_finished() && *running_globs == signature {
                 continue; // watcher is running with the correct exclude+vendor config
             }
+            let finished = handle.is_finished();
             handle.abort();
             watched.remove(&repo.id);
-            tracing::info!(
-                "restarting watcher for {} (exclude/vendor config changed)",
-                repo.path
-            );
+            if finished {
+                tracing::info!("restarting exited watcher for {}", repo.path);
+            } else {
+                tracing::info!(
+                    "restarting watcher for {} (watcher policy changed)",
+                    repo.path
+                );
+            }
         }
 
         // DaemonMayWatch: a foreground/CLI reindex sets indexed_at = NULL for its
@@ -524,7 +530,7 @@ async fn scan_and_dispatch(
             )
             .await
             {
-                tracing::error!("watcher error: {}", e);
+                tracing::error!("watcher error for {}: {:#}", id, e);
             }
         });
 

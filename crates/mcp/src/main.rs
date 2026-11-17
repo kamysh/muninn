@@ -24,6 +24,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    db::exit_on_migration_failure();
     let _cli = Cli::parse();
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
