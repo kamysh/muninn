@@ -163,7 +163,7 @@
       "status": "mapped",
       "realization": "mcp_usage",
       "sites": [
-        "crates/mcp/src/main.rs:413"
+        "crates/mcp/src/main.rs:591"
       ]
     },
     "logFile": {
@@ -230,12 +230,12 @@
   "sites": [
     {
       "file": "crates/cli/src/main.rs",
-      "line": 528,
+      "line": 529,
       "table": "repos"
     },
     {
       "file": "crates/cli/src/main.rs",
-      "line": 550,
+      "line": 551,
       "table": "repos"
     },
     {
@@ -635,7 +635,7 @@
     },
     {
       "file": "crates/mcp/src/main.rs",
-      "line": 590,
+      "line": 591,
       "table": "mcp_usage"
     }
   ]

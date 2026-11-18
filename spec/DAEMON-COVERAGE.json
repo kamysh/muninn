@@ -27,6 +27,7 @@
       ".execute": {"count": 2, "targets": ["control:notification"]},
       "db::connect_listener": {"count": 1, "targets": ["control:startup", "control:notification"]},
       "db::connect_with_app_name": {"count": 2, "targets": ["control:startup"]},
+      "db::exit_on_migration_failure": {"count": 1, "targets": ["control:startup"]},
       "db::run_migrations": {"count": 1, "targets": ["job:preparePublic"]},
       "scan_and_dispatch": {"count": 2, "targets": ["job:fleetScan"]},
       "tokio::signal::ctrl_c": {"count": 1, "targets": ["control:shutdown"]},
