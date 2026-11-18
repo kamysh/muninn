@@ -485,6 +485,7 @@ async fn reconcile_family_targets(
             vendor,
             &progress,
             !initialized,
+            changed,
         )
         .await
         {
@@ -550,12 +551,17 @@ impl EmbeddingBackend for ReuseEmbeddings<'_> {
     }
 }
 
+#[derive(Clone)]
 struct SourceFile {
     path: String,
-    source: String,
+    // An inherited published version needs no filesystem content read.
+    source: Option<String>,
+    source_size: usize,
     hash: Vec<u8>,
     tier: Tier,
 }
+
+type VersionCandidates = HashMap<(String, Vec<u8>, i16), Vec<(Uuid, Option<String>)>>;
 
 fn scan(
     root: &Path,
@@ -592,12 +598,103 @@ fn scan(
         files.push(SourceFile {
             path: relative,
             hash: content_sha256(&source),
-            source,
+            source_size: source.len(),
+            source: Some(source),
             tier,
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+// Directory or Git-administration events can affect paths not named in the
+// event. Those cases use the full-audit path instead of guessing descendants.
+fn changed_paths(
+    target: &Target,
+    git: &GitCheckout,
+    events: Option<&[PathBuf]>,
+    previous: &BTreeMap<String, Uuid>,
+) -> Option<Vec<PathBuf>> {
+    let mut paths = BTreeSet::new();
+    for event in events? {
+        if event.starts_with(&git.git_dir) {
+            return None;
+        }
+        let Ok(relative) = event.strip_prefix(&target.root) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            || event.is_dir()
+            || previous.keys().any(|path| {
+                let path = Path::new(path);
+                path != relative && path.starts_with(relative)
+            })
+        {
+            return None;
+        }
+        paths.insert(relative.to_path_buf());
+    }
+    Some(paths.into_iter().collect())
+}
+
+// Apply the same selection and admission rules as a full scan to one event.
+fn scan_changed_file(
+    root: &Path,
+    selection: &crate::family_policy::runtime::Selection,
+    relative: &Path,
+) -> Result<Option<SourceFile>> {
+    for ancestor in relative
+        .ancestors()
+        .skip(1)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        if selection.classify(ancestor, true) == pipeline::Decision::Drop {
+            return Ok(None);
+        }
+        match std::fs::symlink_metadata(root.join(ancestor)) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let decision = selection.classify(relative, false);
+    if decision == pipeline::Decision::Drop {
+        return Ok(None);
+    }
+    let path = root.join(relative);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > 10 * 1024 * 1024 {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)?;
+    if bytes.contains(&0) {
+        return Ok(None);
+    }
+    let Ok(source) = String::from_utf8(bytes) else {
+        return Ok(None);
+    };
+    Ok(Some(SourceFile {
+        path: relative
+            .to_str()
+            .context("indexed file path is not UTF-8")?
+            .to_owned(),
+        hash: content_sha256(&source),
+        source_size: source.len(),
+        source: Some(source),
+        tier: if decision == pipeline::Decision::Tier2 {
+            Tier::Tier2
+        } else {
+            Tier::Tier1
+        },
+    }))
 }
 
 async fn git_stamp(git: &GitCheckout) -> Result<String> {
@@ -639,6 +736,7 @@ async fn reconcile_checkout(
     vendor: &[String],
     progress: &impl Fn(usize, usize, &Path),
     refresh_graph: bool,
+    events: Option<&[PathBuf]>,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     let stamp = git_stamp(git).await?;
@@ -679,28 +777,93 @@ async fn reconcile_checkout(
     let batch_size = policy
         .as_ref()
         .map_or(batch_size, |p| p.policy.embeddings.batch_size as usize);
-    let files = scan(&target.root, &selection)?;
-    let scanned = started.elapsed();
     let previous = if initialized {
         manifest(&tx, &s, target.checkout).await?
     } else {
         BTreeMap::new()
     };
+    let candidates = if initialized {
+        changed_paths(target, git, events, &previous)
+    } else {
+        None
+    };
+    let mut fast_changes = None;
+    let mut inherited = BTreeMap::new();
+    if candidates.is_some() {
+        let ids: Vec<Uuid> = previous.values().copied().collect();
+        for row in tx.query(
+            &format!("SELECT v.id,v.path,v.content_hash,v.tier,octet_length(c.source)::bigint FROM {s}.file_versions v LEFT JOIN {s}.file_content_cache c ON c.file_version=v.id WHERE v.id=ANY($1)"),
+            &[&ids],
+        ).await? {
+            let id: Uuid = row.get(0);
+            let path: String = row.get(1);
+            let length: Option<i64> = row.get(4);
+            if previous.get(&path) != Some(&id) || length.is_none() {
+                inherited.clear();
+                break;
+            }
+            inherited.insert(path.clone(), SourceFile {
+                path,
+                hash: row.get(2),
+                tier: Tier::from_i16(row.get(3)).context("invalid stored file tier")?,
+                source_size: usize::try_from(length.unwrap()).context("invalid stored file size")?,
+                source: None,
+            });
+        }
+    }
+    let files = if let Some(paths) = candidates.filter(|_| inherited.len() == previous.len()) {
+        let mut observed = Vec::with_capacity(paths.len());
+        for path in paths {
+            let key = path
+                .to_str()
+                .context("indexed file path is not UTF-8")?
+                .to_owned();
+            let file = scan_changed_file(&target.root, &selection, &path)?;
+            inherited.remove(&key);
+            if let Some(value) = &file {
+                inherited.insert(key, value.clone());
+            }
+            observed.push((path, file));
+        }
+        fast_changes = Some(observed);
+        inherited.into_values().collect()
+    } else {
+        scan(&target.root, &selection)?
+    };
+    let scanned = started.elapsed();
     let mut desired = BTreeMap::new();
-    let paths: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
-    let versions: HashMap<(String, Vec<u8>, i16), Uuid> = tx
+    let paths: Vec<_> = files
+        .iter()
+        .filter(|file| file.source.is_some())
+        .map(|file| file.path.clone())
+        .collect();
+    let mut versions = VersionCandidates::new();
+    for row in tx
         .query(
-            &format!("SELECT id,path,content_hash,tier FROM {s}.file_versions WHERE path=ANY($1)"),
+            &format!("SELECT v.id,v.path,v.content_hash,v.tier,c.source FROM {s}.file_versions v LEFT JOIN {s}.file_content_cache c ON c.file_version=v.id WHERE v.path=ANY($1)"),
             &[&paths],
         )
-        .await?
-        .into_iter()
-        .map(|row| ((row.get(1), row.get(2), row.get(3)), row.get(0)))
-        .collect();
+        .await? {
+        versions.entry((row.get(1), row.get(2), row.get(3))).or_default().push((row.get(0), row.get(4)));
+    }
+    let mut pending_sources = Vec::new();
     for (n, file) in files.iter().enumerate() {
-        let version = if let Some(version) =
-            versions.get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16()))
-        {
+        let Some(source) = &file.source else {
+            desired.insert(
+                file.path.clone(),
+                *previous
+                    .get(&file.path)
+                    .context("missing inherited file version")?,
+            );
+            continue;
+        };
+        let version = if let Some((version, _)) = versions
+            .get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16()))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find(|(_, cached)| cached.as_deref() == Some(source.as_str()))
+            }) {
             *version
         } else {
             let version = Uuid::new_v4();
@@ -730,7 +893,7 @@ async fn reconcile_checkout(
                 pipeline::prepare_chunks(
                     target.family,
                     file.path.clone(),
-                    file.source.clone(),
+                    source.clone(),
                     &reuse,
                     1500,
                     batch_size,
@@ -748,6 +911,7 @@ async fn reconcile_checkout(
                 &[&version, &file.path, &file.hash, &file.tier.as_i16()],
             )
             .await?;
+            pending_sources.push((version, source.as_str()));
             for chunk in chunks {
                 let vector = chunk.embedding.map(pgvector::Vector::from);
                 tx.execute(&format!("INSERT INTO {s}.chunks(id,repo_id,file_path,start_line,end_line,content,embedding,tier,embedding_state,content_hash,file_version,in_base) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false)"),
@@ -757,6 +921,14 @@ async fn reconcile_checkout(
         };
         desired.insert(file.path.clone(), version);
         progress(n + 1, files.len(), &target.root.join(&file.path));
+    }
+    for batch in pending_sources.chunks(128) {
+        let ids: Vec<Uuid> = batch.iter().map(|(id, _)| *id).collect();
+        let sources: Vec<&str> = batch.iter().map(|(_, source)| *source).collect();
+        tx.execute(
+            &format!("INSERT INTO {s}.file_content_cache(file_version,source) SELECT * FROM unnest($1::uuid[],$2::text[])"),
+            &[&ids, &sources],
+        ).await?;
     }
     let versioned = started.elapsed();
     if refresh_graph || !initialized || previous != desired {
@@ -793,22 +965,43 @@ async fn reconcile_checkout(
                 }
             }
         }
-        rebuild_graph(&tx, target, &files, &desired)
-            .await
-            .context("publish checkout structural index")?;
+        rebuild_graph(
+            &tx,
+            target,
+            &files,
+            &previous,
+            &desired,
+            fast_changes.is_some() && !refresh_graph,
+        )
+        .await
+        .context("publish checkout structural index")?;
     }
     let graphed = started.elapsed();
     // Re-read the selection and hashes before committing. A read/scan failure or
     // Git blocker rolls back chunks, deltas and graph together.
-    let after = scan(&target.root, &selection)?;
-    ensure!(
-        files.len() == after.len()
-            && files
-                .iter()
-                .zip(&after)
-                .all(|(a, b)| a.path == b.path && a.hash == b.hash && a.tier == b.tier),
-        "files changed during indexing; retaining previous index"
-    );
+    if let Some(changes) = &fast_changes {
+        for (path, before) in changes {
+            let after = scan_changed_file(&target.root, &selection, path)?;
+            ensure!(
+                match (before, &after) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a.source == b.source && a.tier == b.tier,
+                    _ => false,
+                },
+                "files changed during indexing; retaining previous index"
+            );
+        }
+    } else {
+        let after = scan(&target.root, &selection)?;
+        ensure!(
+            files.len() == after.len()
+                && files
+                    .iter()
+                    .zip(&after)
+                    .all(|(a, b)| a.path == b.path && a.source == b.source && a.tier == b.tier),
+            "files changed during indexing; retaining previous index"
+        );
+    }
     ensure!(
         git_stamp(git).await? == stamp,
         "Git HEAD changed during indexing; retaining previous index"
@@ -902,11 +1095,98 @@ async fn rebuild_graph(
     tx: &Transaction<'_>,
     target: &Target,
     files: &[SourceFile],
+    previous: &BTreeMap<String, Uuid>,
     desired: &BTreeMap<String, Uuid>,
+    allow_patch: bool,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     let s = schema(target.family);
     let versions: Vec<Uuid> = desired.values().copied().collect();
+    // Bump this identity when grammar, parser, or relationship extraction
+    // behavior changes. The language is included separately below.
+    const ANALYSIS_REVISION: &str =
+        "tree-sitter-0.22.6-rust-0.21.2-python-0.21.0-js-0.21.4-typescript-0.21.2-extractor-1";
+    let changed_files: BTreeSet<String> = previous
+        .keys()
+        .chain(desired.keys())
+        .filter(|path| previous.get(*path) != desired.get(*path))
+        .cloned()
+        .collect();
+    let mut patchable = allow_patch && !changed_files.is_empty();
+    let mut old_snapshot = None;
+    let mut affected_names = BTreeSet::new();
+    if patchable && target.graph == target.family {
+        patchable = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name=$1)",
+                &[&store::graph_name(target.graph)],
+            )
+            .await?
+            .get(0);
+    } else if patchable {
+        if let Some(row) = tx
+            .query_opt(
+                &format!(
+                    "SELECT nodes,edges FROM {s}.checkout_structural_snapshots WHERE checkout=$1"
+                ),
+                &[&target.checkout],
+            )
+            .await?
+        {
+            let symbols: Vec<Symbol> = serde_json::from_value(row.get(0))?;
+            let edges: Vec<StructuralEdge> = serde_json::from_value(row.get(1))?;
+            let ids: std::collections::HashSet<_> =
+                symbols.iter().map(|symbol| symbol.chunk_id).collect();
+            if edges
+                .iter()
+                .all(|edge| ids.contains(&edge.from) && ids.contains(&edge.to))
+            {
+                old_snapshot = Some((symbols, edges));
+            } else {
+                patchable = false;
+            }
+        } else {
+            patchable = false;
+        }
+    }
+    if patchable {
+        for path in &changed_files {
+            let (Some(version), Some(lang)) = (previous.get(path), parser::detect_language(path))
+            else {
+                continue;
+            };
+            let identity = format!("{ANALYSIS_REVISION}:{lang:?}");
+            let row = tx.query_opt(
+                &format!("SELECT octet_length(c.source)::bigint,a.symbols FROM {s}.file_content_cache c LEFT JOIN {s}.file_analysis_cache a ON a.file_version=c.file_version AND a.analysis_identity=$2 WHERE c.file_version=$1"),
+                &[version, &identity],
+            ).await?;
+            let Some(row) = row else {
+                patchable = false;
+                break;
+            };
+            let size: i64 = row.get(0);
+            if size > 1024 * 1024 {
+                continue;
+            }
+            let Some(symbols) = row.get::<_, Option<serde_json::Value>>(1) else {
+                patchable = false;
+                break;
+            };
+            for symbol in serde_json::from_value::<Vec<parser::ParsedSymbol>>(symbols)? {
+                affected_names.insert(symbol.name);
+            }
+        }
+    }
+    let mut cached = HashMap::new();
+    for row in tx.query(
+        &format!("SELECT file_version,analysis_identity,symbols,candidates FROM {s}.file_analysis_cache WHERE file_version=ANY($1)"),
+        &[&versions],
+    ).await? {
+        cached.insert(
+            (row.get::<_, Uuid>(0), row.get::<_, String>(1)),
+            (row.get::<_, serde_json::Value>(2), row.get::<_, serde_json::Value>(3)),
+        );
+    }
     let mut chunks: HashMap<Uuid, Vec<(Uuid, u32)>> = HashMap::new();
     for row in tx
         .query(
@@ -924,17 +1204,46 @@ async fn rebuild_graph(
     }
     let mut nodes = Vec::new();
     let mut parsed = Vec::new();
+    let mut pending_analysis = Vec::new();
     let mut names: HashMap<String, Vec<(String, Uuid)>> = HashMap::new();
     let mut ranges: HashMap<(String, u32), Uuid> = HashMap::new();
     for file in files {
         let Some(lang) = parser::detect_language(&file.path) else {
             continue;
         };
-        if file.source.len() > 1024 * 1024 {
+        if file.source_size > 1024 * 1024 {
             continue;
         }
-        let symbols = parser::parse_file(&file.source, lang)?;
         let version = desired[&file.path];
+        let identity = format!("{ANALYSIS_REVISION}:{lang:?}");
+        let (symbols, candidates): (Vec<parser::ParsedSymbol>, Vec<parser::ParsedEdge>) =
+            match cached.remove(&(version, identity.clone())) {
+                Some((symbols, candidates)) => (
+                    serde_json::from_value(symbols)?,
+                    serde_json::from_value(candidates)?,
+                ),
+                None => {
+                    let source = match &file.source {
+                        Some(source) => source.clone(),
+                        None => tx.query_one(
+                            &format!("SELECT source FROM {s}.file_content_cache WHERE file_version=$1"),
+                            &[&version],
+                        ).await?.get(0),
+                    };
+                    let symbols = parser::parse_file(&source, lang)?;
+                    let candidates = parser::extract_edge_candidates(&symbols, &source, &lang);
+                    pending_analysis.push((
+                        version,
+                        identity,
+                        serde_json::to_value(&symbols)?,
+                        serde_json::to_value(&candidates)?,
+                    ));
+                    (symbols, candidates)
+                }
+            };
+        if patchable && changed_files.contains(&file.path) {
+            affected_names.extend(symbols.iter().map(|symbol| symbol.name.clone()));
+        }
         for &(id, start) in chunks.get(&version).into_iter().flatten() {
             if let Some(sym) = symbols.iter().find(|sym| sym.range.start == start) {
                 nodes.push(graph::SymbolNodeInput {
@@ -957,12 +1266,38 @@ async fn rebuild_graph(
                 ranges.insert((file.path.clone(), start), id);
             }
         }
-        parsed.push((file, lang, symbols));
+        parsed.push((file, candidates));
     }
-    let known = names.keys().cloned().collect();
+    for batch in pending_analysis.chunks(128) {
+        let ids: Vec<Uuid> = batch.iter().map(|(id, _, _, _)| *id).collect();
+        let identities: Vec<&str> = batch
+            .iter()
+            .map(|(_, identity, _, _)| identity.as_str())
+            .collect();
+        let symbols: Vec<&serde_json::Value> =
+            batch.iter().map(|(_, _, symbols, _)| symbols).collect();
+        let candidates: Vec<&serde_json::Value> = batch
+            .iter()
+            .map(|(_, _, _, candidates)| candidates)
+            .collect();
+        tx.execute(
+            &format!("INSERT INTO {s}.file_analysis_cache(file_version,analysis_identity,symbols,candidates) SELECT * FROM unnest($1::uuid[],$2::text[],$3::jsonb[],$4::jsonb[])"),
+            &[&ids, &identities, &symbols, &candidates],
+        ).await?;
+    }
+    let known: std::collections::HashSet<String> = names.keys().cloned().collect();
     let mut edges = Vec::new();
-    for (file, lang, symbols) in parsed {
-        for edge in parser::extract_edges(&symbols, &file.source, &lang, &known) {
+    for (file, candidates) in parsed {
+        for edge in candidates
+            .into_iter()
+            .filter(|edge| known.contains(&edge.to_name))
+        {
+            if patchable
+                && !changed_files.contains(&file.path)
+                && !affected_names.contains(&edge.to_name)
+            {
+                continue;
+            }
             let Some(from) = ranges.get(&(file.path.clone(), edge.from_range.start)) else {
                 continue;
             };
@@ -988,8 +1323,65 @@ async fn rebuild_graph(
         // The primary checkout and legacy graph readers retain their existing
         // AGE representation. Linked checkouts use a single transactional row.
         store::ensure_graph(tx.client(), target.graph).await?;
-        graph::replace_graph(tx.client(), target.graph, &nodes, &edges).await?;
+        if patchable {
+            let changed_paths: Vec<String> = changed_files
+                .iter()
+                .map(|path| {
+                    target
+                        .root
+                        .join(path)
+                        .to_str()
+                        .map(str::to_owned)
+                        .context("non-UTF8 checkout root")
+                })
+                .collect::<Result<_>>()?;
+            let changed_nodes: Vec<_> = nodes
+                .iter()
+                .filter(|node| changed_paths.contains(&node.file_path))
+                .collect();
+            graph::patch_graph(
+                tx.client(),
+                target.graph,
+                &changed_paths,
+                &affected_names.into_iter().collect::<Vec<_>>(),
+                &nodes,
+                &changed_nodes,
+                &edges,
+            )
+            .await?;
+        } else {
+            graph::replace_graph(tx.client(), target.graph, &nodes, &edges).await?;
+        }
     } else {
+        if patchable {
+            let (old_symbols, old_edges) = old_snapshot.context("missing structural snapshot")?;
+            let changed_paths: std::collections::HashSet<_> = changed_files
+                .iter()
+                .map(|path| {
+                    target
+                        .root
+                        .join(path)
+                        .to_str()
+                        .map(str::to_owned)
+                        .context("non-UTF8 checkout root")
+                })
+                .collect::<Result<_>>()?;
+            let changed_ids: std::collections::HashSet<_> = old_symbols
+                .iter()
+                .filter(|symbol| changed_paths.contains(&symbol.file_path))
+                .map(|symbol| symbol.chunk_id)
+                .collect();
+            let affected_ids: std::collections::HashSet<_> = old_symbols
+                .iter()
+                .filter(|symbol| affected_names.contains(&symbol.name))
+                .map(|symbol| symbol.chunk_id)
+                .collect();
+            edges.extend(old_edges.into_iter().filter(|edge| {
+                !changed_ids.contains(&edge.from)
+                    && !changed_ids.contains(&edge.to)
+                    && !affected_ids.contains(&edge.to)
+            }));
+        }
         let symbols: Vec<Symbol> = nodes
             .into_iter()
             .map(|node| Symbol {

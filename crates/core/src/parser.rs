@@ -1,5 +1,6 @@
 use crate::types::{LineRange, StructuralRelation, SymbolKind};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Language {
@@ -20,7 +21,7 @@ pub fn detect_language(path: &str) -> Option<Language> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedSymbol {
     pub name: String,
     pub kind: SymbolKind,
@@ -29,7 +30,7 @@ pub struct ParsedSymbol {
 
 /// A directed structural relationship between two symbols in the same file,
 /// identified by their line ranges (resolved to chunk_ids by the pipeline).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedEdge {
     /// Range of the source symbol (the one that defines/calls).
     pub from_range: LineRange,
@@ -55,7 +56,20 @@ pub fn extract_edges(
     known: &std::collections::HashSet<String>,
 ) -> Vec<ParsedEdge> {
     let mut edges = extract_defines(symbols);
-    edges.extend(extract_calls(symbols, source, language, known));
+    edges.extend(extract_calls(symbols, source, language, Some(known)));
+    edges
+}
+
+/// Extract potential relationships before resolving names against a checkout.
+/// Keeping unresolved calls allows a later symbol addition to create edges
+/// without parsing an unchanged caller again.
+pub fn extract_edge_candidates(
+    symbols: &[ParsedSymbol],
+    source: &str,
+    language: &Language,
+) -> Vec<ParsedEdge> {
+    let mut edges = extract_defines(symbols);
+    edges.extend(extract_calls(symbols, source, language, None));
     edges
 }
 
@@ -90,7 +104,7 @@ fn extract_calls(
     symbols: &[ParsedSymbol],
     source: &str,
     language: &Language,
-    known: &std::collections::HashSet<String>,
+    known: Option<&std::collections::HashSet<String>>,
 ) -> Vec<ParsedEdge> {
     let mut parser = tree_sitter::Parser::new();
     let ts_lang = match language {
@@ -128,9 +142,9 @@ fn extract_calls(
         // Walk the function's subtree and collect call expression callee names.
         let callees = collect_callees(func_node, source, call_node_kind);
         for callee in callees {
-            // Only emit edges to symbols we know exist in this file, and skip
-            // self-calls.
-            if callee != sym.name && known.contains(&callee) {
+            // Candidate extraction retains unresolved callees; resolved
+            // extraction limits them to the caller-provided set. Skip self-calls.
+            if callee != sym.name && known.is_none_or(|names| names.contains(&callee)) {
                 edges.push(ParsedEdge {
                     from_range: sym.range.clone(),
                     to_name: callee,
@@ -574,6 +588,18 @@ pub fn chunk_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unresolved_call_survives_serialization_for_later_resolution() {
+        let source = "fn caller() {\n    future_target();\n}\n";
+        let symbols = parse_file(source, Language::Rust).unwrap();
+        let candidates = extract_edge_candidates(&symbols, source, &Language::Rust);
+        let stored = serde_json::to_string(&candidates).unwrap();
+        let restored: Vec<ParsedEdge> = serde_json::from_str(&stored).unwrap();
+        assert!(restored.iter().any(|edge| edge.to_name == "future_target"));
+        let known = std::collections::HashSet::new();
+        assert!(extract_edges(&symbols, source, &Language::Rust, &known).is_empty());
+    }
 
     #[test]
     fn minified_symbols_do_not_duplicate_the_same_source_span() {
