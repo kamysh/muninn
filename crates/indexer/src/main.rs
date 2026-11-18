@@ -45,26 +45,39 @@ async fn main() -> anyhow::Result<()> {
     let summary_task = repeated_events.start_summaries();
 
     let cfg = GlobalConfig::load()?;
-    let mut client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
     // Self-apply migrations on startup: the daemon may come up (launchd/systemd)
     // before any CLI command has migrated the DB, and every scan SELECTs the
     // current repo columns. Idempotent. Spec: schema is current before queries.
-    let mut migrate_client =
-        db::connect_with_app_name(&cfg.database, "muninn-index-migrate").await?;
+    let mut migrate_client = loop {
+        match db::connect_with_app_name(&cfg.database, "muninn-index-migrate").await {
+            Ok(client) => break client,
+            Err(error) => {
+                tracing::warn!("database unavailable at startup: {error:#}");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    _ = tokio::signal::ctrl_c() => return Ok(()),
+                }
+            }
+        }
+    };
     db::run_migrations(&mut migrate_client).await?;
     drop(migrate_client);
 
     // Dedicated connection for LISTEN/NOTIFY.
     // The spawned task drives the connection; notifications arrive via the channel.
     // Combined with the 60 s fallback poll, no notifications are permanently lost.
-    let (listen_client, mut notify_rx) = db::connect_listener(&cfg.database).await?;
-    listen_client
-        .execute("LISTEN muninn_repos_changed", &[])
-        .await?;
-
-    listen_client
-        .execute("LISTEN muninn_family_policy_changed", &[])
-        .await?;
+    let (mut client, mut listen_client, mut notify_rx) = loop {
+        match reconnect_dispatch(&cfg).await {
+            Ok(connections) => break connections,
+            Err(error) => {
+                tracing::warn!("database unavailable at startup: {error:#}");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    _ = tokio::signal::ctrl_c() => return Ok(()),
+                }
+            }
+        }
+    };
 
     tracing::info!("muninn-index started — watching all repos registered in the database");
 
@@ -83,8 +96,32 @@ async fn main() -> anyhow::Result<()> {
 
     let mut notifications_open = true;
     loop {
+        if client.is_closed() || !notifications_open || listen_client.is_closed() {
+            for (_, (handle, _)) in watched.drain() {
+                handle.abort();
+            }
+            match reconnect_dispatch(&cfg).await {
+                Ok((new_client, new_listener, new_rx)) => {
+                    client = new_client;
+                    listen_client = new_listener;
+                    notify_rx = new_rx;
+                    notifications_open = true;
+                    tracing::info!("database connections restored");
+                    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+                }
+                Err(error) => {
+                    tracing::warn!("database reconnect failed: {error:#}");
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        _ = tokio::signal::ctrl_c() => break,
+                    }
+                }
+            }
+            continue;
+        }
         tokio::select! {
             _ = wait_for_dispatch(&mut notify_rx, &mut notifications_open) => {}
+            _ = wait_for_closed_client(&client) => {}
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("shutting down");
                 break;
@@ -96,6 +133,27 @@ async fn main() -> anyhow::Result<()> {
     summary_task.abort();
     repeated_events.flush_stderr();
     Ok(())
+}
+
+async fn wait_for_closed_client(client: &tokio_postgres::Client) {
+    while !client.is_closed() {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+async fn reconnect_dispatch(
+    cfg: &GlobalConfig,
+) -> anyhow::Result<(
+    tokio_postgres::Client,
+    tokio_postgres::Client,
+    tokio::sync::mpsc::UnboundedReceiver<tokio_postgres::Notification>,
+)> {
+    let client = db::connect_with_app_name(&cfg.database, "muninn-index").await?;
+    let (listener, rx) = db::connect_listener(&cfg.database).await?;
+    listener
+        .batch_execute("LISTEN muninn_repos_changed; LISTEN muninn_family_policy_changed")
+        .await?;
+    Ok((client, listener, rx))
 }
 
 /// A closed receiver stays ready forever; remove it from the select rather
@@ -112,7 +170,8 @@ async fn wait_for_dispatch<T>(
                     return;
                 }
                 *notifications_open = false;
-                tracing::warn!("LISTEN channel closed — continuing on poll");
+                tracing::warn!("LISTEN channel closed — reconnecting");
+                return;
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
                 tracing::debug!("60 s poll tick");
@@ -127,16 +186,16 @@ mod dispatch_tests {
     use super::*;
 
     #[tokio::test]
-    async fn closed_notifications_wait_for_poll_instead_of_spinning() {
+    async fn closed_notifications_trigger_reconnect() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         drop(tx);
         let mut open = true;
-        assert!(tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_millis(25),
             wait_for_dispatch(&mut rx, &mut open),
         )
         .await
-        .is_err());
+        .unwrap();
         assert!(!open);
         // Subsequent dispatcher iterations also wait instead of re-logging.
         assert!(tokio::time::timeout(

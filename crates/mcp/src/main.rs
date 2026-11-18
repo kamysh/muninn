@@ -28,36 +28,39 @@ async fn main() -> anyhow::Result<()> {
     let _cli = Cli::parse();
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
-    let client = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
-    // Self-apply migrations on startup so the server works against a DB that
-    // hasn't been migrated yet (e.g. right after a binary upgrade). Idempotent.
-    let mut migrate_client = db::connect_with_app_name(&cfg.database, "muninn-mcp-migrate").await?;
-    db::run_migrations(&mut migrate_client).await?;
-    drop(migrate_client);
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);
-    let ctx = Arc::new(SearchContext {
-        config: cfg.clone(),
-        family_embedders: Default::default(),
-        client: Arc::new(client),
-        embedder,
-        embedding_dim,
-        record_usage: cfg.mcp.record_usage,
-    });
+    let mut ctx = match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+        Ok(connected) => Some(connected),
+        Err(error) => {
+            tracing::warn!("database connection unavailable: {error:#}");
+            None
+        }
+    };
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin);
+    let mut lines = BufReader::new(stdin).lines();
     let mut writer = stdout;
-    let mut line = String::new();
+    let mut reconnect_timer = tokio::time::interval(Duration::from_secs(1));
 
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
+        let line = tokio::select! {
+            result = lines.next_line() => result?,
+            _ = reconnect_timer.tick() => {
+                if ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
+                    if let Ok(connected) = connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+                        ctx = Some(connected);
+                        tracing::info!("database connection restored");
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(line) = line else {
             break;
-        }
+        };
 
         let request: serde_json::Value = match serde_json::from_str(line.trim()) {
             Ok(v) => v,
@@ -65,7 +68,17 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let is_notification = request.get("id").is_none();
-        let response = handle_request(&ctx, &request).await;
+        let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        if method == "tools/call" && ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
+            match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+                Ok(connected) => ctx = Some(connected),
+                Err(error) => {
+                    tracing::warn!("database connection unavailable: {error:#}");
+                    ctx = None;
+                }
+            }
+        }
+        let response = handle_request(ctx.as_ref(), &request).await;
         if !is_notification {
             let mut out = serde_json::to_string(&response)?;
             out.push('\n');
@@ -77,7 +90,33 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_json::Value {
+async fn connect_context(
+    cfg: &GlobalConfig,
+    embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend>,
+    embedding_dim: usize,
+) -> anyhow::Result<SearchContext> {
+    let client = tokio::time::timeout(
+        Duration::from_secs(3),
+        db::connect_with_app_name(&cfg.database, "muninn-mcp"),
+    )
+    .await??;
+    let mut migrate_client = tokio::time::timeout(
+        Duration::from_secs(3),
+        db::connect_with_app_name(&cfg.database, "muninn-mcp-migrate"),
+    )
+    .await??;
+    db::run_migrations(&mut migrate_client).await?;
+    Ok(SearchContext {
+        config: cfg.clone(),
+        family_embedders: Default::default(),
+        client: Arc::new(client),
+        embedder,
+        embedding_dim,
+        record_usage: cfg.mcp.record_usage,
+    })
+}
+
+async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) -> serde_json::Value {
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req
@@ -394,6 +433,9 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
             })
         }
         "tools/call" => {
+            let Some(ctx) = ctx else {
+                return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Cannot reach the database. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+            };
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params
                 .get("arguments")
@@ -436,6 +478,9 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                 }
                 Err(e) => {
                     tracing::warn!(tool = tool_name, error = %e, "tool call failed");
+                    if ctx.client.is_closed() {
+                        return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Database connection lost. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+                    }
                     serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": id,
