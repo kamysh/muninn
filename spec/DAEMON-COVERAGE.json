@@ -24,14 +24,22 @@
   },
   "calls": {
     "main:main": {
-      ".execute": {"count": 2, "targets": ["control:notification"]},
-      "db::connect_listener": {"count": 1, "targets": ["control:startup", "control:notification"]},
-      "db::connect_with_app_name": {"count": 2, "targets": ["control:startup"]},
+      "db::connect_with_app_name": {"count": 1, "targets": ["control:startup"]},
       "db::exit_on_migration_failure": {"count": 1, "targets": ["control:startup"]},
       "db::run_migrations": {"count": 1, "targets": ["job:preparePublic"]},
-      "scan_and_dispatch": {"count": 2, "targets": ["job:fleetScan"]},
-      "tokio::signal::ctrl_c": {"count": 1, "targets": ["control:shutdown"]},
+      "reconnect_dispatch": {"count": 2, "targets": ["control:startup", "control:notification"]},
+      "scan_and_dispatch": {"count": 3, "targets": ["job:fleetScan"]},
+      "tokio::signal::ctrl_c": {"count": 4, "targets": ["control:shutdown"]},
+      "tokio::time::sleep": {"count": 3, "targets": ["control:startup", "control:notification"]},
+      "wait_for_closed_client": {"count": 1, "targets": ["control:notification", "job:fleetScan"]},
       "wait_for_dispatch": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
+    },
+    "main:reconnect_dispatch": {
+      "db::connect_listener": {"count": 1, "targets": ["control:startup", "control:notification"]},
+      "db::connect_with_app_name": {"count": 1, "targets": ["control:startup", "control:notification"]}
+    },
+    "main:wait_for_closed_client": {
+      "tokio::time::sleep": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
     },
     "main:wait_for_dispatch": {
       "tokio::time::sleep": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
@@ -63,9 +71,13 @@
       "watch_family": {"count": 1, "targets": ["job:reconcileFamily", "job:watchBatch"]}
     },
     "watcher:watch_family": {
+      ".completed": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
+      ".select": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "notify::recommended_watcher": {"count": 1, "targets": ["job:watchBatch"]},
       "pipeline::index_repo": {"count": 1, "targets": ["job:reconcileFamily"]},
+      "tokio::time::Instant::now": {"count": 4, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "tokio::time::sleep": {"count": 2, "targets": ["job:watchBatch"]},
+      "tokio::time::sleep_until": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "worktrees::reconcile_changed_family": {"count": 1, "targets": ["job:reconcileFamily"]}
     },
     "logging:start_summaries": {

@@ -12,7 +12,7 @@ what the mechanical checks enforce, and which gaps remain — honestly.
   names; 16 planned administration and continuation entries reported absent.
 - `check_cli_catalog.py`: 70 CLI/TUI declaration variants have formal catalog
   mappings.
-- `check_daemon_catalog.py`: 21 formal jobs and 39 recorded daemon call
+- `check_daemon_catalog.py`: 21 formal jobs and 43 recorded daemon call
   identities checked; 4 adapters reported incomplete.
 - `check_record_correspondence.py`: 36 formal record categories manifestly
   accounted for; 52 Rust write sites declared and matched.

@@ -32,6 +32,12 @@ import Muninn.Continuation
 import Muninn.FirstSearch
 import Muninn.StagedContent
 import Muninn.ReusePolicy
+import Muninn.IncrementalIdentity
+import Muninn.IncrementalObservation
+import Muninn.IncrementalStructure
+import Muninn.IncrementalPublication
+import Muninn.IncrementalWorktree
+import Muninn.IncrementalEventual
 import Muninn.IndexWorkControl
 import Muninn.FairScheduling
 import Muninn.StatusReport
