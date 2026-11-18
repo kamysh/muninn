@@ -140,7 +140,7 @@ pub async fn insert_reader(
     client
         .execute(
             &format!(
-                "INSERT INTO {} (id, references, payload) VALUES ($1,$2,$3)",
+                "INSERT INTO {} (id, \"references\", payload) VALUES ($1,$2,$3)",
                 qualified(schema, "active_readers")
             ),
             &[&id, &references, &payload],

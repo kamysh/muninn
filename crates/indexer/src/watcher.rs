@@ -11,6 +11,32 @@ use tokio::sync::Mutex;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+const AUDIT_INTERVAL: Duration = Duration::from_secs(300);
+
+struct AuditSchedule {
+    next: tokio::time::Instant,
+}
+
+impl AuditSchedule {
+    fn select(
+        &self,
+        changed: Option<Vec<PathBuf>>,
+        now: tokio::time::Instant,
+    ) -> Option<Vec<PathBuf>> {
+        if now >= self.next {
+            None
+        } else {
+            changed
+        }
+    }
+
+    fn completed(&mut self, full: bool, success: bool, now: tokio::time::Instant) {
+        if full && success {
+            self.next = now + AUDIT_INTERVAL;
+        }
+    }
+}
+
 // Client, ids, embedder, debounce, shared state and config knobs — all distinct
 // concerns; bundling them into a struct would not improve clarity.
 #[allow(clippy::too_many_arguments)]
@@ -248,27 +274,38 @@ async fn watch_family(
     let (tx, mut rx) = mpsc::channel::<PathBuf>(1024);
     let overflow = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let lost = Arc::clone(&overflow);
+    let rescan_root = root.clone();
     let mut watcher =
         notify::recommended_watcher(move |event: notify::Result<Event>| match event {
-            Ok(event)
-                if matches!(
+            Ok(event) => {
+                if event.need_rescan() {
+                    lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = tx.try_send(rescan_root.clone());
+                } else if matches!(
                     event.kind,
                     EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) =>
-            {
-                for path in event.paths {
-                    if tx.try_send(path).is_err() {
+                ) {
+                    if event.paths.is_empty() {
                         lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let _ = tx.try_send(rescan_root.clone());
+                    }
+                    for path in event.paths {
+                        if tx.try_send(path).is_err() {
+                            lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                 }
             }
             Err(_) => {
                 lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = tx.try_send(rescan_root.clone());
             }
-            _ => {}
         })?;
     let mut watched = std::collections::HashSet::new();
     let mut changed: Option<Vec<PathBuf>> = None;
+    let mut audit = AuditSchedule {
+        next: tokio::time::Instant::now(),
+    };
     loop {
         // Install watches before scanning so edits during reconciliation are
         // queued for another pass. Failed/missing roots will be retried.
@@ -311,6 +348,10 @@ async fn watch_family(
         let git_family = muninn_core::repo_resolver::discover_git_checkout(&root)
             .await?
             .is_some_and(|g| g.root == root);
+        if git_family {
+            changed = audit.select(changed, tokio::time::Instant::now());
+        }
+        let full_audit = changed.is_none();
         let result = if git_family {
             muninn_core::worktrees::reconcile_changed_family(
                 &mut client,
@@ -343,6 +384,9 @@ async fn watch_family(
         let mut retry_all = false;
         match result {
             Ok((_, skips)) => {
+                if git_family {
+                    audit.completed(full_audit, skips.is_empty(), tokio::time::Instant::now());
+                }
                 for skip in skips {
                     tracing::warn!(
                         "retained index for {}: {}",
@@ -362,14 +406,52 @@ async fn watch_family(
             event=rx.recv()=>{
                 if let Some(path)=event {retry.push(path);} else {return Ok(());}
                 tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
-                while let Ok(path)=rx.try_recv(){retry.push(path);}
+                // Bound each drain so a continuous event stream cannot keep
+                // the loop from checking the full-audit deadline.
+                while retry.len() < 1024 {
+                    match rx.try_recv() {
+                        Ok(path) => retry.push(path),
+                        Err(_) => break,
+                    }
+                }
             }
             _=tokio::time::sleep(Duration::from_secs(60))=>{}
+            _=tokio::time::sleep_until(audit.next), if audit.next > tokio::time::Instant::now()=>{}
         }
         changed = if retry_all || overflow.swap(false, std::sync::atomic::Ordering::Relaxed) {
             None
         } else {
             Some(retry)
         };
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    #[test]
+    fn audit_deadline_survives_events_and_failed_audits() {
+        let start = tokio::time::Instant::now();
+        let mut audit = AuditSchedule { next: start };
+        assert!(audit
+            .select(Some(vec![PathBuf::from("changed")]), start)
+            .is_none());
+        audit.completed(true, true, start);
+        let event = || Some(vec![PathBuf::from("changed")]);
+        assert!(audit
+            .select(event(), start + Duration::from_secs(299))
+            .is_some());
+        assert!(audit
+            .select(event(), start + Duration::from_secs(300))
+            .is_none());
+        audit.completed(true, false, start + Duration::from_secs(300));
+        assert!(audit
+            .select(event(), start + Duration::from_secs(301))
+            .is_none());
+        audit.completed(true, true, start + Duration::from_secs(301));
+        assert!(audit
+            .select(event(), start + Duration::from_secs(302))
+            .is_some());
     }
 }

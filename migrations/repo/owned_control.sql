@@ -36,7 +36,7 @@ CREATE INDEX cleanup_work_operation_idx ON cleanup_work (operation_id);
 
 CREATE TABLE active_readers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    references uuid[] NOT NULL DEFAULT '{}',
+    "references" uuid[] NOT NULL DEFAULT '{}',
     payload text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );

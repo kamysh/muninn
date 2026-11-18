@@ -12,7 +12,7 @@ what the mechanical checks enforce, and which gaps remain — honestly.
   names; 16 planned administration and continuation entries reported absent.
 - `check_cli_catalog.py`: 70 CLI/TUI declaration variants have formal catalog
   mappings.
-- `check_daemon_catalog.py`: 21 formal jobs and 38 recorded daemon call
+- `check_daemon_catalog.py`: 21 formal jobs and 43 recorded daemon call
   identities checked; 4 adapters reported incomplete.
 - `check_record_correspondence.py`: 36 formal record categories manifestly
   accounted for; 52 Rust write sites declared and matched.
@@ -32,16 +32,23 @@ general quantified laws over the owned world.
 
 ## Remaining gaps (recorded, not hidden)
 
-1. **Seven record categories have no Rust realization** and stay explicitly
+1. ~~**Seven record categories have no Rust realization** and stay explicitly
    unmapped in `RECORD-CORRESPONDENCE.json`: `acceptedWork`, `activeReader`,
    `cleanupWork`, `continuation`, `legacy`, `receipt`, `staging`. Follow-up:
-   #202.
-2. **The exclusion cleanup adapter is absent.** No Rust cleanup module exists;
+   #202.~~ Resolved by #202: the seven categories have family-owned tables in
+   `migrations/repo/owned_control.sql` and write sites in
+   `crates/core/src/owned_control.rs`.
+2. ~~**The exclusion cleanup adapter is absent.** No Rust cleanup module exists;
    the crash-injection boundary check (#53) fails by design until the adapter
-   registers its commit boundaries. Follow-up: #203.
-3. **The planned administration and continuation MCP adapters are absent**
+   registers its commit boundaries. Follow-up: #203.~~ Resolved by #203:
+   `crates/core/src/cleanup.rs` registers all five commit boundaries and
+   `scripts/check_crash_boundaries.py` verifies them against the manifest in
+   the pre-commit hook and CI.
+3. ~~**The planned administration and continuation MCP adapters are absent**
    (16 wire names specified in the catalog, no runtime adapters). Follow-up:
-   #204.
+   #204.~~ Resolved by #204: `crates/mcp/src/admin.rs` implements the 16
+   handlers, with the catalog check confirming 24 advertised and dispatched
+   tools and 0 planned.
 4. **The CLI interrupt handler is recorded missing** (`CatalogSources` points
    it at `run_foreground_index`, issue #52) — foreground Ctrl-C currently
    exits with status 130 instead of pausing accepted work.

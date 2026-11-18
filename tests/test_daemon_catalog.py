@@ -106,6 +106,15 @@ class DaemonCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(sources=sources)
 
+    def test_missing_closed_client_wakeup_is_rejected(self):
+        sources = dict(self.sources)
+        name = check.FILES['main']
+        changed = sources[name].replace('wait_for_closed_client(&client)', 'wait_for_dispatch(&mut notify_rx, &mut notifications_open)', 1)
+        self.assertNotEqual(changed, sources[name])
+        sources[name] = changed
+        with self.assertRaises(ValueError):
+            self.validate(sources=sources)
+
     def test_closed_receiver_guard_cannot_be_removed(self):
         sources = dict(self.sources)
         name = check.FILES['main']

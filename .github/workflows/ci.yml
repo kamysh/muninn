@@ -26,5 +26,7 @@ jobs:
           python3 scripts/check_mcp_catalog.py
           (cd scripts && python3 check_cli_catalog.py)
           (cd scripts && python3 check_daemon_catalog.py)
+          python3 scripts/check_record_correspondence.py
+          python3 scripts/check_crash_boundaries.py
       - name: Checker tests
         run: python3 -m unittest discover -s tests
