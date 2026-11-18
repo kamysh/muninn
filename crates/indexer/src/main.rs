@@ -162,21 +162,17 @@ async fn wait_for_dispatch<T>(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>,
     notifications_open: &mut bool,
 ) {
-    loop {
-        tokio::select! {
-            msg = rx.recv(), if *notifications_open => {
-                if msg.is_some() {
-                    tracing::debug!("received repository change notification");
-                    return;
-                }
+    tokio::select! {
+        msg = rx.recv(), if *notifications_open => {
+            if msg.is_some() {
+                tracing::debug!("received repository change notification");
+            } else {
                 *notifications_open = false;
                 tracing::warn!("LISTEN channel closed — reconnecting");
-                return;
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                tracing::debug!("60 s poll tick");
-                return;
-            }
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+            tracing::debug!("60 s poll tick");
         }
     }
 }
