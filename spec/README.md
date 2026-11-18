@@ -148,6 +148,12 @@ with Rust or database transactions.
 
 `ReusePolicy` identifies analysis by exact bytes and versioned settings, and vectors by exact input and profile. Completed compatible work is reused; source spans are unique half-open byte intervals. Ordinary indexing retains saved work, while an explicit clean rebuild clears only the selected family. The cache-to-storage correspondence remains under #52.
 
+`IncrementalObservation`, `IncrementalIdentity`, `IncrementalStructure`, and
+`IncrementalPublication` specify event coverage, exact-input reuse, selected
+structural relationships and guarded publication. See
+[incremental reconciliation](INCREMENTAL-RECONCILIATION.md) for the explicit
+filesystem, parser, policy and runtime correspondence boundaries.
+
 ## Staged text and vectors
 
 `StagedContent` permits text and symbols to publish while vector work remains pending for either file tier. Vector readiness requires a valid value for the same source and embedding profile, and coverage is derived from the stored state. Runtime correspondence and compatible-work reuse remain separate obligations.
@@ -214,19 +220,21 @@ implementation correspondence remain separate obligations.
 (admission, deletion batches, receipt checkpoints, follow-up capture,
 finalization) and `muninn-setup/crash-injection-check.sh` checks them inside
 the guarded disposable fixture against the adapter's `CRASH_BOUNDARIES`
-registration. The check stays red until the adapter registers every boundary;
-retry assertions land with the adapter and never as a happy-path substitute.
+registration. The adapter registers all five boundaries
+(`crates/core/src/cleanup.rs`) and `scripts/check_crash_boundaries.py`
+verifies the registration in the pre-commit hook and CI; retry assertions land
+with the adapter and never as a happy-path substitute.
 See [crash injection](CRASH-INJECTION.md).
 
 ## Final coverage audit
 
 [AUDIT.md](AUDIT.md) records the complete verification pass (aggregate plus
-all mechanical checkers and their tests) and the honest gap list: seven
-unrealized record categories (#202), the absent exclusion adapter (#203), the
-unimplemented administration MCP adapters (#204), the missing CLI interrupt
-handler, and runtime correspondence as an explicit boundary for every
-operation family. The audit never claims that type checking proves Rust
-correct.
+all mechanical checkers and their tests) and the honest gap list: the seven
+record categories realized by #202, the exclusion cleanup adapter with
+registered crash boundaries from #203, the administration MCP adapters from
+#204, the missing CLI interrupt handler, and runtime correspondence as an
+explicit boundary for every operation family. The audit never claims that
+type checking proves Rust correct.
 
 ## Record and effect correspondence
 
@@ -234,9 +242,10 @@ correct.
 its physical realization (table, column, derived representation or an explicit
 unmapped status), and `check_record_correspondence.py` enforces both directions
 against the workspace write statements: undeclared statements, missing
-manifest entries and drifted sites all fail. Seven categories stay explicitly
-unmapped (acceptedWork, activeReader, cleanupWork, continuation, legacy,
-receipt, staging) as separate repair work. See
+manifest entries and drifted sites all fail. All 36 categories are mapped;
+the seven previously unmapped ones have family-owned tables
+(`accepted_work`, `active_readers`, `cleanup_work`, `continuations`,
+`legacy_files`, `receipts`, `staging`). See
 [record correspondence](RECORD-CORRESPONDENCE.md). Matching names does not
 prove transition semantics; crash injection and the final audit remain #53/#54.
 

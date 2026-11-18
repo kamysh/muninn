@@ -5,7 +5,8 @@ with resumable background jobs registered separately. `CatalogInputs` defines
 structural input types; `Catalog` maps closed adapters to their shared intents;
 `CatalogSources` assigns every request an independent outcome owner and an
 explicit current-source or missing-adapter record. Approved administration wire
-names are specified in `Catalog`; their runtime adapters remain absent.
+names and the continuation entry are implemented as MCP adapters in
+`crates/mcp/src/admin.rs`.
 
 This is the closed inventory, not the proof-requiring execution dispatcher.
 `sourceRecorded` means that a matching Rust declaration exists, not that its
@@ -135,8 +136,8 @@ tool-call transport routes. Unsupported source forms, duplicates and mismatches
 are rejected. `tests/test_mcp_catalog.py` exercises missing, extra, duplicate,
 misrouted and unsupported entries.
 
-The checker validates the separately named planned administration and
-continuation entries and reports that their current runtime adapters are absent.
+The checker validates every advertised and dispatched wire name, including the
+administration and continuation adapters in `crates/mcp/src/admin.rs`.
 As agreed for #48, proof-carrying operation enforcement and the mandatory gate
 belong to #51; Rust effect correspondence remains #52. Matching names and
 sites do not claim handler correctness.

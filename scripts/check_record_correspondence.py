@@ -45,9 +45,10 @@ def rust_sites():
         rel = str(path.relative_to(ROOT))
         if 'tests' in rel or '_test' in rel:
             continue
-        for number, line in enumerate(path.read_text().splitlines(), 1):
+        lines = path.read_text().splitlines()
+        for number, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('//') or 'ON CONFLICT' in line or 'DO UPDATE' in line:
+            if stripped.startswith('//') or stripped.startswith('ON CONFLICT') or stripped.startswith('DO UPDATE'):
                 continue
             if STATEMENT.search(line):
                 found[(rel, number)] = line
@@ -97,15 +98,22 @@ def _verify(constructors, manifest, found):
     if missing:
         raise ValueError('undeclared persistent write statements: ' +
                          ', '.join(f'{f}:{n}' for f, n in missing))
+    sources = {}
     for key, entry in declared.items():
         if key not in found:
             raise ValueError(f'manifested site {key[0]}:{key[1]} no longer has a write statement')
+        if key[0] not in sources:
+            sources[key[0]] = (ROOT / key[0]).read_text().splitlines()
+        lines = sources[key[0]]
+        window = '\n'.join(lines[key[1] - 1:key[1] + 2])
         line = found[key]
         if entry.get('template'):
             if ('{%s}.' % entry['template']) not in line and '{%s}' % entry['template'] not in line:
                 raise ValueError(f'site {key[0]}:{key[1]} no longer uses the declared template')
-        elif entry['table'] and entry['table'] not in line and 'public.' + entry['table'] not in line:
-            raise ValueError(f'site {key[0]}:{key[1]} no longer references the declared table')
+        elif entry['table']:
+            table = entry['table']
+            if table not in window and ('public.' + table) not in window and ('.' + table) not in window:
+                raise ValueError(f'site {key[0]}:{key[1]} no longer references the declared table')
     site_tables = {entry['table'] for entry in declared.values() if entry.get('table')}
     unmodeled = sorted(site_tables - set(physical))
     if unmodeled:

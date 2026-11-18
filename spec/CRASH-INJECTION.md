@@ -16,7 +16,7 @@ across every owned record category.
 
 The adapter registers the boundaries it commits through in a
 `pub const CRASH_BOUNDARIES: &[&str]` table
-(`crates/core/src/cleanup/mod.rs`).
+(`crates/core/src/cleanup.rs`).
 
 ## Harness
 
@@ -29,8 +29,12 @@ happy-path test for the missing retry assertion.
 
 ## Current status
 
-The exclusion adapter is absent: no Rust cleanup module exists, no boundary is
-registered, and the check fails by design. Retry-through-the-real-adapter
-assertions land together with the adapter; this slice authorizes no runtime
-repair or deployment. Observed results must be real; the model's outcome is
-the assertion target, not the implementation's current behavior.
+The exclusion cleanup adapter is present: `crates/core/src/cleanup.rs`
+implements reader admission, bounded batch deletion, the receipt progress
+checkpoint, follow-up capture and finalization, and registers all five commit
+boundaries in the `CRASH_BOUNDARIES` table. `scripts/check_crash_boundaries.py`
+verifies the registration against the manifest in the pre-commit hook and CI.
+Retry-through-the-real-adapter assertions still land together with the
+harness slice; this slice authorizes no runtime repair or deployment.
+Observed results must be real; the model's outcome is the assertion target,
+not the implementation's current behavior.

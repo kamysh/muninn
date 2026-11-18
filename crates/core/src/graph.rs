@@ -202,6 +202,107 @@ pub(crate) async fn replace_graph(
     Ok(())
 }
 
+/// Update only changed-file nodes and edges whose resolution may have changed.
+/// Errors propagate to the caller's checkout publication transaction.
+pub(crate) async fn patch_graph(
+    client: &Client,
+    id: Uuid,
+    changed_paths: &[String],
+    affected_names: &[String],
+    all_nodes: &[SymbolNodeInput],
+    changed_nodes: &[&SymbolNodeInput],
+    affected_edges: &[StructuralEdge],
+) -> Result<()> {
+    let graph = graph_name(id);
+    const BATCH: usize = 256;
+    for paths in changed_paths.chunks(BATCH) {
+        let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
+        let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (n {{file_path:r.path}}) DETACH DELETE n $$, $1) AS (v ag_catalog.agtype)");
+        let rows: Vec<_> = paths
+            .iter()
+            .map(|path| serde_json::json!({"path":path}))
+            .collect();
+        age_execute(
+            client,
+            &stmt,
+            &sql,
+            &serde_json::json!({"rows":rows}).to_string(),
+        )
+        .await
+        .context("delete changed AGE nodes")?;
+    }
+    for names in affected_names.chunks(BATCH) {
+        let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
+        let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH ()-[e]->(b {{name:r.name}}) DELETE e $$, $1) AS (v ag_catalog.agtype)");
+        let rows: Vec<_> = names
+            .iter()
+            .map(|name| serde_json::json!({"name":name}))
+            .collect();
+        age_execute(
+            client,
+            &stmt,
+            &sql,
+            &serde_json::json!({"rows":rows}).to_string(),
+        )
+        .await
+        .context("delete AGE edges for changed target names")?;
+    }
+    for kind in [
+        SymbolKind::Function,
+        SymbolKind::Class,
+        SymbolKind::Module,
+        SymbolKind::Import,
+    ] {
+        let label = kind_label(&kind);
+        let rows: Vec<_> = changed_nodes.iter().filter(|node| node.kind == kind)
+            .map(|node| serde_json::json!({"chunk_id":node.chunk_id.to_string(),"name":node.name,"kind":label,"file_path":node.file_path,"start_line":node.start_line,"end_line":node.end_line})).collect();
+        for batch in rows.chunks(BATCH) {
+            let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r CREATE (n:{label} {{chunk_id:r.chunk_id,name:r.name,kind:r.kind,file_path:r.file_path,start_line:r.start_line,end_line:r.end_line}}) $$, $1) AS (v ag_catalog.agtype)");
+            age_execute(
+                client,
+                &stmt,
+                &sql,
+                &serde_json::json!({"rows":batch}).to_string(),
+            )
+            .await
+            .context("create changed AGE nodes")?;
+        }
+    }
+    let kinds: std::collections::HashMap<_, _> = all_nodes
+        .iter()
+        .map(|node| (node.chunk_id, kind_label(&node.kind)))
+        .collect();
+    let mut groups = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    for edge in affected_edges {
+        if let (Some(from), Some(to)) = (kinds.get(&edge.from), kinds.get(&edge.to)) {
+            groups
+                .entry((relation_label(&edge.relation), *from, *to))
+                .or_default()
+                .insert((edge.from, edge.to));
+        }
+    }
+    for ((relation, from, to), pairs) in groups {
+        let rows: Vec<_> = pairs
+            .into_iter()
+            .map(|(a, b)| serde_json::json!({"from":a.to_string(),"to":b.to_string()}))
+            .collect();
+        for batch in rows.chunks(BATCH) {
+            let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (a:{from} {{chunk_id:r.from}}) MATCH (b:{to} {{chunk_id:r.to}}) CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
+            age_execute(
+                client,
+                &stmt,
+                &sql,
+                &serde_json::json!({"rows":batch}).to_string(),
+            )
+            .await
+            .context("create affected AGE edges")?;
+        }
+    }
+    Ok(())
+}
+
 /// Input for one symbol node in a batch upsert.
 pub struct SymbolNodeInput {
     pub chunk_id: Uuid,

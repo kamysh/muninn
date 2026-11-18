@@ -1,3 +1,4 @@
+mod admin;
 mod tools;
 
 use clap::Parser;
@@ -23,39 +24,43 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    db::exit_on_migration_failure();
     let _cli = Cli::parse();
     let cfg = GlobalConfig::load()?;
     let _log_guard = init_logging(&cfg)?;
-    let client = db::connect_with_app_name(&cfg.database, "muninn-mcp").await?;
-    // Self-apply migrations on startup so the server works against a DB that
-    // hasn't been migrated yet (e.g. right after a binary upgrade). Idempotent.
-    let mut migrate_client = db::connect_with_app_name(&cfg.database, "muninn-mcp-migrate").await?;
-    db::run_migrations(&mut migrate_client).await?;
-    drop(migrate_client);
     let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);
-    let ctx = Arc::new(SearchContext {
-        config: cfg.clone(),
-        family_embedders: Default::default(),
-        client: Arc::new(client),
-        embedder,
-        embedding_dim,
-        record_usage: cfg.mcp.record_usage,
-    });
+    let mut ctx = match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+        Ok(connected) => Some(connected),
+        Err(error) => {
+            tracing::warn!("database connection unavailable: {error:#}");
+            None
+        }
+    };
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin);
+    let mut lines = BufReader::new(stdin).lines();
     let mut writer = stdout;
-    let mut line = String::new();
+    let mut reconnect_timer = tokio::time::interval(Duration::from_secs(1));
 
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
+        let line = tokio::select! {
+            result = lines.next_line() => result?,
+            _ = reconnect_timer.tick() => {
+                if ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
+                    if let Ok(connected) = connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+                        ctx = Some(connected);
+                        tracing::info!("database connection restored");
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(line) = line else {
             break;
-        }
+        };
 
         let request: serde_json::Value = match serde_json::from_str(line.trim()) {
             Ok(v) => v,
@@ -63,7 +68,17 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let is_notification = request.get("id").is_none();
-        let response = handle_request(&ctx, &request).await;
+        let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        if method == "tools/call" && ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
+            match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
+                Ok(connected) => ctx = Some(connected),
+                Err(error) => {
+                    tracing::warn!("database connection unavailable: {error:#}");
+                    ctx = None;
+                }
+            }
+        }
+        let response = handle_request(ctx.as_ref(), &request).await;
         if !is_notification {
             let mut out = serde_json::to_string(&response)?;
             out.push('\n');
@@ -75,7 +90,33 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_json::Value {
+async fn connect_context(
+    cfg: &GlobalConfig,
+    embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend>,
+    embedding_dim: usize,
+) -> anyhow::Result<SearchContext> {
+    let client = tokio::time::timeout(
+        Duration::from_secs(3),
+        db::connect_with_app_name(&cfg.database, "muninn-mcp"),
+    )
+    .await??;
+    let mut migrate_client = tokio::time::timeout(
+        Duration::from_secs(3),
+        db::connect_with_app_name(&cfg.database, "muninn-mcp-migrate"),
+    )
+    .await??;
+    db::run_migrations(&mut migrate_client).await?;
+    Ok(SearchContext {
+        config: cfg.clone(),
+        family_embedders: Default::default(),
+        client: Arc::new(client),
+        embedder,
+        embedding_dim,
+        record_usage: cfg.mcp.record_usage,
+    })
+}
+
+async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) -> serde_json::Value {
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req
@@ -210,12 +251,191 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                                 },
                                 "required": ["repo"]
                             }
-                        }
+                        },
+                        {
+                            "name": "inspect_policy",
+                            "description": "Inspect the current stored policy and effective configuration for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "check_policy",
+                            "description": "Validate a policy draft without writing anything.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "apply_policy",
+                            "description": "Apply a validated policy draft atomically.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "preflight_family",
+                            "description": "Creation defaults and advice for an unregistered directory.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "register_family",
+                            "description": "Register a directory with a frozen creation policy.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "start_family",
+                            "description": "Authorize indexing for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "reindex_family",
+                            "description": "Run the foreground index for a registered family.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "pause_family",
+                            "description": "Pause indexing while preserving accepted work.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "resume_family",
+                            "description": "Resume paused indexing.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "cancel_work",
+                            "description": "Cancel accepted work for one operation; committed results stay.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "operation_id": {"type": "string"}
+                                },
+                                "required": ["repo", "operation_id"]
+                            }
+                        },
+                        {
+                            "name": "inspect_status",
+                            "description": "The family's registration, indexing and usage snapshot.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "unregister_family",
+                            "description": "Retire a registered family without deleting index data.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "forget_repository",
+                            "description": "Unregister and delete all owned index data.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}
+                                },
+                                "required": ["repo"]
+                            }
+                        },
+                        {
+                            "name": "recreate_index",
+                            "description": "Recreate derived index data for an embedding profile change.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "convert_directory",
+                            "description": "Keep a registered directory usable after it becomes a Git repository.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                },
+                                "required": ["repo", "draft"]
+                            }
+                        },
+                        {
+                            "name": "continue_request",
+                            "description": "Resume saved work or return the saved result for an operation ID.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "operation_id": {"type": "string"}, "message": {"type": "string"}
+                                },
+                                "required": ["operation_id", "message"]
+                            }
+                        },
                     ]
                 }
             })
         }
         "tools/call" => {
+            let Some(ctx) = ctx else {
+                return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Cannot reach the database. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+            };
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params
                 .get("arguments")
@@ -258,6 +478,9 @@ async fn handle_request(ctx: &SearchContext, req: &serde_json::Value) -> serde_j
                 }
                 Err(e) => {
                     tracing::warn!(tool = tool_name, error = %e, "tool call failed");
+                    if ctx.client.is_closed() {
+                        return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Database connection lost. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+                    }
                     serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -425,6 +648,17 @@ mod usage_tests;
 #[cfg(test)]
 mod worktree_tests;
 
+fn repo_arg(args: &serde_json::Value) -> anyhow::Result<&str> {
+    args["repo"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'repo'"))
+}
+
+fn draft_arg(args: &serde_json::Value) -> anyhow::Result<&serde_json::Value> {
+    args.get("draft")
+        .ok_or_else(|| anyhow::anyhow!("missing 'draft'"))
+}
+
 async fn dispatch_tool(
     ctx: &SearchContext,
     name: &str,
@@ -474,6 +708,42 @@ async fn dispatch_tool(
             let resp = tools::list_knowledge(ctx, &repo).await?;
             Ok(resp)
         }
+        "inspect_policy" => Ok(admin::inspect_policy(ctx, repo_arg(&args)?).await?),
+        "check_policy" => Ok(admin::check_policy(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "apply_policy" => Ok(admin::apply_policy(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "preflight_family" => Ok(admin::preflight_family(ctx, repo_arg(&args)?).await?),
+        "register_family" => {
+            Ok(admin::register_family(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "start_family" => Ok(admin::start_family(ctx, repo_arg(&args)?, draft_arg(&args)?).await?),
+        "reindex_family" => Ok(admin::reindex_family(ctx, repo_arg(&args)?).await?),
+        "pause_family" => Ok(admin::pause_family(ctx, repo_arg(&args)?).await?),
+        "resume_family" => Ok(admin::resume_family(ctx, repo_arg(&args)?).await?),
+        "cancel_work" => Ok(admin::cancel_work(
+            ctx,
+            repo_arg(&args)?,
+            args["operation_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'operation_id'"))?,
+        )
+        .await?),
+        "inspect_status" => Ok(admin::inspect_status(ctx, repo_arg(&args)?).await?),
+        "unregister_family" => Ok(admin::unregister_family(ctx, repo_arg(&args)?).await?),
+        "forget_repository" => Ok(admin::forget_repository(ctx, repo_arg(&args)?).await?),
+        "recreate_index" => {
+            Ok(admin::recreate_index(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "convert_directory" => {
+            Ok(admin::convert_directory(ctx, repo_arg(&args)?, draft_arg(&args)?).await?)
+        }
+        "continue_request" => Ok(admin::continue_request(
+            ctx,
+            args["operation_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'operation_id'"))?,
+            args["message"].as_str().map(str::to_string),
+        )
+        .await?),
         other => Err(anyhow::anyhow!("unknown tool: {}", other)),
     }
 }

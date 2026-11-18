@@ -37,7 +37,7 @@
     },
     "fileVersion": {
       "status": "mapped",
-      "realization": "file_versions",
+      "realization": "file_versions with version-owned file_content_cache and file_analysis_cache; analysis validity and candidate correspondence remain adapter obligations",
       "sites": []
     },
     "baseBinding": {
@@ -123,45 +123,47 @@
       "sites": []
     },
     "legacy": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "legacy_files",
       "sites": []
     },
     "staging": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "staging",
       "sites": []
     },
     "acceptedWork": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "accepted_work",
       "sites": []
     },
     "cleanupWork": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "cleanup_work",
       "sites": []
     },
     "activeReader": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "active_readers",
       "sites": []
     },
     "continuation": {
-      "status": "unmapped",
-      "realization": null,
+      "status": "mapped",
+      "realization": "continuations",
       "sites": []
     },
     "receipt": {
-      "status": "unmapped",
-      "realization": null,
-      "sites": []
+      "status": "mapped",
+      "realization": "receipts",
+      "sites": [
+        "crates/core/src/owned_control.rs:178"
+      ]
     },
     "usage": {
       "status": "mapped",
       "realization": "mcp_usage",
       "sites": [
-        "crates/mcp/src/main.rs:413"
+        "crates/mcp/src/main.rs:636"
       ]
     },
     "logFile": {
@@ -215,18 +217,48 @@
     "chunks": "chunk",
     "knowledge": "note",
     "checkout_structural_snapshots": "structuralSnapshot",
-    "mcp_usage": "usage"
+    "mcp_usage": "usage",
+    "legacy_files": "legacy",
+    "staging": "staging",
+    "accepted_work": "acceptedWork",
+    "cleanup_work": "cleanupWork",
+    "active_readers": "activeReader",
+    "continuations": "continuation",
+    "receipts": "receipt",
+    "receipt_markers": "receipt",
+    "file_content_cache": "fileVersion",
+    "file_analysis_cache": "fileVersion"
   },
   "sites": [
     {
       "file": "crates/cli/src/main.rs",
-      "line": 528,
+      "line": 529,
       "table": "repos"
     },
     {
       "file": "crates/cli/src/main.rs",
-      "line": 550,
+      "line": 551,
       "table": "repos"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 81,
+      "table": "chunks"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 127,
+      "table": "cleanup_work"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 136,
+      "table": "receipts"
+    },
+    {
+      "file": "crates/core/src/cleanup.rs",
+      "line": 144,
+      "table": "receipt_markers"
     },
     {
       "file": "crates/core/src/family_policy/registration.rs",
@@ -237,6 +269,12 @@
       "file": "crates/core/src/family_policy/start.rs",
       "line": 97,
       "table": "repos"
+    },
+    {
+      "file": "crates/core/src/family_policy/store.rs",
+      "line": 146,
+      "table": "policy_defaults",
+      "template": "schema"
     },
     {
       "file": "crates/core/src/family_policy/store.rs",
@@ -335,6 +373,71 @@
       "file": "crates/core/src/knowledge.rs",
       "line": 100,
       "table": "knowledge"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 27,
+      "table": "legacy_files"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 44,
+      "table": "staging"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 67,
+      "table": "accepted_work"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 86,
+      "table": "accepted_work"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 108,
+      "table": "cleanup_work"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 122,
+      "table": "cleanup_work"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 143,
+      "table": "active_readers"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 157,
+      "table": "active_readers"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 178,
+      "table": "continuations"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 199,
+      "table": "receipts"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 234,
+      "table": "receipts"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 254,
+      "table": "receipts"
+    },
+    {
+      "file": "crates/core/src/owned_control.rs",
+      "line": 302,
+      "table": "receipt_markers"
     },
     {
       "file": "crates/core/src/store.rs",
@@ -439,73 +542,114 @@
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 746,
+      "line": 433,
+      "table": "worktree_base",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 909,
       "table": "file_versions",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 753,
+      "line": 917,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 768,
+      "line": 929,
+      "table": "file_content_cache",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 940,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 774,
+      "line": 946,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 788,
+      "line": 960,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 816,
+      "line": 1009,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 863,
+      "line": 1053,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 870,
+      "line": 1056,
+      "table": "file_deltas",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1063,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 879,
-      "table": "chunks",
-      "template": "s"
-    },
-    {
-      "file": "crates/core/src/worktrees/mod.rs",
-      "line": 886,
+      "line": 1070,
       "table": "base_files",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 897,
+      "line": 1072,
+      "table": "chunks",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1079,
+      "table": "base_files",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1090,
       "table": "file_versions",
       "template": "s"
     },
     {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1284,
+      "table": "file_analysis_cache",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1403,
+      "table": "checkout_structural_snapshots",
+      "template": "s"
+    },
+    {
+      "file": "crates/mcp/src/admin.rs",
+      "line": 173,
+      "table": "repos"
+    },
+    {
       "file": "crates/mcp/src/main.rs",
-      "line": 413,
+      "line": 636,
       "table": "mcp_usage"
     }
   ]
