@@ -1,6 +1,7 @@
 use anyhow::Result;
 use include_dir::{include_dir, Dir};
 use postgres_native_tls::MakeTlsConnector;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_postgres::{AsyncMessage, Client};
@@ -25,6 +26,24 @@ static PUBLIC_MIGRATIONS_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../migrations/public");
 static REPO_MIGRATIONS_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../migrations/repo");
+
+static EXIT_ON_MIGRATION_FAILURE: AtomicBool = AtomicBool::new(false);
+
+/// Executable entry points opt in to terminating on any migration failure.
+/// Library users retain the error so they can manage their own process.
+pub fn exit_on_migration_failure() {
+    EXIT_ON_MIGRATION_FAILURE.store(true, Ordering::SeqCst);
+}
+
+fn migration_result(result: anyhow::Result<()>, target: &str) -> anyhow::Result<()> {
+    if let Err(error) = &result {
+        if EXIT_ON_MIGRATION_FAILURE.load(Ordering::SeqCst) {
+            eprintln!("fatal: migration failed for {target}: {error:#}");
+            std::process::exit(1);
+        }
+    }
+    result
+}
 
 fn parse_migrations_dir(dir: &Dir<'static>) -> anyhow::Result<Vec<kryzhen::Migration>> {
     // Sort for deterministic loading. Kryzhen orders execution by dependencies,
@@ -182,9 +201,13 @@ async fn connect_internal(cfg: &DatabaseConfig, override_app_name: Option<&str>)
 /// Apply pending public migrations, regardless of the connection's search_path.
 /// Kryzhen tracks application per target schema and skips completed migrations.
 pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
-    let migrations = embedded_migrations()?;
-    kryzhen::migrate(client, &migrations, Some("public"), false).await?;
-    Ok(())
+    let result = async {
+        let migrations = embedded_migrations()?;
+        kryzhen::migrate(client, &migrations, Some("public"), false).await?;
+        Ok(())
+    }
+    .await;
+    migration_result(result, "public")
 }
 
 /// Apply the per-repo schema template (`migrations/repo/`) to `schema`.
@@ -200,9 +223,13 @@ pub async fn run_migrations(client: &mut Client) -> anyhow::Result<()> {
 /// a later failure leaves earlier blocks committed for retry. AGE graph schemas
 /// are managed separately through AGE's API.
 pub async fn run_repo_migrations(client: &mut Client, schema: &str) -> anyhow::Result<()> {
-    let migrations = embedded_repo_migrations()?;
-    kryzhen::migrate(client, &migrations, Some(schema), false).await?;
-    Ok(())
+    let result = async {
+        let migrations = embedded_repo_migrations()?;
+        kryzhen::migrate(client, &migrations, Some(schema), false).await?;
+        Ok(())
+    }
+    .await;
+    migration_result(result, schema)
 }
 
 /// Open a dedicated connection for LISTEN/NOTIFY.
@@ -300,6 +327,7 @@ mod migration_tests {
                     "repo-family-policy",
                     "repo-missing-checkout-grace",
                     "repo-worktree-file-deltas",
+                    "repo-incremental-analysis-reuse",
                     "repo-worktree-base-indexes",
                     "repo-worktree-structural-snapshots",
                     "repo-owned-control-records",

@@ -21,7 +21,7 @@ FILES = {
     'logging': 'crates/indexer/src/logging.rs',
 }
 FUNCTIONS = {
-    'main': ('main', 'wait_for_dispatch', 'scan_and_dispatch'),
+    'main': ('main', 'reconnect_dispatch', 'wait_for_closed_client', 'wait_for_dispatch', 'scan_and_dispatch'),
     'watcher': ('watch_repo', 'watch_family'),
     'logging': ('start_summaries', 'flush_stderr'),
 }
@@ -81,13 +81,15 @@ def formal_sites(source):
 
 def check_schedule(main, watcher):
     ts = cli.function_tokens(main, 'main')
-    for channel in ('"LISTEN muninn_repos_changed"', '"LISTEN muninn_family_policy_changed"'):
-        if ts.count(channel) != 1:
-            raise ValueError(f'missing or duplicate listener registration {channel}')
+    reconnect = cli.function_tokens(main, 'reconnect_dispatch')
+    if reconnect.count('"LISTEN muninn_repos_changed; LISTEN muninn_family_policy_changed"') != 1:
+        raise ValueError('missing or duplicate listener registrations during reconnect')
     scans = [i for i in range(len(ts)-1) if ts[i:i+2] == ['scan_and_dispatch', '(']]
     waits = [i for i in range(len(ts)-1) if ts[i:i+2] == ['wait_for_dispatch', '(']]
-    if len(scans) != 2 or len(waits) != 1 or not (scans[0] < waits[0] < scans[1]):
-        raise ValueError('initial scan and scan after each wake are not in the expected order')
+    if len(scans) != 3 or len(waits) != 1 or not (scans[0] < scans[1] < waits[0] < scans[2]):
+        raise ValueError('initial, reconnect, and post-wake scans are not in the expected order')
+    if not cli.contains(ts, ['wait_for_closed_client', '(', '&', 'client', ')']):
+        raise ValueError('missing closed-client wakeup')
     listener = cli.function_tokens(main, 'wait_for_dispatch')
     required = [
         ['rx', '.', 'recv', '(', ')', ',', 'if', '*', 'notifications_open', '=>'],

@@ -194,6 +194,20 @@ async fn create_graph(client: &Client, id: Uuid) -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "child process invoked by the disposable persistence test"]
+async fn fatal_migration_child() -> Result<()> {
+    let config = std::env::var_os("MUNINN_PERSISTENCE_TEST_CONFIG").context("fixture required")?;
+    let target: Target = serde_json::from_slice(&fs::read(config)?)?;
+    let schema = std::env::var("MUNINN_TEST_FAIL_SCHEMA")?;
+    let mut client = target.connect().await?;
+    db::exit_on_migration_failure();
+    // Run in a background task, just like the indexer's watcher/backfill.
+    let task = tokio::spawn(async move { db::run_repo_migrations(&mut client, &schema).await });
+    task.await??;
+    anyhow::bail!("migration unexpectedly succeeded")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires explicit disposable container runner; never uses global configuration"]
 async fn family_persistence() -> Result<()> {
@@ -302,7 +316,54 @@ async fn family_persistence() -> Result<()> {
     assert_eq!(count(&client, "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='repos'").await?, 8);
 
     db::run_migrations(&mut client).await?;
+    // Cause the new migration to fail inside a child process. A returned error
+    // from the spawned task is insufficient: the whole process must exit.
+    client
+        .batch_execute(&format!(
+            "CREATE TABLE \"{}\".active_readers (id uuid)",
+            legacy_schema
+        ))
+        .await?;
+    let child = Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "fatal_migration_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("MUNINN_TEST_FAIL_SCHEMA", &legacy_schema)
+        .output()?;
+    assert_eq!(child.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&child.stderr);
+    assert!(stderr.contains("fatal: migration failed for"), "{stderr}");
+    assert!(stderr.contains("active_readers"), "{stderr}");
+    client
+        .batch_execute(&format!("DROP TABLE \"{}\".active_readers", legacy_schema))
+        .await?;
     db::run_repo_migrations(&mut client, &legacy_schema).await?;
+    let referenced = Uuid::new_v4();
+    let reader = muninn_core::owned_control::insert_reader(
+        &client,
+        &legacy_schema,
+        &[referenced],
+        "reader fixture",
+    )
+    .await?;
+    let row = client
+        .query_one(
+            &format!(
+                "SELECT \"references\", payload FROM \"{}\".active_readers WHERE id=$1",
+                legacy_schema
+            ),
+            &[&reader],
+        )
+        .await?;
+    assert_eq!(row.get::<_, Vec<Uuid>>(0), vec![referenced]);
+    assert_eq!(row.get::<_, String>(1), "reader fixture");
+    assert_eq!(
+        muninn_core::owned_control::delete_reader(&client, &legacy_schema, reader).await?,
+        1
+    );
     let before = count(
         &client,
         "SELECT count(*) FROM mallard.applied_migration_schemas",

@@ -37,7 +37,7 @@
     },
     "fileVersion": {
       "status": "mapped",
-      "realization": "file_versions",
+      "realization": "file_versions with version-owned file_content_cache and file_analysis_cache; analysis validity and candidate correspondence remain adapter obligations",
       "sites": []
     },
     "baseBinding": {
@@ -163,7 +163,7 @@
       "status": "mapped",
       "realization": "mcp_usage",
       "sites": [
-        "crates/mcp/src/main.rs:413"
+        "crates/mcp/src/main.rs:636"
       ]
     },
     "logFile": {
@@ -225,17 +225,19 @@
     "active_readers": "activeReader",
     "continuations": "continuation",
     "receipts": "receipt",
-    "receipt_markers": "receipt"
+    "receipt_markers": "receipt",
+    "file_content_cache": "fileVersion",
+    "file_analysis_cache": "fileVersion"
   },
   "sites": [
     {
       "file": "crates/cli/src/main.rs",
-      "line": 528,
+      "line": 529,
       "table": "repos"
     },
     {
       "file": "crates/cli/src/main.rs",
-      "line": 550,
+      "line": 551,
       "table": "repos"
     },
     {
@@ -546,85 +548,97 @@
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 746,
+      "line": 909,
       "table": "file_versions",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 753,
+      "line": 917,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 768,
+      "line": 929,
+      "table": "file_content_cache",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 940,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 774,
+      "line": 946,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 788,
+      "line": 960,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 816,
+      "line": 1009,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 860,
+      "line": 1053,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 863,
+      "line": 1056,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 870,
+      "line": 1063,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 877,
+      "line": 1070,
       "table": "base_files",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 879,
+      "line": 1072,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 886,
+      "line": 1079,
       "table": "base_files",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 897,
+      "line": 1090,
       "table": "file_versions",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1011,
+      "line": 1284,
+      "table": "file_analysis_cache",
+      "template": "s"
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1403,
       "table": "checkout_structural_snapshots",
       "template": "s"
     },
@@ -635,7 +649,7 @@
     },
     {
       "file": "crates/mcp/src/main.rs",
-      "line": 590,
+      "line": 636,
       "table": "mcp_usage"
     }
   ]
