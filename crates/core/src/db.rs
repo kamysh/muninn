@@ -327,6 +327,7 @@ mod migration_tests {
                     "repo-family-policy",
                     "repo-missing-checkout-grace",
                     "repo-worktree-file-deltas",
+                    "repo-incremental-analysis-reuse",
                     "repo-worktree-base-indexes",
                     "repo-worktree-structural-snapshots",
                     "repo-owned-control-records",

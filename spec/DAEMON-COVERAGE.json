@@ -71,9 +71,13 @@
       "watch_family": {"count": 1, "targets": ["job:reconcileFamily", "job:watchBatch"]}
     },
     "watcher:watch_family": {
+      ".completed": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
+      ".select": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "notify::recommended_watcher": {"count": 1, "targets": ["job:watchBatch"]},
       "pipeline::index_repo": {"count": 1, "targets": ["job:reconcileFamily"]},
+      "tokio::time::Instant::now": {"count": 4, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "tokio::time::sleep": {"count": 2, "targets": ["job:watchBatch"]},
+      "tokio::time::sleep_until": {"count": 1, "targets": ["job:watchBatch", "job:reconcileFamily"]},
       "worktrees::reconcile_changed_family": {"count": 1, "targets": ["job:reconcileFamily"]}
     },
     "logging:start_summaries": {

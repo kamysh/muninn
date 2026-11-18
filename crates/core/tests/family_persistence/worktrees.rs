@@ -109,6 +109,340 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         count(client, &format!("SELECT count(*) FROM {s}.file_versions")).await?,
         2
     );
+    // A reported edit is published without discovering an unreported file;
+    // the full audit later discovers it, and other checkouts stay unchanged.
+    fs::write(one.join("a.rs"), "fn incremental_changed() {}\n")?;
+    fs::write(one.join("unreported.txt"), "audit_discovery_marker\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[one.join("a.rs")]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(!found(client, &t1, "incremental_changed").await?.is_empty());
+    assert!(found(client, &t1, "audit_discovery_marker")
+        .await?
+        .is_empty());
+    // A newly added target must resolve a retained caller; adding a local
+    // namesake must then take priority, without changing another checkout.
+    let caller = main.join("a.rs");
+    let target_file = main.join("later.rs");
+    fs::write(
+        &caller,
+        "fn alpha() { beta(); later_target(); }\nfn beta() {}\n",
+    )?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&caller)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    fs::write(&target_file, "fn later_target() {}\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&target_file)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let related =
+        worktrees::query_related(client, &base, "alpha", StructuralRelation::Calls, false).await?;
+    assert!(related
+        .iter()
+        .any(|symbol| symbol.name == "later_target" && symbol.file_path.ends_with("later.rs")));
+    fs::write(
+        &caller,
+        "fn alpha() { beta(); later_target(); }\nfn beta() {}\nfn later_target() {}\n",
+    )?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&caller)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let related =
+        worktrees::query_related(client, &base, "alpha", StructuralRelation::Calls, false).await?;
+    assert!(related
+        .iter()
+        .any(|symbol| symbol.name == "later_target" && symbol.file_path.ends_with("a.rs")));
+    assert!(!related
+        .iter()
+        .any(|symbol| symbol.name == "later_target" && symbol.file_path.ends_with("later.rs")));
+    assert!(
+        worktrees::query_related(client, &t2, "later_target", StructuralRelation::Calls, true)
+            .await?
+            .is_empty()
+    );
+    fs::write(
+        &caller,
+        "fn alpha() { beta(); later_target(); }\nfn beta() {}\n",
+    )?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&caller)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let related =
+        worktrees::query_related(client, &base, "alpha", StructuralRelation::Calls, false).await?;
+    assert!(related
+        .iter()
+        .any(|symbol| symbol.name == "later_target" && symbol.file_path.ends_with("later.rs")));
+    fs::write(&caller, "fn alpha() { beta(); }\nfn beta() {}\n")?;
+    fs::remove_file(&target_file)?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[caller, target_file]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(!found(client, &t2, "alpha").await?.is_empty());
+    reconcile(client, repo.id, &main, &embedder).await?;
+    assert!(!found(client, &t1, "audit_discovery_marker")
+        .await?
+        .is_empty());
+    let linked_caller = one.join("linked_caller.rs");
+    let linked_target = one.join("linked_target.rs");
+    fs::write(&linked_caller, "fn linked_caller() { linked_target(); }\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&linked_caller)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    fs::write(&linked_target, "fn linked_target() {}\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&linked_target)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let linked_edges = worktrees::query_related(
+        client,
+        &t1,
+        "linked_caller",
+        StructuralRelation::Calls,
+        false,
+    )
+    .await?;
+    assert!(linked_edges
+        .iter()
+        .any(|symbol| symbol.name == "linked_target"));
+    let linked_disjoint = one.join("linked_disjoint.rs");
+    fs::write(&linked_disjoint, "fn linked_disjoint() {}\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&linked_disjoint)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(worktrees::query_related(
+        client,
+        &t1,
+        "linked_caller",
+        StructuralRelation::Calls,
+        false
+    )
+    .await?
+    .iter()
+    .any(|symbol| symbol.name == "linked_target"));
+    assert!(worktrees::query_related(
+        client,
+        &t2,
+        "linked_target",
+        StructuralRelation::Calls,
+        true
+    )
+    .await?
+    .is_empty());
+    fs::remove_file(&linked_caller)?;
+    fs::remove_file(&linked_target)?;
+    fs::remove_file(&linked_disjoint)?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[linked_caller, linked_target, linked_disjoint]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    // Both rename paths must be processed, even for an untracked file.
+    fs::rename(one.join("unreported.txt"), one.join("renamed.txt"))?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[one.join("unreported.txt"), one.join("renamed.txt")]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    let hits = worktrees::fulltext_search(client, &t1, "audit_discovery_marker", 20).await?;
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].chunk.file_path.ends_with("renamed.txt"));
+
+    // A directory event cannot identify all affected descendants; audit it.
+    fs::create_dir(one.join("newdir"))?;
+    fs::write(one.join("newdir/nested.txt"), "nested_audit_marker\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[one.join("newdir")]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(!found(client, &t1, "nested_audit_marker").await?.is_empty());
+    fs::remove_dir_all(one.join("newdir"))?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[one.join("newdir")]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(found(client, &t1, "nested_audit_marker").await?.is_empty());
+
+    // An epoch modification time cannot suppress a reported same-size edit.
+    let epoch_file = one.join("a.rs");
+    let set_epoch = || -> Result<()> {
+        let file = fs::OpenOptions::new().write(true).open(&epoch_file)?;
+        file.set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))?;
+        Ok(())
+    };
+    set_epoch()?;
+    fs::write(&epoch_file, "fn incremental_revised() {}\n")?;
+    set_epoch()?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&epoch_file)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(!found(client, &t1, "incremental_revised").await?.is_empty());
+    fs::write(one.join("a.rs"), "fn alpha() { beta(); }\nfn beta() {}\n")?;
+    fs::remove_file(one.join("renamed.txt"))?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[one.join("a.rs"), one.join("renamed.txt")]),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert!(!found(client, &t1, "alpha").await?.is_empty());
+    assert!(found(client, &t1, "audit_discovery_marker")
+        .await?
+        .is_empty());
     let initial = embedder.0.load(Ordering::SeqCst);
     assert!(initial > 0);
     let demanded = parent.join("runtime-demanded");
@@ -596,6 +930,54 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .await?,
         600
     );
+    // A disjoint file change must preserve unrelated existing relationships.
+    let disjoint = main.join("disjoint.rs");
+    fs::write(&disjoint, "fn unrelated_symbol() {}\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&disjoint)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert_eq!(
+        count(
+            client,
+            &format!("SELECT count(*) FROM {graph_name}.\"CALLS\"")
+        )
+        .await?,
+        600
+    );
+    fs::remove_file(&disjoint)?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        repo.id,
+        &main,
+        embedder.clone(),
+        16,
+        32,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(std::slice::from_ref(&disjoint)),
+    )
+    .await?;
+    assert!(skips.is_empty(), "{skips:?}");
+    assert_eq!(
+        count(
+            client,
+            &format!("SELECT count(*) FROM {graph_name}.\"CALLS\"")
+        )
+        .await?,
+        600
+    );
     fs::write(
         main.join("gráph.rs"),
         format!("fn target() {{}}\n{dense}// changed\n"),
@@ -620,6 +1002,54 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .await?,
         0
     );
+    // An unchanged caller must gain a cross-file edge when a target appears.
+    fs::write(main.join("caller.rs"), "fn caller() { later_target(); }\n")?;
+    reconcile(client, repo.id, &main, &embedder).await?;
+    let cached = client.query_one(
+        &format!("SELECT a.file_version,a.candidates FROM {s}.file_analysis_cache a JOIN {s}.file_versions v ON v.id=a.file_version WHERE v.path='caller.rs'"),
+        &[],
+    ).await?;
+    let caller_version: Uuid = cached.get(0);
+    let candidates: serde_json::Value = cached.get(1);
+    assert!(candidates.to_string().contains("later_target"));
+    fs::write(main.join("target.rs"), "fn later_target() {}\n")?;
+    reconcile(client, repo.id, &main, &embedder).await?;
+    assert_eq!(
+        worktrees::query_related(client, &base, "caller", StructuralRelation::Calls, false)
+            .await?
+            .len(),
+        1
+    );
+    let after = client
+        .query_one(
+            &format!("SELECT candidates FROM {s}.file_analysis_cache WHERE file_version=$1"),
+            &[&caller_version],
+        )
+        .await?;
+    assert_eq!(after.get::<_, serde_json::Value>(0), candidates);
+    // Simulate a collision by assigning the next content's hash to the old
+    // version. The exact bytes still differ and must create a new version.
+    let replacement = "fn caller() { collision_replacement(); }\n";
+    let collision_hash = content_sha256(replacement);
+    client
+        .execute(
+            &format!("UPDATE {s}.file_versions SET content_hash=$1 WHERE id=$2"),
+            &[&collision_hash, &caller_version],
+        )
+        .await?;
+    fs::write(main.join("caller.rs"), replacement)?;
+    reconcile(client, repo.id, &main, &embedder).await?;
+    let current = client
+        .query_one(
+            &format!("SELECT version FROM {s}.base_files WHERE path='caller.rs'"),
+            &[],
+        )
+        .await?
+        .get::<_, Uuid>(0);
+    assert_ne!(current, caller_version);
+    assert!(!found(client, &base, "collision_replacement")
+        .await?
+        .is_empty());
     store::delete_repo(client, repo.id).await?;
     assert_eq!(
         count(
