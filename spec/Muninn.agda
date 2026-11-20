@@ -124,6 +124,7 @@ import Muninn.RetrievalCorpus
 import Muninn.Retrieval
 import Muninn.StructuralSearch
 import Muninn.ExclusionOutcomes
+import Muninn.SerializedMaintenance
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

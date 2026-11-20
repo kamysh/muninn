@@ -54,6 +54,8 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
 
 pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    let mut search_client =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-search").await?;
     if let Some(target) = resolve_worktree(ctx, &params).await? {
         let embedder = family_embedder(ctx, target.family).await?;
         let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
@@ -66,7 +68,8 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
             "query embedding dimension mismatch"
         );
         let results =
-            worktrees::hybrid_search(&ctx.client, &target, &vector, &params.query, limit).await?;
+            worktrees::hybrid_search(&mut search_client, &target, &vector, &params.query, limit)
+                .await?;
         return Ok(SearchResponse {
             results: results.into_iter().map(Into::into).collect(),
         });
@@ -78,10 +81,14 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    let candidate = (limit * 10).min(search::MAX_LIMIT);
-    let semantic = search::semantic_search(&ctx.client, &query_vec, repo.id, candidate).await?;
-    let fulltext = search::fulltext_search(&ctx.client, &params.query, repo.id, candidate).await?;
-    let merged = search::rrf_merge(semantic, fulltext, limit as usize);
+    let merged = search::hybrid_search(
+        &mut search_client,
+        &query_vec,
+        &params.query,
+        repo.id,
+        limit,
+    )
+    .await?;
 
     Ok(SearchResponse {
         results: merged.into_iter().map(Into::into).collect(),
@@ -90,15 +97,18 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
 pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    let mut search_client =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-search").await?;
     if let Some(target) = resolve_worktree(ctx, &params).await? {
         let results =
-            worktrees::fulltext_search(&ctx.client, &target, &params.query, limit).await?;
+            worktrees::fulltext_search(&mut search_client, &target, &params.query, limit).await?;
         return Ok(SearchResponse {
             results: results.into_iter().map(Into::into).collect(),
         });
     }
     let repo = resolve_repo(&ctx.client, &params).await?;
-    let results = search::fulltext_search(&ctx.client, &params.query, repo.id, limit).await?;
+    let results =
+        search::fulltext_search(&mut search_client, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -106,6 +116,8 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
 
 pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Result<SearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    let mut search_client =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-search").await?;
     if let Some(target) = resolve_worktree(ctx, &params).await? {
         let embedder = family_embedder(ctx, target.family).await?;
         let embedding = embedder.embed(std::slice::from_ref(&params.query)).await?;
@@ -117,7 +129,8 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
             vector.len() == family.embedding_dim as usize,
             "query embedding dimension mismatch"
         );
-        let results = worktrees::semantic_search(&ctx.client, &target, &vector, limit).await?;
+        let results =
+            worktrees::semantic_search(&mut search_client, &target, &vector, limit).await?;
         return Ok(SearchResponse {
             results: results.into_iter().map(Into::into).collect(),
         });
@@ -129,7 +142,7 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    let results = search::semantic_search(&ctx.client, &query_vec, repo.id, limit).await?;
+    let results = search::semantic_search(&mut search_client, &query_vec, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
     })
@@ -149,6 +162,8 @@ pub async fn search_structural(
     ctx: &SearchContext,
     params: StructuralParams,
 ) -> Result<serde_json::Value> {
+    let mut search_client =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-search").await?;
     let (relation, incoming) = match params.relation.as_str() {
         "callers" => (muninn_core::types::StructuralRelation::Calls, true),
         "callees" => (muninn_core::types::StructuralRelation::Calls, false),
@@ -166,14 +181,25 @@ pub async fn search_structural(
         limit: None,
     };
     if let Some(target) = resolve_worktree(ctx, &search_params).await? {
-        let symbols =
-            worktrees::query_related(&ctx.client, &target, &params.symbol, relation, incoming)
-                .await?;
+        let symbols = worktrees::query_related(
+            &mut search_client,
+            &target,
+            &params.symbol,
+            relation,
+            incoming,
+        )
+        .await?;
         return Ok(serde_json::json!({"symbols":symbols}));
     }
     let repo = resolve_repo(&ctx.client, &search_params).await?;
-    let symbols =
-        graph::query_related(&ctx.client, repo.id, &params.symbol, relation, incoming).await?;
+    let symbols = graph::query_related(
+        &mut search_client,
+        repo.id,
+        &params.symbol,
+        relation,
+        incoming,
+    )
+    .await?;
     Ok(serde_json::json!({ "symbols": symbols }))
 }
 

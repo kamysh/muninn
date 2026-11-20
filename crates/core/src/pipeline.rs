@@ -39,6 +39,33 @@ const FILE_INDEX_TIMEOUT_SECS: u64 = 120;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn index_file(
+    client: &mut Client,
+    repo_id: Uuid,
+    path: &Path,
+    embedder: &dyn EmbeddingBackend,
+    max_chars: usize,
+    embed_batch_size: usize,
+    expected_dim: usize,
+    tier: Tier,
+) -> Result<()> {
+    let tx = crate::maintenance::ordinary_write(client, repo_id).await?;
+    index_file_unlocked(
+        tx.client(),
+        repo_id,
+        path,
+        embedder,
+        max_chars,
+        embed_batch_size,
+        expected_dim,
+        tier,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn index_file_unlocked(
     client: &Client,
     repo_id: Uuid,
     path: &Path,
@@ -75,14 +102,9 @@ pub async fn index_file(
         tier,
     )
     .await?;
-    if chunks.is_empty() {
-        return Ok(());
-    }
 
     delete_file_chunks(client, repo_id, &file_path).await?;
-    if let Err(e) = graph::delete_file_symbols(client, repo_id, &file_path).await {
-        tracing::warn!("failed to clear old graph nodes for {}: {}", file_path, e);
-    }
+    graph::delete_file_symbols(client, repo_id, &file_path).await?;
     for chunk in &chunks {
         upsert_chunk(client, chunk).await?;
     }
@@ -107,14 +129,7 @@ pub async fn index_file(
             name_to_chunk.entry(sym.name.clone()).or_insert(chunk.id);
         }
     }
-    if let Err(e) = graph::upsert_symbol_nodes(client, repo_id, &node_inputs).await {
-        tracing::warn!(
-            "failed to store {} symbol node(s) for {}: {}",
-            node_inputs.len(),
-            file_path,
-            e
-        );
-    }
+    graph::upsert_symbol_nodes(client, repo_id, &node_inputs).await?;
 
     if let Some(lang) = language {
         let known: std::collections::HashSet<String> =
@@ -132,14 +147,7 @@ pub async fn index_file(
                 });
             }
         }
-        if let Err(e) = graph::upsert_edges(client, repo_id, &edges).await {
-            tracing::warn!(
-                "failed to store {} edge(s) for {}: {}",
-                edges.len(),
-                file_path,
-                e
-            );
-        }
+        graph::upsert_edges(client, repo_id, &edges).await?;
     }
 
     Ok(())
@@ -499,26 +507,9 @@ pub async fn index_repo(
         )
         .await;
     }
-    if crate::family_policy::runtime::policy(client, repo_id)
-        .await?
-        .is_none()
-    {
-        let selection =
-            crate::family_policy::runtime::Selection::new(repo_path, None, exclude, vendor)?;
-        return index_directory(
-            client,
-            repo_id,
-            repo_path,
-            embedder,
-            embed_batch_size,
-            expected_dim,
-            &selection,
-            on_progress,
-        )
-        .await;
-    }
     let tx = client.transaction().await?;
     crate::worktrees::lock(&tx, repo_id).await?;
+    let generation = crate::maintenance::generation(&tx, repo_id, repo_id).await?;
     let view = crate::family_policy::runtime::lock_policy(&tx, repo_id).await?;
     let selection =
         crate::family_policy::runtime::Selection::new(repo_path, view.as_ref(), exclude, vendor)?;
@@ -535,7 +526,24 @@ pub async fn index_repo(
         &selection,
         on_progress,
     )
-    .await?;
+    .await
+    .and_then(|result| {
+        anyhow::ensure!(
+            generation.is_none() || result.1.is_empty(),
+            "directory selection refresh incomplete: {:?}",
+            result.1
+        );
+        Ok(result)
+    });
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            tx.rollback().await?;
+            crate::maintenance::failed(client, repo_id, repo_id, &format!("{error:#}")).await?;
+            return Err(error);
+        }
+    };
+    crate::maintenance::complete(&tx, repo_id, repo_id, generation).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -579,7 +587,7 @@ async fn index_directory(
         } else {
             Tier::Tier1
         };
-        let work = index_file(
+        let work = index_file_unlocked(
             client,
             repo_id,
             file,
@@ -627,32 +635,15 @@ async fn index_directory(
 
     let any_failed = !skips.is_empty();
     if any_succeeded || files.is_empty() {
-        match crate::store::file_paths_not_in(client, repo_id, &keep).await {
-            Ok(orphans) => {
-                for path in &orphans {
-                    if let Err(e) = crate::graph::delete_file_symbols(client, repo_id, path).await {
-                        tracing::warn!("graph prune failed for {}: {}", path, e);
-                    }
-                }
-            }
-            Err(e) => tracing::warn!("listing orphan files failed for repo {}: {}", repo_id, e),
+        let orphans = crate::store::file_paths_not_in(client, repo_id, &keep).await?;
+        for path in &orphans {
+            crate::graph::delete_file_symbols(client, repo_id, path).await?;
         }
-        match crate::store::prune_chunks_not_in(client, repo_id, &keep).await {
-            Ok(n) if n > 0 => {
-                tracing::info!("reindex pruned {} orphaned chunk(s) in repo {}", n, repo_id)
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("orphan prune failed for repo {}: {}", repo_id, e),
-        }
+        crate::store::prune_chunks_not_in(client, repo_id, &keep).await?;
         if any_succeeded {
-            if let Err(e) = backfill_structural_edges(client, repo_id, &files, &on_progress).await {
-                tracing::warn!(
-                    "cross-file structural edge backfill failed for repo {}: {}",
-                    repo_id,
-                    e
-                );
-            }
+            backfill_structural_edges(client, repo_id, &files, &on_progress).await?;
         }
+
         crate::store::mark_indexed(client, repo_id).await?;
         let outcome = if any_failed {
             BatchOutcome::SomeSucceeded
@@ -682,11 +673,13 @@ const BACKFILL_BATCH: i64 = 128;
 /// The daemon calls this repeatedly until it returns 0. Spec: Muninn.IndexFsm
 /// .EmbedStep (Pending → Embedded; only ever advances pending chunks).
 pub async fn backfill_once(
-    client: &Client,
+    client: &mut Client,
     repo_id: Uuid,
     embedder: &dyn EmbeddingBackend,
     expected_dim: usize,
 ) -> Result<usize> {
+    let tx = crate::maintenance::ordinary_write(client, repo_id).await?;
+    let client = tx.client();
     let groups = crate::store::pending_content_groups(client, repo_id, BACKFILL_BATCH).await?;
     if groups.is_empty() {
         return Ok(0);
@@ -717,6 +710,7 @@ pub async fn backfill_once(
         updated +=
             crate::store::set_embedding_for_hash(client, repo_id, hash, &emb).await? as usize;
     }
+    tx.commit().await?;
     Ok(updated)
 }
 

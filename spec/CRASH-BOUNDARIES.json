@@ -3,33 +3,23 @@
   "operation": "exclusion",
   "boundaries": [
     {
-      "name": "exclusion.admission",
-      "spec": "CleanupAdmission",
-      "description": "Reader admission against pending cleanup worksets in one shared transaction"
+      "name": "exclusion.request",
+      "spec": "SerializedMaintenance",
+      "description": "Policy or Git-triggered pending requests commit before acceptance; restart discovers pending targets."
     },
     {
-      "name": "exclusion.batch-deletion",
-      "spec": "CleanupEffects, CleanupLoop",
-      "description": "Each bounded deletion/projection batch commits as its own progress checkpoint"
+      "name": "exclusion.publication",
+      "spec": "SerializedMaintenance, FileMap, GraphMembership",
+      "description": "One target commits its manifest, structural view, unused-data cleanup and completed generation atomically."
     },
     {
-      "name": "exclusion.receipt-checkpoint",
-      "spec": "PolicyCleanupBatch, PolicyCleanupScheduledRun",
-      "description": "Receipt progress checkpoint written with the batch transaction"
-    },
-    {
-      "name": "exclusion.followup-capture",
-      "spec": "CleanupScheduling",
-      "description": "Follow-up workset capture commits atomically with the parent task and receipt"
-    },
-    {
-      "name": "exclusion.finalization",
-      "spec": "CleanupFinalization",
-      "description": "Task removal and receipt update commit after verified completion"
+      "name": "exclusion.error",
+      "spec": "SerializedMaintenance",
+      "description": "Recording a failed attempt leaves its request pending; this metadata transaction does not publish data."
     }
   ],
   "adapter_registration": {
-    "rust": "crates/core/src/cleanup.rs",
+    "rust": "crates/core/src/maintenance.rs",
     "symbol": "CRASH_BOUNDARIES",
     "status": "present"
   }

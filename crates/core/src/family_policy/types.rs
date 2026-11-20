@@ -327,6 +327,22 @@ impl CompiledRules {
             vendor: compile_axis(root, &effective.index.vendor, "index.vendor")?,
         })
     }
+    pub fn classify_with_git(
+        &self,
+        relative: &Path,
+        directory: bool,
+        ignored: bool,
+    ) -> crate::pipeline::Decision {
+        let decision = self.classify_entry(relative, directory);
+        if decision == crate::pipeline::Decision::Drop {
+            return decision;
+        }
+        if ignored && !self.exclude.matched(relative, directory).is_whitelist() {
+            crate::pipeline::Decision::Drop
+        } else {
+            decision
+        }
+    }
     pub fn classify(&self, relative: &Path) -> crate::pipeline::Decision {
         self.classify_entry(relative, false)
     }

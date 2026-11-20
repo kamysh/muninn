@@ -125,6 +125,24 @@ impl Selection {
             }
         }
     }
+    pub fn classify_with_git(
+        &self,
+        relative: &Path,
+        directory: bool,
+        ignored: bool,
+    ) -> crate::pipeline::Decision {
+        match self {
+            Self::Policy(rules) => rules.classify_with_git(relative, directory, ignored),
+            Self::Legacy(exclude, _) => {
+                let decision = self.classify(relative, directory);
+                if ignored && !exclude.matched(relative, directory).is_whitelist() {
+                    crate::pipeline::Decision::Drop
+                } else {
+                    decision
+                }
+            }
+        }
+    }
     pub fn walker(&self, root: &Path) -> ignore::Walk {
         let mut builder = ignore::WalkBuilder::new(root);
         builder.standard_filters(false);

@@ -34,7 +34,7 @@ async fn reconcile(
     )
     .await
 }
-async fn found(client: &Client, target: &worktrees::Target, term: &str) -> Result<Vec<String>> {
+async fn found(client: &mut Client, target: &worktrees::Target, term: &str) -> Result<Vec<String>> {
     Ok(worktrees::fulltext_search(client, target, term, 100)
         .await?
         .into_iter()

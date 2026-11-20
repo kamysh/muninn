@@ -431,7 +431,7 @@ async fn family_persistence() -> Result<()> {
         1
     );
     assert_eq!(
-        search::fulltext_search(&client, "sentinel", legacy_id, 10).await?[0]
+        search::fulltext_search(&mut client, "sentinel", legacy_id, 10).await?[0]
             .chunk
             .id,
         chunk.id
@@ -1934,4 +1934,18 @@ async fn automatic_worktree_reconciliation_lifecycle() -> Result<()> {
     db::run_migrations(&mut client).await?;
     let fixtures = tempfile::tempdir()?;
     worktree_runtime::verify(&target, &mut client, fixtures.path()).await
+}
+
+#[path = "family_persistence/maintenance.rs"]
+mod serialized_maintenance_cases;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires the guarded disposable persistence fixture"]
+async fn serialized_maintenance() -> Result<()> {
+    let config = std::env::var_os("MUNINN_PERSISTENCE_TEST_CONFIG").context("fixture required")?;
+    let target: Target = serde_json::from_slice(&fs::read(config)?)?;
+    target.preparation().await?.prepare_public().await?;
+    let mut client = target.connect().await?;
+    let fixtures = tempfile::tempdir_in(&target.fixture_root)?;
+    serialized_maintenance_cases::verify(&target, &mut client, fixtures.path()).await
 }

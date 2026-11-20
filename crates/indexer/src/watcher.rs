@@ -89,6 +89,8 @@ pub async fn watch_repo(
         .await;
     }
 
+    let mut client =
+        Arc::try_unwrap(client).map_err(|_| anyhow::anyhow!("watcher client is shared"))?;
     let overrides = build_excludes(&repo_path, &exclude);
     let vendor_overrides = build_excludes(&repo_path, &vendor);
 
@@ -176,7 +178,7 @@ pub async fn watch_repo(
                     })
                     .unwrap_or(Tier::Tier1);
                 match index_file(
-                    &client,
+                    &mut client,
                     repo_id,
                     &path,
                     embedder.as_ref(),
@@ -194,22 +196,11 @@ pub async fn watch_repo(
                 }
             } else {
                 let fp = path.to_string_lossy();
-                if let Err(e) =
-                    muninn_core::store::delete_file_chunks(&client, repo_id, fp.as_ref()).await
-                {
-                    tracing::warn!("failed to delete chunks for {}: {}", path.display(), e);
-                } else {
-                    if let Err(e) =
-                        muninn_core::graph::delete_file_symbols(&client, repo_id, fp.as_ref()).await
-                    {
-                        tracing::warn!(
-                            "failed to delete graph nodes for {}: {}",
-                            path.display(),
-                            e
-                        );
-                    }
-                    any_succeeded = true;
-                }
+                let tx = muninn_core::maintenance::ordinary_write(&mut client, repo_id).await?;
+                muninn_core::store::delete_file_chunks(tx.client(), repo_id, fp.as_ref()).await?;
+                muninn_core::graph::delete_file_symbols(tx.client(), repo_id, fp.as_ref()).await?;
+                tx.commit().await?;
+                any_succeeded = true;
             }
         }
 
@@ -398,6 +389,9 @@ async fn watch_family(
             }
             Err(e) => {
                 tracing::warn!(root = %root.display(), "family reconciliation failed: {e:#}");
+                if client.is_closed() {
+                    return Err(e);
+                }
                 retry_all = true;
                 retry.push(root.clone());
             }

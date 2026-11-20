@@ -99,7 +99,7 @@ where
 /// Basic: write a Function node + a caller + CALLS edge; verify query_related.
 #[tokio::test]
 async fn test_upsert_single_node_and_query() {
-    with_repo(|client, repo_id| async move {
+    with_repo(|mut client, repo_id| async move {
         let chunk_id = Uuid::new_v4();
         let caller_id = Uuid::new_v4();
 
@@ -141,7 +141,7 @@ async fn test_upsert_single_node_and_query() {
         .expect("upsert edge");
 
         let callers = query_related(
-            &client,
+            &mut client,
             repo_id,
             "my_function",
             StructuralRelation::Calls,
@@ -277,7 +277,7 @@ async fn test_all_relation_types() {
 /// query_related outgoing (callee direction) returns the right node.
 #[tokio::test]
 async fn test_query_related_outgoing() {
-    with_repo(|client, repo_id| async move {
+    with_repo(|mut client, repo_id| async move {
         let caller_id = Uuid::new_v4();
         let callee_id = Uuid::new_v4();
 
@@ -319,7 +319,7 @@ async fn test_query_related_outgoing() {
         .expect("upsert edge");
 
         let callees = query_related(
-            &client,
+            &mut client,
             repo_id,
             "do_work",
             StructuralRelation::Calls,
@@ -330,9 +330,15 @@ async fn test_query_related_outgoing() {
         assert_eq!(callees.len(), 1);
         assert_eq!(callees[0].name, "helper");
 
-        let callers = query_related(&client, repo_id, "do_work", StructuralRelation::Calls, true)
-            .await
-            .expect("query incoming");
+        let callers = query_related(
+            &mut client,
+            repo_id,
+            "do_work",
+            StructuralRelation::Calls,
+            true,
+        )
+        .await
+        .expect("query incoming");
         assert_eq!(callers.len(), 0, "nothing calls do_work");
     })
     .await;
@@ -341,7 +347,7 @@ async fn test_query_related_outgoing() {
 /// delete_file_symbols removes all nodes for a given file path (DETACH DELETE).
 #[tokio::test]
 async fn test_delete_file_symbols() {
-    with_repo(|client, repo_id| async move {
+    with_repo(|mut client, repo_id| async move {
         let keep_id = Uuid::new_v4();
         let del_id1 = Uuid::new_v4();
         let del_id2 = Uuid::new_v4();
@@ -396,9 +402,15 @@ async fn test_delete_file_symbols() {
             .await
             .expect("delete file symbols");
 
-        let callees = query_related(&client, repo_id, "keeper", StructuralRelation::Calls, false)
-            .await
-            .expect("query after delete");
+        let callees = query_related(
+            &mut client,
+            repo_id,
+            "keeper",
+            StructuralRelation::Calls,
+            false,
+        )
+        .await
+        .expect("query after delete");
         assert_eq!(callees.len(), 0, "gone_fn should have been deleted");
     })
     .await;
@@ -488,9 +500,9 @@ async fn test_delete_file_symbols_nonexistent_path() {
 /// query_related on an empty graph returns an empty vec.
 #[tokio::test]
 async fn test_query_related_empty_graph() {
-    with_repo(|client, repo_id| async move {
+    with_repo(|mut client, repo_id| async move {
         let result = query_related(
-            &client,
+            &mut client,
             repo_id,
             "nonexistent",
             StructuralRelation::Calls,
@@ -506,7 +518,7 @@ async fn test_query_related_empty_graph() {
 /// Multiple callers of the same function are all returned.
 #[tokio::test]
 async fn test_multiple_callers() {
-    with_repo(|client, repo_id| async move {
+    with_repo(|mut client, repo_id| async move {
         let target_id = Uuid::new_v4();
         let caller_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
 
@@ -544,9 +556,15 @@ async fn test_multiple_callers() {
             .await
             .expect("upsert edges");
 
-        let callers = query_related(&client, repo_id, "target", StructuralRelation::Calls, true)
-            .await
-            .expect("query callers");
+        let callers = query_related(
+            &mut client,
+            repo_id,
+            "target",
+            StructuralRelation::Calls,
+            true,
+        )
+        .await
+        .expect("query callers");
         assert_eq!(
             callers.len(),
             3,
@@ -561,7 +579,7 @@ async fn test_multiple_callers() {
 /// Repos are fully isolated: nodes in repo A are invisible from repo B's graph.
 #[tokio::test]
 async fn test_repo_isolation() {
-    with_two_repos(|client, repo_a, repo_b| async move {
+    with_two_repos(|mut client, repo_a, repo_b| async move {
         upsert_symbol_nodes(
             &client,
             repo_a,
@@ -578,7 +596,7 @@ async fn test_repo_isolation() {
         .expect("upsert in A");
 
         let result = query_related(
-            &client,
+            &mut client,
             repo_b,
             "only_in_a",
             StructuralRelation::Calls,
