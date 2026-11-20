@@ -5,7 +5,10 @@ use pgvector::Vector;
 use tokio_postgres::{Client, Row};
 
 fn common(s: &str) -> String {
-    format!("selected AS MATERIALIZED (SELECT id FROM {s}.checkouts WHERE id=$1 AND registration_state='active' AND indexed_at IS NOT NULL), excluded AS MATERIALIZED (SELECT COALESCE(array_agg(path),ARRAY[]::text[]) AS paths FROM {s}.file_deltas WHERE checkout=$1), delta AS MATERIALIZED (SELECT c.* FROM {s}.chunks c JOIN {s}.file_deltas d ON c.file_version=d.version WHERE d.checkout=$1 AND EXISTS(SELECT 1 FROM selected))")
+    // Resolve the selected versions before fetching chunks. A family-wide join
+    // can scan the entire chunk heap, including old versions awaiting vacuum.
+    // Inline the delta so each modality reads only the columns it needs.
+    format!("selected AS MATERIALIZED (SELECT id FROM {s}.checkouts WHERE id=$1 AND registration_state='active' AND indexed_at IS NOT NULL), excluded AS MATERIALIZED (SELECT COALESCE(array_agg(path),ARRAY[]::text[]) AS paths FROM {s}.file_deltas WHERE checkout=$1), delta AS NOT MATERIALIZED (SELECT c.id,c.ts_vector,c.embedding FROM {s}.chunks c WHERE c.file_version = ANY(ARRAY(SELECT version FROM {s}.file_deltas WHERE checkout=$1 AND version IS NOT NULL)) AND EXISTS(SELECT 1 FROM selected))")
 }
 fn branches(s: &str, semantic: bool, param: &str, limit: &str, prefix: &str) -> String {
     let (score, order, filter) = if semantic {
@@ -62,12 +65,14 @@ fn validate(limit: i64) -> Result<()> {
 }
 
 pub async fn semantic_search(
-    client: &Client,
+    client: &mut Client,
     target: &Target,
     query: &[f32],
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate(limit)?;
+    let guard = crate::maintenance::read(client, target.family).await?;
+    let client = guard.client();
     client
         .batch_execute("SET hnsw.iterative_scan = strict_order")
         .await?;
@@ -80,12 +85,14 @@ pub async fn semantic_search(
     )
 }
 pub async fn fulltext_search(
-    client: &Client,
+    client: &mut Client,
     target: &Target,
     query: &str,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate(limit)?;
+    let guard = crate::maintenance::read(client, target.family).await?;
+    let client = guard.client();
     let s = schema(target.family);
     let sql=format!("WITH {},{} SELECT c.*,r.score::real AS score FROM txt r JOIN {s}.chunks c ON c.id=r.id ORDER BY r.score DESC,c.id",common(&s),branches(&s,false,"$2","$3","txt"));
     rows(
@@ -97,13 +104,15 @@ pub async fn fulltext_search(
 }
 /// One statement gives both modalities the same MVCC snapshot during base moves.
 pub async fn hybrid_search(
-    client: &Client,
+    client: &mut Client,
     target: &Target,
     vector: &[f32],
     query: &str,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     validate(limit)?;
+    let guard = crate::maintenance::read(client, target.family).await?;
+    let client = guard.client();
     client
         .batch_execute("SET hnsw.iterative_scan = strict_order")
         .await?;

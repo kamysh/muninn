@@ -331,6 +331,7 @@ mod migration_tests {
                     "repo-worktree-base-indexes",
                     "repo-worktree-structural-snapshots",
                     "repo-owned-control-records",
+                    "repo-selection-maintenance",
                 ],
             ),
         ] {

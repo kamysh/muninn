@@ -18,7 +18,7 @@ fn validate_limit(limit: i64) -> Result<()> {
 }
 
 pub async fn fulltext_search(
-    client: &Client,
+    client: &mut Client,
     query: &str,
     repo_id: Uuid,
     limit: i64,
@@ -27,6 +27,16 @@ pub async fn fulltext_search(
     if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
         return crate::worktrees::fulltext_search(client, &target, query, limit).await;
     }
+    let guard = crate::maintenance::read(client, repo_id).await?;
+    fulltext_search_unlocked(guard.client(), query, repo_id, limit).await
+}
+
+async fn fulltext_search_unlocked(
+    client: &Client,
+    query: &str,
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<Vec<SearchResult>> {
     let table = chunks_ref(repo_id);
     let rows = client
         .query(
@@ -70,7 +80,7 @@ pub async fn fulltext_search(
 }
 
 pub async fn semantic_search(
-    client: &Client,
+    client: &mut Client,
     query_embedding: &[f32],
     repo_id: Uuid,
     limit: i64,
@@ -79,6 +89,16 @@ pub async fn semantic_search(
     if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
         return crate::worktrees::semantic_search(client, &target, query_embedding, limit).await;
     }
+    let guard = crate::maintenance::read(client, repo_id).await?;
+    semantic_search_unlocked(guard.client(), query_embedding, repo_id, limit).await
+}
+
+async fn semantic_search_unlocked(
+    client: &Client,
+    query_embedding: &[f32],
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<Vec<SearchResult>> {
     let table = chunks_ref(repo_id);
     let vec = Vector::from(query_embedding.to_vec());
 
@@ -122,6 +142,26 @@ pub async fn semantic_search(
             })
         })
         .collect()
+}
+
+pub async fn hybrid_search(
+    client: &mut Client,
+    query_embedding: &[f32],
+    query: &str,
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<Vec<SearchResult>> {
+    validate_limit(limit)?;
+    if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
+        return crate::worktrees::hybrid_search(client, &target, query_embedding, query, limit)
+            .await;
+    }
+    let guard = crate::maintenance::read(client, repo_id).await?;
+    let candidates = (limit * 10).min(MAX_LIMIT);
+    let semantic =
+        semantic_search_unlocked(guard.client(), query_embedding, repo_id, candidates).await?;
+    let fulltext = fulltext_search_unlocked(guard.client(), query, repo_id, candidates).await?;
+    Ok(rrf_merge(semantic, fulltext, limit as usize))
 }
 
 /// Reciprocal Rank Fusion merge of two ranked result lists.

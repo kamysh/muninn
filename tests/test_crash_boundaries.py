@@ -30,8 +30,8 @@ class CrashBoundaryCheck(unittest.TestCase):
             check.verify(changed, self.adapter)
 
     def test_extra_registration_is_rejected(self):
-        tampered = self.adapter.replace('"exclusion.finalization",',
-                                        '"exclusion.finalization",\n    "exclusion.planted",')
+        tampered = self.adapter.replace('"exclusion.publication",',
+                                        '"exclusion.publication",\n    "exclusion.planted",')
         with self.assertRaises(ValueError):
             check.verify(self.manifest, tampered)
 

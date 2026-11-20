@@ -296,6 +296,7 @@ pub async fn register_checkout(
 ) -> Result<Checkout> {
     let tx = client.transaction().await?;
     lock_registry(&tx).await?;
+    crate::worktrees::lock(&tx, family_id).await?;
     discovered.revalidate().await?;
     let family = get_family(&tx, family_id)
         .await?
@@ -379,6 +380,18 @@ pub async fn register_checkout(
         )
         .await?;
     let checkout = checkout_from_row(row, identity.key.encoding())?;
+    if crate::maintenance::pending(&tx, family_id).await? {
+        crate::maintenance::request(
+            &tx,
+            family_id,
+            if discovered.git_dir.is_some() {
+                checkout.token.id
+            } else {
+                family_id
+            },
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(checkout)
 }

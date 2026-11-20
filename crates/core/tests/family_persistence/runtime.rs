@@ -28,7 +28,7 @@ async fn index(
     ensure!(outcome == BatchOutcome::AllSucceeded, "{skips:?}");
     Ok(())
 }
-async fn content(client: &Client, id: Uuid, path: &Path, word: &str) -> Result<bool> {
+async fn content(client: &mut Client, id: Uuid, path: &Path, word: &str) -> Result<bool> {
     Ok(
         if let Some(target) = worktrees::resolve(client, path).await? {
             !worktrees::fulltext_search(client, &target, word, 20)
@@ -157,7 +157,8 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
         } {
             assert!(content(client, id, path, "primaryword").await?);
             assert!(content(client, id, path, "retainedword").await?);
-            assert!(content(client, id, path, "vendorword").await?); // Git ignore is not policy
+            // Directory families have no Git default; vendor tier does not unignore Git files.
+            assert_eq!(content(client, id, path, "vendorword").await?, !git_family);
             assert!(!content(client, id, path, "droppedword").await?);
             assert!(!content(client, id, path, "dependencyword").await?);
         }
@@ -169,7 +170,7 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
         .await?;
         assert_eq!(
             file_count as u64,
-            inventory.tier1.files + inventory.tier2.files
+            inventory.tier1.files + inventory.tier2.files - u64::from(git_family)
         );
         assert_eq!(
             count(
@@ -177,7 +178,7 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
                 &format!("SELECT count(*) FROM {s}.chunks WHERE tier=2 AND embedding IS NULL")
             )
             .await?,
-            1
+            i64::from(!git_family)
         );
         let mut changed = initial.clone();
         changed

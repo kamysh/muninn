@@ -121,27 +121,15 @@ pub(crate) async fn replace_graph(
     edges: &[StructuralEdge],
 ) -> Result<()> {
     let g = graph_name(id);
-    const DELETE_BATCH: usize = 256;
     const INSERT_BATCH: usize = 1024;
-    // Bound each AGE write while retaining the caller's single publication
-    // transaction. Remove edges first so node deletion need not repeatedly
-    // search all edge labels for incident edges.
-    for (pattern, entity) in [("()-[e]->()", "e"), ("(n)", "n")] {
-        loop {
-            let sql = format!("SELECT * FROM ag_catalog.cypher('{g}', $$ MATCH {pattern} WITH {entity} LIMIT {DELETE_BATCH} DELETE {entity} RETURN {entity} $$) AS (v ag_catalog.agtype)");
-            let rows = client
-                .simple_query(&sql)
-                .await
-                .context("clear AGE graph batch")?;
-            let count = rows
-                .iter()
-                .filter(|row| matches!(row, tokio_postgres::SimpleQueryMessage::Row(_)))
-                .count();
-            if count < DELETE_BATCH {
-                break;
-            }
-        }
-    }
+    // Replace the entire owned graph atomically with the selected manifest.
+    // The publication transaction restores the old graph if any later step fails.
+    drop_graph(client, id)
+        .await
+        .context("replace owned graph")?;
+    crate::store::ensure_graph(client, id)
+        .await
+        .context("initialize replacement graph")?;
     let mut kinds = std::collections::HashMap::new();
     for node in nodes {
         kinds.insert(node.chunk_id, kind_label(&node.kind));
@@ -188,7 +176,7 @@ pub(crate) async fn replace_graph(
             .collect();
         for batch in values.chunks(INSERT_BATCH) {
             let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH (a:{from} {{chunk_id:r.from}}) MATCH (b:{to} {{chunk_id:r.to}}) CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH (a:{from}), (b:{to}) WHERE a.chunk_id = r.from AND b.chunk_id = r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
             age_execute(
                 client,
                 &stmt,
@@ -289,7 +277,7 @@ pub(crate) async fn patch_graph(
             .collect();
         for batch in rows.chunks(BATCH) {
             let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (a:{from} {{chunk_id:r.from}}) MATCH (b:{to} {{chunk_id:r.to}}) CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
+            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (a:{from}), (b:{to}) WHERE a.chunk_id = r.from AND b.chunk_id = r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
             age_execute(
                 client,
                 &stmt,
@@ -470,6 +458,17 @@ pub async fn delete_file_symbols(client: &Client, repo_id: Uuid, file_path: &str
 
 /// Query symbols related to a given symbol name by relation type and direction.
 pub async fn query_related(
+    client: &mut Client,
+    repo_id: Uuid,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<Vec<Symbol>> {
+    let guard = crate::maintenance::read(client, repo_id).await?;
+    query_related_unlocked(guard.client(), repo_id, symbol_name, relation, incoming).await
+}
+
+pub(crate) async fn query_related_unlocked(
     client: &Client,
     repo_id: Uuid,
     symbol_name: &str,
@@ -660,6 +659,93 @@ fn parse_symbol_kind(s: &str) -> SymbolKind {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires the guarded disposable PostgreSQL harness"]
+    async fn test_graph_replacement_rollback() -> Result<()> {
+        let mut client = crate::test_support::connect().await?;
+        let id = Uuid::new_v4();
+        let node = SymbolNodeInput {
+            chunk_id: Uuid::new_v4(),
+            name: "retained".into(),
+            kind: SymbolKind::Function,
+            file_path: "/retained.rs".into(),
+            start_line: 1,
+            end_line: 1,
+        };
+        let tx = client.transaction().await?;
+        replace_graph(tx.client(), id, &[node], &[]).await?;
+        tx.commit().await?;
+        let g = graph_name(id);
+        let graph_oid_sql = "SELECT graphid::bigint FROM ag_catalog.ag_graph WHERE name=$1";
+        let old_oid: i64 = client.query_one(graph_oid_sql, &[&g]).await?.get(0);
+        let tx = client.transaction().await?;
+        replace_graph(tx.client(), id, &[], &[]).await?;
+        assert!(tx.query_one("SELECT 1/0", &[]).await.is_err());
+        tx.rollback().await?;
+        let restored_oid: i64 = client.query_one(graph_oid_sql, &[&g]).await?.get(0);
+        assert_eq!(
+            restored_oid, old_oid,
+            "rollback must restore the original graph"
+        );
+        let count: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {g}.\"Function\""), &[])
+            .await?
+            .get(0);
+        assert_eq!(count, 1, "rollback must preserve the old graph contents");
+        let tx = client.transaction().await?;
+        replace_graph(tx.client(), id, &[], &[]).await?;
+        tx.commit().await?;
+        let count: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {g}.\"Function\""), &[])
+            .await?
+            .get(0);
+        assert_eq!(
+            count, 0,
+            "a successful replacement must remove old contents"
+        );
+        drop_graph(&client, id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the guarded disposable PostgreSQL harness"]
+    async fn test_graph_setup_reports_failure() -> Result<()> {
+        let mut client = crate::test_support::connect().await?;
+        let id = Uuid::new_v4();
+        let g = graph_name(id);
+        client
+            .batch_execute(&format!("SELECT ag_catalog.create_graph('{g}')"))
+            .await?;
+        // An ordinary relation occupying a required label name is an error,
+        // not evidence that the AGE label already exists.
+        client
+            .batch_execute(&format!("CREATE TABLE {g}.\"CALLS\" (unrelated integer)"))
+            .await?;
+        let tx = client.transaction().await?;
+        assert!(crate::store::ensure_graph(tx.client(), id).await.is_err());
+        tx.rollback().await?;
+        let labels: i64 = client.query_one(
+            "SELECT count(*) FROM ag_catalog.ag_label l JOIN ag_catalog.ag_graph g ON g.graphid=l.graph WHERE g.name=$1",
+            &[&g],
+        ).await?.get(0);
+        assert_eq!(
+            labels, 2,
+            "failed setup must roll back newly created labels"
+        );
+        client
+            .batch_execute(&format!("DROP TABLE {g}.\"CALLS\""))
+            .await?;
+        crate::store::ensure_graph(&client, id).await?;
+        crate::store::ensure_graph(&client, id).await?;
+        let labels: i64 = client.query_one(
+            "SELECT count(*) FROM ag_catalog.ag_label l JOIN ag_catalog.ag_graph g ON g.graphid=l.graph WHERE g.name=$1",
+            &[&g],
+        ).await?.get(0);
+        assert_eq!(labels, 10);
+        drop_graph(&client, id).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore = "requires the guarded disposable PostgreSQL harness"]

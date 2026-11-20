@@ -23,6 +23,18 @@ publish again.
 Those runtime statements are established by code and implementation verification,
 not solely by the model's type check.
 
+## Serialized selection maintenance (issue #203)
+
+The approved restart contract is
+[serialized selection maintenance](ISSUE-203-SERIALIZED-MAINTENANCE.md).
+It permits temporary family unavailability and transaction retry instead of
+requiring concurrent cleanup, durable reader pins and cleanup receipt machinery
+for this operation. `Muninn.SerializedMaintenance` specifies its general laws.
+The linked contract states the superseded obligations, retained sharing and rule
+semantics, runtime mapping, verification, and limits. The local implementation
+uses `maintenance.rs` and an additive migration; this document does not claim
+the released binaries implement that protocol.
+
 ## General laws represented
 
 | Modules | Scope |

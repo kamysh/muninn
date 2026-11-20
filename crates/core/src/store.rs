@@ -111,10 +111,13 @@ pub(crate) async fn ensure_graph(client: &Client, repo_id: Uuid) -> Result<()> {
             labels TEXT[] := ARRAY['Function', 'Class', 'Import', 'Module'];
         BEGIN
             FOREACH lbl IN ARRAY labels LOOP
-                BEGIN
-                    PERFORM ag_catalog.create_vlabel('{gname}', lbl);
-                EXCEPTION WHEN others THEN NULL;
-                END;
+                IF NOT EXISTS (
+                    SELECT 1 FROM ag_catalog.ag_label l
+                    JOIN ag_catalog.ag_graph g ON g.graphid = l.graph
+                    WHERE g.name = '{gname}' AND l.name = lbl
+                ) THEN
+                    EXECUTE format('SELECT ag_catalog.create_vlabel(%L, %L)', '{gname}', lbl);
+                END IF;
                 IF EXISTS (
                     SELECT 1
                     FROM pg_class c
@@ -153,10 +156,13 @@ pub(crate) async fn ensure_graph(client: &Client, repo_id: Uuid) -> Result<()> {
             labels TEXT[] := ARRAY['CALLS', 'IMPORTS', 'DEFINES', 'INHERITS_FROM'];
         BEGIN
             FOREACH lbl IN ARRAY labels LOOP
-                BEGIN
-                    PERFORM ag_catalog.create_elabel('{gname}', lbl);
-                EXCEPTION WHEN others THEN NULL;
-                END;
+                IF NOT EXISTS (
+                    SELECT 1 FROM ag_catalog.ag_label l
+                    JOIN ag_catalog.ag_graph g ON g.graphid = l.graph
+                    WHERE g.name = '{gname}' AND l.name = lbl
+                ) THEN
+                    EXECUTE format('SELECT ag_catalog.create_elabel(%L, %L)', '{gname}', lbl);
+                END IF;
             END LOOP;
         END
         $do$;
@@ -473,7 +479,7 @@ pub async fn mark_unindexed(client: &Client, repo_id: Uuid) -> Result<()> {
 pub async fn set_paused(client: &Client, repo_id: Uuid, paused: bool) -> Result<()> {
     client
         .execute(
-            r#"UPDATE repos SET paused = $2 WHERE id = $1"#,
+            r#"UPDATE repos SET paused = $2 FROM (SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text,771913))) gate WHERE id = $1"#,
             &[&repo_id, &paused],
         )
         .await?;

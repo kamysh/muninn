@@ -5,83 +5,140 @@
       "status": "mapped",
       "realization": "repos",
       "sites": [
-        "crates/core/src/store.rs:45"
+        "crates/cli/src/main.rs:529",
+        "crates/cli/src/main.rs:551",
+        "crates/core/src/family_policy/registration.rs:251",
+        "crates/core/src/family_policy/start.rs:97",
+        "crates/core/src/family_policy/store.rs:312",
+        "crates/core/src/family_store/mod.rs:96",
+        "crates/core/src/family_store/mod.rs:112",
+        "crates/core/src/family_store/mod.rs:131",
+        "crates/core/src/family_store/mod.rs:140",
+        "crates/core/src/family_store/mod.rs:223",
+        "crates/core/src/family_store/preparation.rs:136",
+        "crates/core/src/family_store/preparation.rs:199",
+        "crates/core/src/store.rs:45",
+        "crates/core/src/store.rs:198",
+        "crates/core/src/store.rs:250",
+        "crates/core/src/store.rs:465",
+        "crates/core/src/store.rs:476",
+        "crates/core/src/store.rs:487",
+        "crates/core/src/store.rs:498",
+        "crates/mcp/src/admin.rs:173"
       ]
     },
     "creationIntent": {
       "status": "mapped",
       "realization": "repos.registration_intent",
-      "sites": [
-        "crates/core/src/store.rs:45"
-      ]
+      "sites": []
     },
     "defaults": {
       "status": "mapped",
       "realization": "policy_defaults",
-      "sites": []
+      "sites": [
+        "crates/core/src/family_policy/store.rs:146"
+      ]
     },
     "policyVersion": {
       "status": "mapped",
       "realization": "policy_versions",
-      "sites": []
+      "sites": [
+        "crates/core/src/family_policy/store.rs:162",
+        "crates/core/src/family_policy/store.rs:303"
+      ]
     },
     "currentPolicy": {
       "status": "mapped",
       "realization": "family_policy",
-      "sites": []
+      "sites": [
+        "crates/core/src/family_policy/store.rs:164",
+        "crates/core/src/family_policy/store.rs:305"
+      ]
     },
     "checkout": {
       "status": "mapped",
       "realization": "checkouts",
-      "sites": []
+      "sites": [
+        "crates/core/src/family_policy/store.rs:309",
+        "crates/core/src/family_store/mod.rs:377",
+        "crates/core/src/family_store/mod.rs:413",
+        "crates/core/src/family_store/mod.rs:436",
+        "crates/core/src/worktrees/mod.rs:351",
+        "crates/core/src/worktrees/mod.rs:369",
+        "crates/core/src/worktrees/mod.rs:395",
+        "crates/core/src/worktrees/mod.rs:408",
+        "crates/core/src/worktrees/mod.rs:430",
+        "crates/core/src/worktrees/mod.rs:1106"
+      ]
     },
     "fileVersion": {
       "status": "mapped",
       "realization": "file_versions with version-owned file_content_cache and file_analysis_cache; analysis validity and candidate correspondence remain adapter obligations",
-      "sites": []
+      "sites": [
+        "crates/core/src/worktrees/mod.rs:999",
+        "crates/core/src/worktrees/mod.rs:1019",
+        "crates/core/src/worktrees/mod.rs:1201",
+        "crates/core/src/worktrees/mod.rs:1395"
+      ]
     },
     "baseBinding": {
       "status": "mapped",
       "realization": "base_files",
-      "sites": []
+      "sites": [
+        "crates/core/src/worktrees/mod.rs:1169",
+        "crates/core/src/worktrees/mod.rs:1178",
+        "crates/core/src/worktrees/mod.rs:1197"
+      ]
     },
     "deltaBinding": {
       "status": "mapped",
       "realization": "file_deltas",
-      "sites": []
+      "sites": [
+        "crates/core/src/worktrees/mod.rs:377",
+        "crates/core/src/worktrees/mod.rs:389",
+        "crates/core/src/worktrees/mod.rs:1036",
+        "crates/core/src/worktrees/mod.rs:1050",
+        "crates/core/src/worktrees/mod.rs:1152",
+        "crates/core/src/worktrees/mod.rs:1155"
+      ]
     },
     "basePointer": {
       "status": "mapped",
       "realization": "worktree_base",
-      "sites": []
+      "sites": [
+        "crates/core/src/worktrees/mod.rs:438"
+      ]
     },
     "chunk": {
       "status": "mapped",
       "realization": "chunks",
       "sites": [
-        "crates/core/src/store.rs:281"
+        "crates/core/src/cleanup.rs:81",
+        "crates/core/src/store.rs:281",
+        "crates/core/src/store.rs:327",
+        "crates/core/src/store.rs:377",
+        "crates/core/src/store.rs:392",
+        "crates/core/src/worktrees/mod.rs:1007",
+        "crates/core/src/worktrees/mod.rs:1030",
+        "crates/core/src/worktrees/mod.rs:1162",
+        "crates/core/src/worktrees/mod.rs:1171",
+        "crates/core/src/worktrees/mod.rs:1192"
       ]
     },
     "posting": {
       "status": "derived",
       "realization": "chunks.ts_vector",
-      "sites": [
-        "crates/core/src/store.rs:281"
-      ]
+      "sites": []
     },
     "vector": {
       "status": "mapped",
       "realization": "chunks.embedding",
-      "sites": [
-        "crates/core/src/store.rs:377"
-      ]
+      "sites": []
     },
     "symbol": {
       "status": "mapped",
       "realization": "AGE graph",
-      "sites": [
-        "crates/core/src/family_store/preparation.rs:249"
-      ]
+      "sites": []
     },
     "edge": {
       "status": "mapped",
@@ -96,13 +153,17 @@
     "structuralSnapshot": {
       "status": "mapped",
       "realization": "checkout_structural_snapshots",
-      "sites": []
+      "sites": [
+        "crates/core/src/worktrees/mod.rs:384",
+        "crates/core/src/worktrees/mod.rs:1514"
+      ]
     },
     "note": {
       "status": "mapped",
       "realization": "knowledge",
       "sites": [
-        "crates/core/src/knowledge.rs:70"
+        "crates/core/src/knowledge.rs:70",
+        "crates/core/src/knowledge.rs:100"
       ]
     },
     "notePosting": {
@@ -113,9 +174,7 @@
     "noteVector": {
       "status": "mapped",
       "realization": "knowledge.embedding",
-      "sites": [
-        "crates/core/src/knowledge.rs:70"
-      ]
+      "sites": []
     },
     "graphResource": {
       "status": "derived",
@@ -125,38 +184,59 @@
     "legacy": {
       "status": "mapped",
       "realization": "legacy_files",
-      "sites": []
+      "sites": [
+        "crates/core/src/owned_control.rs:27"
+      ]
     },
     "staging": {
       "status": "mapped",
       "realization": "staging",
-      "sites": []
+      "sites": [
+        "crates/core/src/owned_control.rs:44"
+      ]
     },
     "acceptedWork": {
       "status": "mapped",
       "realization": "accepted_work",
-      "sites": []
+      "sites": [
+        "crates/core/src/owned_control.rs:67",
+        "crates/core/src/owned_control.rs:86"
+      ]
     },
     "cleanupWork": {
       "status": "mapped",
       "realization": "cleanup_work",
-      "sites": []
+      "sites": [
+        "crates/core/src/cleanup.rs:127",
+        "crates/core/src/owned_control.rs:108",
+        "crates/core/src/owned_control.rs:122"
+      ]
     },
     "activeReader": {
       "status": "mapped",
       "realization": "active_readers",
-      "sites": []
+      "sites": [
+        "crates/core/src/owned_control.rs:143",
+        "crates/core/src/owned_control.rs:157"
+      ]
     },
     "continuation": {
       "status": "mapped",
       "realization": "continuations",
-      "sites": []
+      "sites": [
+        "crates/core/src/owned_control.rs:178"
+      ]
     },
     "receipt": {
       "status": "mapped",
       "realization": "receipts",
       "sites": [
-        "crates/core/src/owned_control.rs:178"
+        "crates/core/src/cleanup.rs:136",
+        "crates/core/src/cleanup.rs:144",
+        "crates/core/src/owned_control.rs:199",
+        "crates/core/src/owned_control.rs:234",
+        "crates/core/src/owned_control.rs:254",
+        "crates/core/src/owned_control.rs:302"
       ]
     },
     "usage": {
@@ -187,10 +267,13 @@
       "sites": []
     },
     "coordination": {
-      "status": "system",
-      "realization": "advisory locks",
+      "status": "mapped",
+      "realization": "PostgreSQL advisory family locks and durable selection_maintenance requested/completed generations (SerializedMaintenance)",
       "sites": [
-        "crates/core/src/store.rs:430"
+        "crates/core/src/maintenance.rs:71",
+        "crates/core/src/maintenance.rs:129",
+        "crates/core/src/maintenance.rs:139",
+        "crates/core/src/maintenance.rs:155"
       ]
     },
     "schemaResource": {
@@ -227,7 +310,8 @@
     "receipts": "receipt",
     "receipt_markers": "receipt",
     "file_content_cache": "fileVersion",
-    "file_analysis_cache": "fileVersion"
+    "file_analysis_cache": "fileVersion",
+    "selection_maintenance": "coordination"
   },
   "sites": [
     {
@@ -290,25 +374,25 @@
     },
     {
       "file": "crates/core/src/family_policy/store.rs",
-      "line": 300,
+      "line": 303,
       "table": "policy_versions",
       "template": "schema"
     },
     {
       "file": "crates/core/src/family_policy/store.rs",
-      "line": 302,
+      "line": 305,
       "table": "family_policy",
       "template": "schema"
     },
     {
       "file": "crates/core/src/family_policy/store.rs",
-      "line": 306,
+      "line": 309,
       "table": "checkouts",
       "template": "schema"
     },
     {
       "file": "crates/core/src/family_policy/store.rs",
-      "line": 309,
+      "line": 312,
       "table": "repos"
     },
     {
@@ -338,19 +422,19 @@
     },
     {
       "file": "crates/core/src/family_store/mod.rs",
-      "line": 376,
+      "line": 377,
       "table": "checkouts",
       "template": "table"
     },
     {
       "file": "crates/core/src/family_store/mod.rs",
-      "line": 400,
+      "line": 413,
       "table": "checkouts",
       "template": "table"
     },
     {
       "file": "crates/core/src/family_store/mod.rs",
-      "line": 423,
+      "line": 436,
       "table": "checkouts",
       "template": "table"
     },
@@ -373,6 +457,30 @@
       "file": "crates/core/src/knowledge.rs",
       "line": 100,
       "table": "knowledge"
+    },
+    {
+      "table": "selection_maintenance",
+      "template": "table",
+      "file": "crates/core/src/maintenance.rs",
+      "line": 71
+    },
+    {
+      "table": "selection_maintenance",
+      "template": "table",
+      "file": "crates/core/src/maintenance.rs",
+      "line": 129
+    },
+    {
+      "table": "selection_maintenance",
+      "template": "table",
+      "file": "crates/core/src/maintenance.rs",
+      "line": 139
+    },
+    {
+      "table": "selection_maintenance",
+      "template": "table",
+      "file": "crates/core/src/maintenance.rs",
+      "line": 155
     },
     {
       "file": "crates/core/src/owned_control.rs",
@@ -446,56 +554,56 @@
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 198,
+      "line": 204,
       "table": "repos"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 250,
+      "line": 256,
       "table": "repos"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 281,
+      "line": 287,
       "table": "chunks",
       "template": "table"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 327,
+      "line": 333,
       "table": "chunks",
       "template": "table"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 377,
+      "line": 383,
       "table": "chunks",
       "template": "table"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 392,
+      "line": 398,
       "table": "chunks",
       "template": "table"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 465,
+      "line": 471,
+      "table": "repos"
+    },
+    {
+      "table": "repos",
+      "file": "crates/core/src/store.rs",
+      "line": 482
+    },
+    {
+      "file": "crates/core/src/store.rs",
+      "line": 493,
       "table": "repos"
     },
     {
       "file": "crates/core/src/store.rs",
-      "line": 476,
-      "table": "repos"
-    },
-    {
-      "file": "crates/core/src/store.rs",
-      "line": 487,
-      "table": "repos"
-    },
-    {
-      "file": "crates/core/src/store.rs",
-      "line": 498,
+      "line": 504,
       "table": "repos"
     },
     {
@@ -511,134 +619,152 @@
       "template": "s"
     },
     {
+      "table": "file_deltas",
+      "template": "s",
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 380,
+      "line": 377
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 384,
       "table": "checkout_structural_snapshots",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 385,
+      "line": 389,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 390,
+      "line": 395,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 403,
+      "line": 408,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 425,
+      "line": 430,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 433,
+      "line": 438,
       "table": "worktree_base",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 909,
+      "line": 999,
       "table": "file_versions",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 917,
+      "line": 1007,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 929,
+      "line": 1019,
       "table": "file_content_cache",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 940,
+      "line": 1030,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 946,
+      "line": 1036,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 960,
+      "line": 1050,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1009,
+      "line": 1106,
       "table": "checkouts",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1053,
+      "line": 1152,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1056,
+      "line": 1155,
       "table": "file_deltas",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1063,
+      "line": 1162,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1070,
+      "line": 1169,
       "table": "base_files",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1072,
+      "line": 1171,
       "table": "chunks",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1079,
+      "line": 1178,
       "table": "base_files",
       "template": "s"
     },
     {
+      "table": "chunks",
+      "template": "s",
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1090,
+      "line": 1192
+    },
+    {
+      "table": "base_files",
+      "template": "s",
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1197
+    },
+    {
+      "file": "crates/core/src/worktrees/mod.rs",
+      "line": 1202,
       "table": "file_versions",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1284,
+      "line": 1400,
       "table": "file_analysis_cache",
       "template": "s"
     },
     {
       "file": "crates/core/src/worktrees/mod.rs",
-      "line": 1403,
+      "line": 1519,
       "table": "checkout_structural_snapshots",
       "template": "s"
     },
