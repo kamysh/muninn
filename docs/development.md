@@ -118,11 +118,22 @@ preserving other published views; it does not force every worktree to adopt main
 
 Family locking serializes publication. Base changes, deltas and the reconciled
 checkout's structural view commit transactionally. Embeddings can be reused for
-matching content. The primary checkout retains its AGE graph; graph replacement
-deletes edges before vertices in bounded batches. New linked checkouts store
+matching content. A full primary AGE graph replacement recreates that owned graph,
+its labels and indexes inside the publication transaction; failure restores the
+previous graph. New linked checkouts store
 symbols and edges in one transactional JSONB snapshot instead of constructing a
 separate AGE graph. Structural search reads that snapshot, falling back to an
 older linked checkout's AGE graph until it next reconciles.
+
+Selection maintenance uses that same family lock. Searches hold a shared lock
+through result materialization; writers hold its exclusive form. Git ignore
+changes and saved selection changes create durable refresh requests. The daemon
+reconciles each requested checkout and removes derived data with no retained
+references in the same transaction. Searches return `family_busy` during an
+exclusive operation or `family_maintenance` while requests remain pending.
+A paused or Git-blocked checkout can therefore keep its whole family unavailable
+until it can refresh. Status/configuration inspection and unrelated families
+remain available. See the [serialized maintenance contract](../spec/ISSUE-203-SERIALIZED-MAINTENANCE.md).
 
 Text/vector queries combine visible base chunks with the selected delta. The
 base has partial GIN/HNSW indexes; semantic delta search is exact. Excluded paths

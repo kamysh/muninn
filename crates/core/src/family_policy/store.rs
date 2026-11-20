@@ -257,6 +257,9 @@ async fn apply_locked(
     id: Uuid,
     request: &ApplyRequest,
 ) -> Result<ApplyResult> {
+    crate::worktrees::lock(&tx, id)
+        .await
+        .map_err(|_| PolicyError::new("database_error", "cannot lock family"))?;
     let family = family(&tx, id).await?;
     let view = read(&tx, &family).await?.ok_or_else(|| {
         PolicyError::new(
@@ -310,6 +313,13 @@ async fn apply_locked(
             &[&id],
         )
         .await?;
+    }
+    if impact == Some(Impact::Selection) && view.indexing_enabled {
+        crate::maintenance::request_family(&tx, id)
+            .await
+            .map_err(|_| {
+                PolicyError::new("database_error", "cannot record selection maintenance")
+            })?;
     }
     wake(&tx, id).await?;
     let view = read(&tx, &family).await?.ok_or_else(invalid_storage)?;

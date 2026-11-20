@@ -659,6 +659,12 @@ async fn main() -> anyhow::Result<()> {
                                 "not indexed".to_string()
                             }
                         });
+                    let maintenance = muninn_core::maintenance::pending(&client, r.id).await?;
+                    let status = if maintenance {
+                        format!("{status}; selection maintenance pending")
+                    } else {
+                        status
+                    };
                     let paused = if r.paused { "  [paused]" } else { "" };
                     println!("  {:24}  {}  [{}]{}", r.name, r.path, status, paused);
                 }
@@ -682,6 +688,10 @@ async fn main() -> anyhow::Result<()> {
                 println!("Embedding:    {} dims", r.embedding_dim);
                 println!("Paused:       {}", r.paused);
                 println!("Reindex owed: {}", r.indexed_at.is_none());
+                println!(
+                    "Maintenance:  {}",
+                    muninn_core::maintenance::status(&client, r.id).await?
+                );
             }
         },
 

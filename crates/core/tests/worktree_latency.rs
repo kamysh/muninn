@@ -164,9 +164,14 @@ async fn worktree_latency() -> Result<()> {
     let target = worktrees::resolve(&client, &child)
         .await?
         .context("child not indexed")?;
-    let related =
-        worktrees::query_related(&client, &target, "anchor", StructuralRelation::Calls, true)
-            .await?;
+    let related = worktrees::query_related(
+        &mut client,
+        &target,
+        "anchor",
+        StructuralRelation::Calls,
+        true,
+    )
+    .await?;
     ensure!(
         !related.is_empty(),
         "missing callers after first publication"

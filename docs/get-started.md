@@ -316,7 +316,10 @@ first use. Keys are never displayed by the form.
 
 Review the frozen shipped/global defaults and your custom exclusion/vendor rules
 in the form.
-Git ignores are not used. Vendor files remain available to text search without
+Indexing uses Git ignore defaults; explicit Muninn inclusions can override them.
+A `.gitignore` or selection-policy change can temporarily make family searches
+unavailable while reconciliation completes. `muninn status PATH` and JSON config
+inspection report pending maintenance. Metadata preflight does not apply Git ignores. Vendor files remain available to text search without
 initial embeddings. The file inventory recommends Start for a suitable selection
 or refinement for large, incomplete, or dependency-heavy inventories; suggestions
 are never applied automatically. Save registers the family without indexing it.

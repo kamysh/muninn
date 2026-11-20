@@ -240,7 +240,7 @@ async fn backfill_dedups_identical_content() {
             dim: TEST_DIM,
             calls: calls.clone(),
         };
-        let updated = backfill_once(&client, repo_id, &embedder, TEST_DIM)
+        let updated = backfill_once(&mut client, repo_id, &embedder, TEST_DIM)
             .await
             .expect("backfill_once");
 
@@ -260,7 +260,7 @@ async fn backfill_dedups_identical_content() {
         assert!(chunks.iter().all(|c| c.has_embedding));
 
         // A second pass finds nothing left to do.
-        let again = backfill_once(&client, repo_id, &embedder, TEST_DIM)
+        let again = backfill_once(&mut client, repo_id, &embedder, TEST_DIM)
             .await
             .expect("backfill_once #2");
         assert_eq!(again, 0, "no pending chunks remain");

@@ -95,7 +95,9 @@ creation policy/defaults without registering. `config PATH --json` reports
 Inspect `.data.policy`, `.data.effective_policy`, `.data.defaults`,
 `.data.capabilities`, and `.data.preflight`. Preflight reports file counts,
 bytes, costly directories, limits and advice; it does not parse or embed files
-and cannot guarantee indexing cost. Git ignore files are not applied. Choose
+and cannot guarantee indexing cost. This metadata preflight does not apply Git ignore files. Runtime indexing does,
+with explicit Muninn inclusion overrides. Selection maintenance temporarily refuses
+family searches; inspect status/configuration for pending targets and errors. Choose
 exclusions based on what the task needs and the actual inventory, including
 build outputs, dependencies and generated bundles. Review incomplete inventory
 and warnings before deciding to start. `index.exclude` drops files;

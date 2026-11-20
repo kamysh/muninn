@@ -260,6 +260,11 @@ pub async fn query_with_creation(
         ));
     }
     let mut data = context.document();
+    if let Some(view) = &context.view {
+        data["selection_maintenance"] = crate::maintenance::status(&tx, view.family_id)
+            .await
+            .map_err(|_| PolicyError::new("database_error", "cannot read selection maintenance"))?;
+    }
     let (mut selected, defaults) = if context.view.is_some() {
         context.policy_and_defaults()
     } else {

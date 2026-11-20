@@ -1,40 +1,33 @@
-# Generic crash injection for the exclusion operation
+# Selection-maintenance interruption checks
 
-The Rust implementation must be checked against the same interruption/retry
-property as the formal operation, including the orphan-record cleanup problem.
-This contract defines the reusable harness slice and the commit-boundary
-registration the adapter owes.
+The active issue #203 adapter is serialized maintenance; see
+[the approved contract](ISSUE-203-SERIALIZED-MAINTENANCE.md).
+It uses PostgreSQL transaction rollback and durable pending requests.
 
-## Boundaries
+## Registered boundaries
 
-`CRASH-BOUNDARIES.json` names every commit boundary the exclusion operation
-crosses, each tied to its spec module: reader admission, each bounded
-deletion/projection batch, the receipt progress checkpoint, the follow-up
-capture and the finalization commit. A crash can lose the acknowledgement at
-any of these; the retry must reach the independently specified world outcome
-across every owned record category.
+`CRASH-BOUNDARIES.json` and `maintenance.rs::CRASH_BOUNDARIES` describe three
+commit boundaries:
 
-The adapter registers the boundaries it commits through in a
-`pub const CRASH_BOUNDARIES: &[&str]` table
-(`crates/core/src/cleanup.rs`).
+- Request acceptance: pending targets commit with the selection-policy change,
+  or before processing a Git-triggered refresh.
+- Target publication: the manifest, structural view, unused-data cleanup and
+  completed generation commit together.
+- Failure metadata: a separate transaction records the error while retaining
+  the pending request.
 
-## Harness
+`scripts/check_crash_boundaries.py` checks that registration matches the manifest.
+`muninn-setup/crash-injection-check.sh` invokes that registration check through
+the guarded fixture. Registration alone is not crash-injection evidence.
 
-`muninn-setup/crash-injection-check.sh` runs inside the guarded disposable
-fixture (as the payload of `muninn-setup/test-persistence.sh`). It enumerates
-the registered boundaries against the manifest and fails while any boundary
-is unregistered — a crash at an unregistered boundary cannot be retried
-against the world outcome. The check reports; it never substitutes a
-happy-path test for the missing retry assertion.
+## Observed coverage and limits
 
-## Current status
+The `serialized_maintenance` disposable-database test injects a preparation
+failure, checks that pending work and retained data survive, and retries using
+a new connection. The existing worktree persistence scenario changes a file
+during publication and checks that the transaction preserves the old view.
+These are failure/rollback and reconnect tests, not process-kill tests at every
+commit boundary. They do not prove PostgreSQL or the Rust implementation.
 
-The exclusion cleanup adapter is present: `crates/core/src/cleanup.rs`
-implements reader admission, bounded batch deletion, the receipt progress
-checkpoint, follow-up capture and finalization, and registers all five commit
-boundaries in the `CRASH_BOUNDARIES` table. `scripts/check_crash_boundaries.py`
-verifies the registration against the manifest in the pre-commit hook and CI.
-Retry-through-the-real-adapter assertions still land together with the
-harness slice; this slice authorizes no runtime repair or deployment.
-Observed results must be real; the model's outcome is the assertion target,
-not the implementation's current behavior.
+The earlier concurrent workset/reader-pin/receipt adapter in `cleanup.rs` is
+superseded for this operation. It is not the active runtime maintenance path.
