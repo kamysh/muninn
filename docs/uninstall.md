@@ -16,8 +16,16 @@ retains its stored index. Other filesystem errors do not trigger retirement.
 The daemon also retires a registered family when its stored local root is
 missing for 60 seconds. The retained index and policy are not deleted; the family
 disappears from ordinary status and indexing, and a replacement clone can be
-registered at the same path. Use explicit `muninn remove /registered/path` to
-delete retained data if needed.
+registered at the same path.
+
+**Check for a replacement before removing a retired family.**
+`muninn remove /registered/path` selects the active registration first.
+If a replacement clone is active at that path, the command targets the
+replacement's index. If there is no active registration, it targets the most
+recently retired registration at that path. Check `muninn status` before
+proceeding. If it shows an active replacement and you mean to remove the
+retired family's index, stop. This command cannot select the retired family
+while the replacement is active.
 
 Do **not** use `muninn remove` to remove only one linked worktree: that command
 operates on a registered family's index, not a checkout-specific removal intent.
