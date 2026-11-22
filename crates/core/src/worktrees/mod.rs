@@ -277,6 +277,16 @@ async fn reconcile_family_targets(
         );
     }
     let (primary, entries) = discovery(root).await?;
+    if requested.is_none()
+        && changed.is_some_and(|paths| {
+            !paths.is_empty()
+                && paths
+                    .iter()
+                    .all(|path| git_bookkeeping(&primary.common_dir, path))
+        })
+    {
+        return Ok((BatchOutcome::AllSucceeded, Vec::new()));
+    }
     let s = schema(family);
     let tx = client.transaction().await?;
     lock(&tx, family).await?;
@@ -468,14 +478,8 @@ async fn reconcile_family_targets(
     } else {
         let already_pending = crate::maintenance::pending(&tx, family).await?;
         for (initialized, target, git) in &targets {
-            let refresh = changed.is_some_and(|paths| {
-                paths.iter().any(|path| {
-                    path.starts_with(&git.git_dir)
-                        || path.starts_with(&git.common_dir)
-                        || (path.starts_with(&target.root)
-                            && path.file_name().is_some_and(|name| name == ".gitignore"))
-                })
-            });
+            let refresh =
+                changed.is_some_and(|paths| paths.iter().any(|path| selection_event(git, path)));
             if refresh || (!initialized && already_pending) {
                 crate::maintenance::request(&tx, family, target.checkout).await?;
             }
@@ -517,7 +521,7 @@ async fn reconcile_family_targets(
             && changed.is_some_and(|paths| {
                 !paths
                     .iter()
-                    .any(|p| p.starts_with(&target.root) || p.starts_with(&git.git_dir))
+                    .any(|path| source_event(&git, path) || git_operation_event(&git, path))
             })
         {
             continue;
@@ -673,8 +677,50 @@ async fn scan(
     Ok(files)
 }
 
-// Directory or Git-administration events can affect paths not named in the
-// event. Those cases use the full-audit path instead of guessing descendants.
+fn git_bookkeeping(common_dir: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(common_dir) else {
+        return false;
+    };
+    let admin_relative = if let Ok(linked) = relative.strip_prefix("worktrees") {
+        let mut components = linked.components();
+        components.next();
+        components.as_path()
+    } else {
+        relative
+    };
+    ["index", "index.lock"]
+        .iter()
+        .any(|name| admin_relative == Path::new(name))
+        || ["objects", "refs", "logs"]
+            .iter()
+            .any(|name| admin_relative.starts_with(name))
+}
+
+fn source_event(git: &GitCheckout, path: &Path) -> bool {
+    path.starts_with(&git.root)
+        && !path.starts_with(&git.common_dir)
+        && !path.starts_with(&git.git_dir)
+        && path != git.root.join(".git")
+}
+
+fn selection_event(git: &GitCheckout, path: &Path) -> bool {
+    ["info", "info/exclude", "config"]
+        .iter()
+        .any(|name| path == git.common_dir.join(name))
+        || path == git.git_dir.join("config.worktree")
+        || (source_event(git, path) && path.file_name().is_some_and(|name| name == ".gitignore"))
+}
+
+fn git_operation_event(git: &GitCheckout, path: &Path) -> bool {
+    path.strip_prefix(&git.git_dir).is_ok_and(|relative| {
+        ["HEAD", "MERGE_HEAD", "rebase-merge", "rebase-apply"]
+            .iter()
+            .any(|name| relative.starts_with(name))
+    })
+}
+
+// Directory and Git operation events may affect paths not named in the event.
+// Source edits otherwise reconcile just the reported paths.
 fn changed_paths(
     target: &Target,
     git: &GitCheckout,
@@ -683,11 +729,11 @@ fn changed_paths(
 ) -> Option<Vec<PathBuf>> {
     let mut paths = BTreeSet::new();
     for event in events? {
-        if event.starts_with(&git.git_dir)
-            || event.starts_with(&git.common_dir)
-            || event.file_name().is_some_and(|name| name == ".gitignore")
-        {
+        if selection_event(git, event) || git_operation_event(git, event) {
             return None;
+        }
+        if !source_event(git, event) {
+            continue;
         }
         let Ok(relative) = event.strip_prefix(&target.root) else {
             continue;
@@ -1021,7 +1067,8 @@ async fn reconcile_checkout(
         ).await?;
     }
     let versioned = started.elapsed();
-    if refresh_graph || !initialized || previous != desired {
+    let publish = refresh_graph || !initialized || previous != desired;
+    if publish {
         if target.graph == target.family {
             publish_base(&tx, &s, target.checkout, &desired).await?;
             // Legacy rows have no reliable file-version identity. They remain
@@ -1069,7 +1116,7 @@ async fn reconcile_checkout(
     let graphed = started.elapsed();
     // Re-read the selection and hashes before committing. A read/scan failure or
     // Git blocker rolls back chunks, deltas and graph together.
-    if let Some(changes) = &fast_changes {
+    if let Some(changes) = fast_changes.as_ref().filter(|_| publish) {
         let paths: Vec<_> = changes.iter().map(|(path, _)| path.clone()).collect();
         let ignored = crate::git_ignore::check(&target.root, &paths).await?;
         for ((path, before), ignored) in changes.iter().zip(ignored) {
@@ -1088,7 +1135,7 @@ async fn reconcile_checkout(
                 "files changed during indexing; retaining previous index"
             );
         }
-    } else {
+    } else if publish {
         let after = scan(&target.root, &selection).await?;
         ensure!(
             files.len() == after.len()
@@ -1103,11 +1150,13 @@ async fn reconcile_checkout(
         git_stamp(git).await? == stamp,
         "Git HEAD changed during indexing; retaining previous index"
     );
-    tx.execute(&format!("UPDATE {s}.checkouts SET indexed_at=now(),availability='available',git_state='clear',merge_in_progress=false,rebase_merge_in_progress=false,rebase_apply_in_progress=false,unmerged_index=false,observed_at=now(),last_seen_at=now() WHERE id=$1"),&[&target.checkout]).await?;
-    if target.graph == target.family {
+    tx.execute(&format!("UPDATE {s}.checkouts SET indexed_at=CASE WHEN $2 THEN now() ELSE indexed_at END,availability='available',git_state='clear',merge_in_progress=false,rebase_merge_in_progress=false,rebase_apply_in_progress=false,unmerged_index=false,observed_at=now(),last_seen_at=now() WHERE id=$1"),&[&target.checkout, &publish]).await?;
+    if publish && target.graph == target.family {
         store::mark_indexed(tx.client(), target.family).await?;
     }
-    garbage_collect(&tx, &s).await?;
+    if publish {
+        garbage_collect(&tx, &s).await?;
+    }
     crate::maintenance::complete(&tx, target.family, target.checkout, maintenance_generation)
         .await?;
     tx.commit().await?;
