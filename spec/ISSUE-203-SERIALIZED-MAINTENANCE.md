@@ -83,15 +83,23 @@ retry through the closed client; pending generations survive the restart.
 ## Triggers and selection
 
 * Creation, change, deletion or rename of any `.gitignore` schedules the affected
-  checkout, even when that ignore file is not indexed. Shared Git exclude inputs
-  and uncertain event coverage schedule all potentially affected checkouts.
+  checkout, even when that ignore file is not indexed. A shared exclude-file
+  event or shared Git configuration change that may redirect it schedules the
+  family. Per-checkout Git configuration schedules that checkout. Ordinary Git
+  bookkeeping (index, objects, refs and reflogs) does not change selection:
+  Git ignore matching ignores staging state. Git operation markers can trigger
+  reconciliation of their own checkout. Worktree registry changes are handled
+  by discovery, and uncertain event coverage falls back to the audit.
+* An ordinary source change reconciles its checkout and the reported paths.
+  Nested Git administrative paths are never ordinary source changes.
 * A family selection-policy change schedules every active/suppressed checkout
   with retained or authorized index work. A directory family has one target.
 * Keep the agreed five-minute audit to discover missed filesystem events.
   An audit scans selection without declaring a policy change or requesting an
   unconditional graph rebuild. Unchanged selected versions retain their graph;
   observed manifest changes and existing explicit requests still reconcile under
-  the same serialized path. Paused/blocked targets remain pending.
+  the same serialized path. An unchanged scan does not republish the checkout
+  or advance its publication time. Paused/blocked targets remain pending.
 
 For a target, enumerate the union of previously published paths, current Git
 tracked/untracked candidates, and paths reached by explicit Muninn inclusions.

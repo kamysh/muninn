@@ -108,6 +108,88 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     let requested_sql =
         format!("SELECT COALESCE(sum(requested),0)::bigint FROM {schema}.selection_maintenance");
     let requested_before: i64 = client.query_one(&requested_sql, &[]).await?.get(0);
+    let checkout_state_sql =
+        format!("SELECT indexed_at::text, xmin::text FROM {schema}.checkouts WHERE id=$1");
+    let sibling_before = client
+        .query_one(&checkout_state_sql, &[&sibling.checkout])
+        .await?;
+    let sibling_published: String = sibling_before.get(0);
+    let sibling_row_version: String = sibling_before.get(1);
+    let linked_git = muninn_core::repo_resolver::discover_git_checkout(&linked)
+        .await?
+        .context("linked fixture checkout should exist")?;
+    git(&linked, &["add", "shared.rs"])?;
+    git(&linked, &["branch", "fixture-bookkeeping"])?;
+    let bookkeeping = [
+        linked_git.git_dir.join("index"),
+        linked_git.common_dir.join("refs/heads/fixture-bookkeeping"),
+    ];
+    let mut reader = target.connect().await?;
+    let held_reader = maintenance::read(&mut reader, id).await?;
+    // A bookkeeping-only batch must finish even while a reader prevents
+    // exclusive family admission.
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        id,
+        &root,
+        Arc::new(Embed { fail: true }),
+        8,
+        512,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&bookkeeping),
+    )
+    .await?;
+    ensure!(skips.is_empty());
+    ensure!(
+        !worktrees::fulltext_search(client, &sibling, "sharedword", 10)
+            .await?
+            .is_empty()
+    );
+    held_reader.rollback().await?;
+
+    let changed = root.join("edited.rs");
+    fs::write(&changed, "fn editedonlyword() {}\n")?;
+    let (_, skips) = worktrees::reconcile_changed_family(
+        client,
+        id,
+        &root,
+        Arc::new(Embed { fail: false }),
+        8,
+        512,
+        &[],
+        &[],
+        |_, _, _| {},
+        Some(&[bookkeeping[0].clone(), bookkeeping[1].clone(), changed]),
+    )
+    .await?;
+    ensure!(skips.is_empty());
+    ensure!(
+        client
+            .query_one(&requested_sql, &[])
+            .await?
+            .get::<_, i64>(0)
+            == requested_before
+    );
+    ensure!(
+        client
+            .query_one(&checkout_state_sql, &[&sibling.checkout])
+            .await?
+            .get::<_, String>(1)
+            == sibling_row_version
+    );
+    ensure!(
+        !worktrees::fulltext_search(client, &base, "editedonlyword", 10)
+            .await?
+            .is_empty()
+    );
+    ensure!(
+        worktrees::fulltext_search(client, &sibling, "editedonlyword", 10)
+            .await?
+            .is_empty()
+    );
+
     let graph = store::graph_name(id);
     let ids_sql = format!("SELECT array_agg(id::text ORDER BY id) FROM {graph}._ag_label_vertex");
     let graph_before: Vec<String> = client.query_one(&ids_sql, &[]).await?.get(0);
@@ -122,6 +204,40 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         graph_after == graph_before,
         "an unchanged audit must retain the existing graph"
     );
+    ensure!(
+        client
+            .query_one(&checkout_state_sql, &[&sibling.checkout])
+            .await?
+            .get::<_, String>(0)
+            == sibling_published,
+        "an unchanged audit must retain the publication time"
+    );
+    let shared_exclude = linked_git.common_dir.join("info/exclude");
+    fs::write(&shared_exclude, "anchor.rs\n")?;
+    for expected_visible in [false, true] {
+        if expected_visible {
+            fs::remove_file(&shared_exclude)?;
+        }
+        let (_, skips) = worktrees::reconcile_changed_family(
+            client,
+            id,
+            &root,
+            Arc::new(Embed { fail: false }),
+            8,
+            512,
+            &[],
+            &[],
+            |_, _, _| {},
+            Some(std::slice::from_ref(&shared_exclude)),
+        )
+        .await?;
+        ensure!(skips.is_empty());
+        for checkout in [&base, &sibling] {
+            let hits = worktrees::fulltext_search(client, checkout, "anchorword", 10).await?;
+            let visible = !hits.is_empty();
+            ensure!(visible == expected_visible);
+        }
+    }
     let versions: i64 = client
         .query_one(
             &format!("SELECT count(*) FROM {schema}.file_versions WHERE path='shared.rs'"),
