@@ -29,11 +29,20 @@ class CatalogCheck(unittest.TestCase):
                 check.check('advertised', self.expected, check.advertised(check.tokens(changed)))
 
     def test_wrong_dispatch_handler(self):
-        changed = self.rust.replace('tools::search_hybrid(ctx, params)',
-                                    'tools::search_fulltext(ctx, params)', 1)
+        changed = self.rust.replace('requests::search(ctx, "search_hybrid", args)',
+                                    'requests::search(ctx, "search_fulltext", args)', 1)
         self.assertNotEqual(changed, self.rust)
+        with self.assertRaises(ValueError):
+            check.dispatched(check.tokens(changed))
+
+    def test_wrong_resumed_handler(self):
+        source = (ROOT / 'crates/mcp/src/requests.rs').read_text()
+        changed = source.replace('tools::search_hybrid(', 'tools::search_fulltext(', 1)
+        self.assertNotEqual(changed, source)
+        resumed = dict(check.dispatched(check.tokens(changed), 'execute', 'tool'))
         before = [name + ':' + handler for name, handler in self.dispatch]
-        after = [name + ':' + handler for name, handler in check.dispatched(check.tokens(changed))]
+        after = [name + ':' + handler for name, handler in
+                 check.dispatched(check.tokens(self.rust), resumable=resumed)]
         with self.assertRaises(ValueError):
             check.check('dispatch', before, after)
 

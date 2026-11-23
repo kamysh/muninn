@@ -287,6 +287,14 @@ pub async fn lookup_checkout(
     Ok(checkout.map(|checkout| ResolvedCheckout { family, checkout }))
 }
 
+pub(crate) async fn lookup_checkout_by_git_dir(
+    client: &impl GenericClient,
+    family: &Family,
+    git_dir: &StoredPath,
+) -> Result<Option<Checkout>> {
+    checkout_by_key(client, family, git_dir, "git_dir").await
+}
+
 /// Idempotent discovery: a suppressed checkout remains suppressed. Explicit
 /// reactivation/relocation and legacy import are separate lifecycle operations.
 pub async fn register_checkout(

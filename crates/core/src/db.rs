@@ -316,6 +316,8 @@ mod migration_tests {
                     "public-family-registration-intent",
                     "public-live-family-paths",
                     "receipt-markers",
+                    "knowledge-family-scopes",
+                    "mcp-request-owners",
                 ],
             ),
             (
@@ -334,6 +336,9 @@ mod migration_tests {
                     "repo-selection-maintenance",
                     "repo-worktree-initial-progress",
                     "repo-checkout-file-versions",
+                    "repo-checkout-symlinks",
+                    "repo-file-layout",
+                    "repo-policy-file-limits",
                 ],
             ),
         ] {

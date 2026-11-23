@@ -94,6 +94,13 @@ pub enum Selection {
     Legacy(ignore::overrides::Override, ignore::overrides::Override),
 }
 impl Selection {
+    pub fn limits(&self) -> crate::config::FileLimits {
+        match self {
+            Self::Policy(rules) => rules.limits,
+            Self::Legacy(..) => crate::config::FileLimits::default(),
+        }
+    }
+
     pub fn new(
         root: &Path,
         view: Option<&PolicyView>,

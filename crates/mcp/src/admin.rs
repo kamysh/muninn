@@ -149,6 +149,15 @@ pub async fn cancel_work(ctx: &SearchContext, repo: &str, operation_id: &str) ->
     let (family_id, _) = resolve_family(ctx, repo).await?;
     let client = ctx.client.as_ref();
     let schema = store::repo_schema(family_id);
+    if let Ok(id) = Uuid::parse_str(operation_id) {
+        let id = id.to_string();
+        if owned_control::mcp_request_owner(client, &id).await? == Some(Some(family_id)) {
+            let removed =
+                owned_control::finish_receipt(client, &schema, &id, &json!({"cancelled": true}))
+                    .await?;
+            return Ok(json!({"cancelled": removed > 0, "removed_rows": removed}));
+        }
+    }
     let removed = owned_control::cancel_accepted_work(client, &schema, operation_id).await?;
     Ok(json!({"cancelled": removed > 0, "removed_rows": removed}))
 }
@@ -163,55 +172,48 @@ pub async fn inspect_status(ctx: &SearchContext, repo: &str) -> Result<Value> {
     Ok(data)
 }
 
-/// unregister_family: retire without deleting index data.
+/// unregister_family: retire and clear derived code, preserving authored notes.
 pub async fn unregister_family(ctx: &SearchContext, repo: &str) -> Result<Value> {
     let (family_id, _) = resolve_family(ctx, repo).await?;
     let mut client = db::connect(&ctx.config.database).await?;
-    let schema = store::repo_schema(family_id);
-    let tx = client.transaction().await?;
-    tx.execute(
-        "UPDATE public.repos SET retired_at = now() WHERE id = $1 AND retired_at IS NULL",
-        &[&family_id],
-    )
-    .await?;
-    tx.execute(
-        &format!("UPDATE \"{schema}\".checkouts SET registration_state='retired', retired_at=now(), indexed_at=NULL WHERE registration_state='active'"),
-        &[],
-    )
-    .await?;
-    tx.commit().await?;
+    store::unregister_repo(&mut client, family_id).await?;
     Ok(json!({"unregistered": true, "family_id": family_id}))
 }
 
 /// forget_repository: unregister and delete all owned index data.
 pub async fn forget_repository(ctx: &SearchContext, repo: &str) -> Result<Value> {
-    let (family_id, _) = resolve_family(ctx, repo).await?;
+    let path = Path::new(repo);
+    let registered = if path.try_exists()? {
+        worktrees::registered_family(ctx.client.as_ref(), path).await?
+    } else {
+        None
+    };
+    let family = match registered {
+        Some(family) => family,
+        None => store::get_repo_by_path_for_removal(ctx.client.as_ref(), repo)
+            .await?
+            .context("repository family is not registered")?,
+    };
     let mut client = db::connect(&ctx.config.database).await?;
-    store::delete_repo(&mut client, family_id).await?;
-    Ok(json!({"forgotten": true, "family_id": family_id}))
+    store::forget_repo(&mut client, family.id).await?;
+    Ok(json!({"forgotten": true, "family_id": family.id}))
 }
 
-/// recreate_index: embedding profile recreation is not yet implemented in the
-/// Rust adapter; the response explains the current method and its alternative.
-pub async fn recreate_index(ctx: &SearchContext, repo: &str, _draft: &Value) -> Result<Value> {
+/// recreate_index: set a new profile and clear its old derived records.
+pub async fn recreate_index(ctx: &SearchContext, repo: &str, draft: &Value) -> Result<Value> {
     let (family_id, _) = resolve_family(ctx, repo).await?;
-    Ok(json!({
-        "available": false,
-        "family_id": family_id,
-        "guidance": "Embedding profile recreation is not implemented yet. The index can be rebuilt with reindex_family under the current profile; changing the profile itself needs a new family registration."
-    }))
+    let request = serde_json::from_value(draft.clone())?;
+    let mut client = db::connect(&ctx.config.database).await?;
+    family_policy::recreate_profile(&mut client, family_id, &request).await
 }
 
-/// convert_directory: an existing registration keeps its identity when the
-/// directory becomes a Git repository; the conversion is not yet implemented
-/// in the Rust adapter, so the response explains the current method.
-pub async fn convert_directory(ctx: &SearchContext, repo: &str, _draft: &Value) -> Result<Value> {
-    let (family_id, _) = resolve_family(ctx, repo).await?;
-    Ok(json!({
-        "available": false,
-        "family_id": family_id,
-        "guidance": "Directory-to-Git conversion is not implemented yet. The registered directory keeps its current identity; register the Git checkout separately or unregister and register it as a repository."
-    }))
+/// convert_directory preserves the registered family and its checkout identity.
+pub async fn convert_directory(ctx: &SearchContext, repo: &str, draft: &Value) -> Result<Value> {
+    let (family_id, root) = resolve_family(ctx, repo).await?;
+    let request = family_policy::start::Request::parse(&serde_json::to_string(draft)?)
+        .map_err(|e| anyhow!(e.to_string()))?;
+    let mut client = db::connect(&ctx.config.database).await?;
+    family_policy::convert_directory(&mut client, family_id, &root, &request).await
 }
 
 /// continue_request: resume the saved work or return the saved result for an
@@ -228,6 +230,9 @@ pub async fn continue_request(
             "resumed": false,
             "guidance": "This request already completed and its details were compacted to the ID. Inspect the current state before deciding whether another operation is needed."
         }));
+    }
+    if let Some(response) = crate::requests::resume(ctx, operation_id).await? {
+        return Ok(response);
     }
     let families = store::list_repos(client).await?;
     for family in families {

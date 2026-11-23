@@ -1,3 +1,17 @@
+# Changing the embedding profile
+
+An ordinary policy update keeps the embedding backend and model. The
+explicit profile recreation operation preserves registration, policy
+history and authored notes. Code indexes and vectors derived under the
+old profile are cleared. A repeated request for the same profile leaves
+subsequently rebuilt data intact.
+
+The [policy store](../../crates/core/src/family_policy/store.rs) makes the
+profile and invalidation visible together. The [MCP lifecycle test](../../crates/mcp/src/worktree_tests.rs)
+checks that a note remains text-searchable after recreation and that retrying
+the operations preserves the rebuilt code index.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Changing a family embedding profile recreates derived data atomically.
 module Muninn.ProfileRecreation where
@@ -171,3 +185,4 @@ module Model (Identity Settings Index : Set)
   retryAfterInterruption : ∀ family profile before →
     recreate family profile (attempt false family profile before) ≡ recreate family profile before
   retryAfterInterruption family profile before = refl
+```

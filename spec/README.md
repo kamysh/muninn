@@ -6,8 +6,8 @@ are not generated Rust and do not constitute a refinement proof of the running
 application. [Development](../docs/development.md) describes the 1.4.0
 implementation; historical proposal/status records remain under `docs/plans/`.
 
-The [reading guide](../SPEC-READING-GUIDE.md) links to the literate worktree
-publication and first-search topics.
+The [reading guide](../SPEC-READING-GUIDE.md) links to the literate modules by
+operation, along with their Rust adapters and tests.
 
 ## Current implementation in brief
 
@@ -107,8 +107,8 @@ normalization and Rust correspondence also remain outstanding (#51–#52).
 
 [Family note state](NOTE-STATE.md) defines family and worktree visibility,
 atomic note changes with request receipts, profile recreation and preservation
-of unrelated state. Runtime path-key and embedding-profile differences remain
-correspondence obligations.
+of unrelated state. The adapter preserves historical literal note keys and
+uses stable checkout IDs for new scoped notes.
 
 ## Known model/runtime gaps
 
@@ -117,9 +117,9 @@ model or silently change the application during a documentation edit:
 
 | Area | Model | Current runtime |
 | --- | --- | --- |
-| Graph ownership | `Storage.SchemaAssignment` maps a family to a `SchemaPair`; `sameFamilySameSchemaPair` covers both roles | Application schema is family-owned; Git checkout graphs are separate AGE namespaces |
-| Curated knowledge | `Knowledge` models family-scoped notes | `public.knowledge` and MCP knowledge tools use exact repository-path strings |
-| Removal | `Cli` distinguishes abstract directory/family intents | Legacy `remove PATH` resolves a registered locator and deletes the family's code index; Git discovery handles checkout retirement |
+| Graph ownership | `Storage.SchemaAssignment` maps a family to a `SchemaPair`; `sameFamilySameSchemaPair` covers both roles | New structural snapshots live in the family application schema. Compatibility reads can still reach older checkout AGE graphs |
+| Curated knowledge receipts | `KnowledgeState` and `NoteRequests` model notes and durable request receipts | The MCP adapter enforces scope and commits receipts for changes with a supplied operation ID. Legacy calls omit the ID |
+| Removal | `Cli` distinguishes abstract directory/family intents | MCP unregister preserves policy and notes while clearing code. MCP forget also removes family-owned notes. Legacy `remove PATH` uses the registered locator and retains its historical behavior |
 
 Other abstract fields/constructors should be traced to their concrete runtime
 representation before asserting equivalence. Passing a type check does not close

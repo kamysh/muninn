@@ -1,3 +1,17 @@
+# How work continues when database access returns
+
+The session retains its request identity while database access is unavailable.
+Once access returns, the continuation inspects the receipt before choosing
+whether to execute active work or return a committed result. A TCP connection
+alone does not establish that the shared receipt store is usable.
+
+[Database startup](DatabaseStartup.lagda.md) covers connection and readiness.
+The [watcher dispatcher](../../crates/indexer/src/main.rs) reconnects after its
+notification connection closes. The [MCP request adapter](../../crates/mcp/src/requests.rs)
+can recover a saved search by ID over a fresh MCP connection. The automated
+watcher reconnect and caller-driven MCP recovery are separate runtime paths.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Responsive waiting and receipt-first continuation when database access returns.
 module Muninn.DatabaseResumption where
@@ -154,3 +168,4 @@ module Protocol
   resumesAfterObservations subject observations current slot owner names progress world found = trans
     (cong (λ state → serve subject state world) (observationKeepsSession observations usable current))
     (resumesActive subject (Session.bootstrap current) (Session.context current) (Session.access current) slot owner names progress world found)
+```

@@ -1,3 +1,17 @@
+# Converting a registered directory to Git
+
+Directory registration and Git registration carry a stable family identity.
+Ordinary checkout discovery keeps the registered kind. Explicit conversion
+uses an observation of a primary Git checkout to change the registered kind.
+Existing checkout IDs and compatible indexed work stay attached to the family.
+
+[Registration and first-start authorization](Registration.lagda.md) covers
+saved policy. The [policy store](../../crates/core/src/family_policy/store.rs)
+applies conversion and schedules reconciliation. The
+[MCP lifecycle test](../../crates/mcp/src/worktree_tests.rs) checks stable
+identity, idempotent conversion and retention of existing index records.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Registration is one atomic change. Its slot is a database identity, not a path.
 module Muninn.RepositoryRegistration where
@@ -131,3 +145,4 @@ actualRetryConverges : ∀ id desired before observed → DB.lookup id before �
 actualRetryConverges id desired before observed absent interrupted =
   trans (cong proj₂ (transactionMatchesRegistration id desired observed))
     (retryConverges id desired before observed absent (actualInterruption id desired before observed absent interrupted))
+```

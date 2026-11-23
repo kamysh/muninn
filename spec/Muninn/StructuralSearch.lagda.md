@@ -1,3 +1,22 @@
+# Which structural relationships a search can return
+
+A structural search selects a published checkout and names a symbol and a
+relationship direction. Each candidate has a source and target symbol,
+their file paths and positions, and the relation connecting them. Calls
+and inheritance can be followed in either direction through their
+corresponding operations. These candidates come from name-based analysis.
+
+The model requires the relationship and both symbols to belong to the
+selected snapshot, with both endpoint files visible under the current
+policy. The decoder says how the stored symbol and relationship payloads
+become the typed records the request compares. The caller supplies the full
+eligible candidate universe. The result keeps all its candidates in source
+order, using the related path and start position followed by the identity
+of the relationship to break ties.
+
+[Structural search contract](../STRUCTURAL-SEARCH.md) · [Checkout graph reader](../../crates/core/src/worktrees/mod.rs) · [On-demand MCP regression](../../crates/mcp/src/worktree_tests.rs)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Evidence-bearing name-based structural search over an actual checkout view.
 module Muninn.StructuralSearch where
@@ -220,3 +239,4 @@ module Family (family checkout pointer : ℕ) (world : O.World)
 
   responseIncludesEveryCandidate : ∀ universe (answer : Response universe) candidate → candidate ∈ Response.rows answer
   responseIncludesEveryCandidate universe answer candidate = subst (λ rows → candidate ∈ rows) (sym (Response.completeOrder answer)) (allCandidatesReturned universe candidate)
+```

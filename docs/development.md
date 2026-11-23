@@ -90,7 +90,7 @@ published view while preparation continues.
 | `public.repos` | Family routing, identity, preparation state and indexing authorization; retains legacy locator fields |
 | `repo_<uuid>` | One application schema per Git family or independent directory: chunks, shared file versions, checkout memberships, structural snapshots, checkout registry and saved policy/history |
 | AGE graph schemas | Structural relationships for the primary checkout and older linked checkouts that have not published a snapshot. AGE creates/removes these through its API |
-| `public.knowledge` | Curated notes, keyed by exact repository-path strings; currently separate from family identity |
+| `public.knowledge` | Curated notes with family or checkout scope, plus legacy notes with literal path keys |
 
 Kryzhen's Rust library creates application schemas while applying migrations.
 Each migration directory is one dependency graph applied to **one target schema**:
@@ -125,8 +125,10 @@ generations. See the [checkout publication contract](../spec/CHECKOUT-PUBLICATIO
 Git ignore changes and saved policy changes enqueue durable refresh requests.
 Search filters affected paths before ranking even while a refresh is pending.
 Text and vector queries rank versions referenced by the selected checkout.
-Hybrid search ranks both modalities against one snapshot before RRF. HNSW
-retrieval has recall tradeoffs, and an RRF score measures rank rather than confidence.
+Hybrid search ranks both modalities against one snapshot before RRF. Semantic
+search reports vector coverage and candidate count. Set `exact: true` to
+rank all usable vectors in the selected checkout or directory. The
+default approximate mode ranks a bounded HNSW candidate pool.
 
 File watching and fallback Git discovery find edits, newly linked checkouts and
 worktree removal. A first search of a new linked checkout in an already indexed,
@@ -161,6 +163,10 @@ confirmation enables the family and runs foreground indexing; the daemon can
 continue an interrupted authorized run. New linked worktrees inherit family policy.
 
 The global config holds connection/credentials and service/legacy settings.
+New family defaults take file-size limits from `index.limits`. A family
+can set its own `limits.selected_bytes` and `limits.structural_bytes` in the
+revision-guarded policy. Existing families without those fields keep the
+previous 10 MiB text and 1 MiB structural defaults.
 New family policy snapshots the global family settings; frozen file rules
 combine shipped rules with the captured global additions. Stored defaults and revisioned
 policy do not silently change when global settings or a new binary change defaults.
@@ -192,28 +198,35 @@ file preparation and publication continue.
 
 ### MCP and knowledge
 
-The MCP server is a stdio JSON-RPC process exposing eight tools. Code search
+The MCP server is a stdio JSON-RPC process. Code search
 requires `repo` or `cwd`; explicit `repo` wins. Resolve to the actual checkout,
 not the MCP process's working directory. Git and database registration resolve
 the selected checkout or registered directory.
 
-Curated knowledge currently has a different identity rule: exact `repo` strings.
-Use an established main-checkout key for shared notes. Do not create accidental
-note silos for temporary worktrees. See the [agent skill](claude-code-setup/skill/SKILL.md).
+New curated notes are shared across a registered repository family by default.
+Use checkout scope when a note applies to a single worktree. Existing literal
+path keys remain readable and unregistered paths still use literal keys.
+Code searches and registered-family note changes can take a caller-generated
+UUID as `operation_id`. `continue_request` uses the UUID to resume saved
+work or replay a committed response. Note changes and their finished receipts
+commit in one transaction.
 
 ### Current limitations
 
 - No 100-worktree load measurement or established large-delta latency/recall budget.
   Delta search cost grows with changed chunks; graph reconstruction can parse
   many files even when chunks/vectors are reused.
-- Search responses currently contain results, not freshness/suspension metadata.
-  Inspect Git state and daemon logs when currentness matters.
+- Git search reports the selected snapshot's generation and its recorded Git
+  suspension and partial-index state. Search does not rescan the filesystem to
+  certify that the published view is current.
 - `status PATH`, `pause`, `resume`, `remove` look up the registered locator, not
   arbitrary worktree paths. `config PATH --json` and code searches resolve families.
-- Worktree queries do not implement the legacy vendor ranking penalty or lazy
-  embedding warm-up. Tier-2 chunks without vectors still participate in text search.
-- New families snapshot global provider/model settings. Existing embedding-profile
-  changes remain unsupported; global edits never change saved profiles.
+- Worktree hybrid ranking uses the two ranked result lists without a vendor
+  penalty. The separate vector worker can fill pending embeddings while all
+  published chunks remain available to text search.
+- New families snapshot global provider/model settings. Use the guarded
+  `recreate_index` MCP operation to change an existing profile. It preserves
+  authored notes and clears derived vectors so an old profile cannot be reused.
 - `dsn_override` and `max_connections` are parsed but unused. Authentication and
   TLS policy, including its real-server regression matrix, is documented in
   [Database credentials and TLS](database-connections.md).

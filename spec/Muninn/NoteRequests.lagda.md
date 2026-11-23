@@ -1,3 +1,18 @@
+# Which checkouts can see or change curated notes
+
+A family-wide note is shared across the checkouts in that family. A
+checkout-local note is visible in its own checkout and can be updated or
+deleted from that checkout. The model resolves the request location before
+applying its family and scope checks. It distinguishes the original request
+receipt from a later mutation of the same note.
+
+The independent outcome predicates require a successful write or deletion
+to leave unrelated notes, profiles and receipts intact. Derived note
+vectors depend on the current note contents and family profile.
+
+[Note state requirements and correspondence](../NOTE-STATE.md) · [MCP knowledge operations](../../crates/mcp/src/tools.rs) · [PostgreSQL note adapter](../../crates/core/src/knowledge.rs)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Note writes and deletes share the request receipt with their state change.
 module Muninn.NoteRequests where
@@ -407,3 +422,4 @@ module For (Other OtherReply : Set)
   deleteReceiptOwnedByFamily expected (delete {ledger = ledger} {request = request} {id = id} input resolved found visible owner receipt)
     with trans (sym input) expected
   ... | refl rewrite R.updateAt (C.Mutation.operationId request) (R.completed (deleteMeaning request) (deleted id)) ledger | owner = refl
+```

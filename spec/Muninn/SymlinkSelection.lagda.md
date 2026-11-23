@@ -1,3 +1,22 @@
+# Which paths through symbolic links can be indexed
+
+Each displayed path has its own selection outcome. A source can therefore
+appear under several paths. Resolution checks every intermediate link target
+against the boundary of the selected checkout. A link that reaches outside
+the checkout cannot be used to read a file, even if it would later re-enter.
+
+The [worktree scanner](../../crates/core/src/worktrees/mod.rs) follows
+eligible internal aliases and [the Git ignore adapter](../../crates/core/src/git_ignore.rs)
+evaluates rules against their displayed paths. The
+[on-demand test](../../crates/mcp/src/worktree_tests.rs) covers internal file
+and directory aliases, independent ignore matches, cycles and external links.
+The [directory policy test](../../crates/core/tests/family_persistence/runtime.rs)
+also checks a plain directory alias.
+
+The formal laws assume a consistent filesystem observation. They do not
+establish a snapshot in the presence of concurrent filesystem writes.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Select each displayed path independently and retain physical identity.
 module Muninn.SymlinkSelection where
@@ -193,3 +212,4 @@ module Checkout (root : Link.Path) (snapshot : Link.Snapshot root)
     left , right , firstMember , secondMember ,
     sameTargetSameIdentity left right (trans firstTarget (sym secondTarget)) ,
     distinctDisplayed first second different
+```

@@ -1,6 +1,6 @@
 use crate::store::graph_name;
-use crate::types::{LineRange, StructuralEdge, StructuralRelation, Symbol, SymbolKind};
-use anyhow::Result;
+use crate::types::{StructuralEdge, StructuralMatch, StructuralRelation, Symbol, SymbolKind};
+use anyhow::{Context, Result};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -285,13 +285,35 @@ pub async fn query_related(
     relation: StructuralRelation,
     incoming: bool,
 ) -> Result<Vec<Symbol>> {
+    Ok(
+        query_relationships(client, repo_id, symbol_name, relation, incoming)
+            .await?
+            .iter()
+            .map(|edge| edge.related(incoming).clone())
+            .collect(),
+    )
+}
+
+pub async fn query_relationships(
+    client: &mut Client,
+    repo_id: Uuid,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<Vec<StructuralMatch>> {
     if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
-        return crate::worktrees::query_related(client, &target, symbol_name, relation, incoming)
-            .await;
+        return crate::worktrees::query_relationships(
+            client,
+            &target,
+            symbol_name,
+            relation,
+            incoming,
+        )
+        .await;
     }
     let guard = crate::maintenance::read(client, repo_id).await?;
     let hidden = crate::maintenance::legacy_hidden_paths(&guard, repo_id).await?;
-    query_related_unlocked(
+    query_relationships_unlocked(
         guard.client(),
         repo_id,
         symbol_name,
@@ -302,14 +324,14 @@ pub async fn query_related(
     .await
 }
 
-pub(crate) async fn query_related_unlocked(
+pub(crate) async fn query_relationships_unlocked(
     client: &Client,
     repo_id: Uuid,
     symbol_name: &str,
     relation: StructuralRelation,
     incoming: bool,
     hidden: &std::collections::BTreeSet<String>,
-) -> Result<Vec<Symbol>> {
+) -> Result<Vec<StructuralMatch>> {
     let gname = graph_name(repo_id);
 
     let edge_type = match relation {
@@ -323,21 +345,18 @@ pub(crate) async fn query_related_unlocked(
     let agtype_json = params.to_string();
 
     // edge_type is a &'static str from a closed match — never user input.
-    let cypher = if incoming {
-        format!(
-            r#"MATCH (a)-[:{edge_type}]->(b {{name: $sym_name}})
-               RETURN {{chunk_id: a.chunk_id, name: a.name, file_path: a.file_path,
-                        kind: a.kind, start_line: a.start_line, end_line: a.end_line,
-                        origin_path: b.file_path}}"#,
-        )
+    let pattern = if incoming {
+        format!("(a)-[:{edge_type}]->(b {{name: $sym_name}})")
     } else {
-        format!(
-            r#"MATCH (a {{name: $sym_name}})-[:{edge_type}]->(b)
-               RETURN {{chunk_id: b.chunk_id, name: b.name, file_path: b.file_path,
-                        kind: b.kind, start_line: b.start_line, end_line: b.end_line,
-                        origin_path: a.file_path}}"#,
-        )
+        format!("(a {{name: $sym_name}})-[:{edge_type}]->(b)")
     };
+    let cypher = format!(
+        "MATCH {pattern}
+         RETURN {{source: {{chunk_id: a.chunk_id, name: a.name, file_path: a.file_path,
+                           kind: a.kind, range: {{start: a.start_line, end: a.end_line}}}},
+                  target: {{chunk_id: b.chunk_id, name: b.name, file_path: b.file_path,
+                           kind: b.kind, range: {{start: b.start_line, end: b.end_line}}}}}}"
+    );
 
     let stmt = format!("muninn_qrel_{}", Uuid::new_v4().simple());
     let prepare = format!(
@@ -351,57 +370,47 @@ pub(crate) async fn query_related_unlocked(
     let _ = client.simple_query(&format!("DEALLOCATE {}", stmt)).await;
     let msgs = msgs?;
 
-    let mut symbols = vec![];
+    let mut edges = Vec::new();
     for msg in msgs {
         if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
-            let raw = row.get(0).unwrap_or_default();
-            let map: serde_json::Value =
-                serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
-
-            let name = map
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            let file_path = map
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            if hidden.contains(&file_path)
-                || map
-                    .get("origin_path")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|path| hidden.contains(path.trim_matches('"')))
-            {
-                continue;
+            #[derive(serde::Deserialize)]
+            struct Endpoints {
+                source: Symbol,
+                target: Symbol,
             }
-            let kind_str = map
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            let start_line = map.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let end_line = map.get("end_line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let chunk_id: Uuid = map
-                .get("chunk_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.trim_matches('"').parse().ok())
-                .unwrap_or_else(Uuid::nil);
-
-            symbols.push(Symbol {
-                name,
-                kind: parse_symbol_kind(&kind_str),
-                file_path,
-                range: LineRange {
-                    start: start_line,
-                    end: end_line,
-                },
-                chunk_id,
-            });
+            let Endpoints { source, target } =
+                serde_json::from_str(row.get(0).context("missing graph relationship")?)
+                    .context("decode graph relationship endpoints")?;
+            if !hidden.contains(&source.file_path) && !hidden.contains(&target.file_path) {
+                edges.push(StructuralMatch {
+                    source,
+                    target,
+                    relation: relation.clone(),
+                });
+            }
         }
     }
-    Ok(symbols)
+    sort_relationships(&mut edges, incoming);
+    Ok(edges)
+}
+
+pub(crate) fn sort_relationships(edges: &mut [StructuralMatch], incoming: bool) {
+    edges.sort_by(|a, b| {
+        let left = a.related(incoming);
+        let right = b.related(incoming);
+        (
+            &left.file_path,
+            left.range.start,
+            a.source.chunk_id,
+            a.target.chunk_id,
+        )
+            .cmp(&(
+                &right.file_path,
+                right.range.start,
+                b.source.chunk_id,
+                b.target.chunk_id,
+            ))
+    });
 }
 
 /// All symbol names currently in the repo's graph, mapped to their chunk_id.
@@ -490,20 +499,43 @@ pub async fn symbol_chunk_ids_for_file(
     Ok(map)
 }
 
-fn parse_symbol_kind(s: &str) -> SymbolKind {
-    match s {
-        "Function" => SymbolKind::Function,
-        "Class" => SymbolKind::Class,
-        "Module" => SymbolKind::Module,
-        "Import" => SymbolKind::Import,
-        _ => SymbolKind::Function,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn structural_order_keeps_distinct_matches_at_one_location() {
+        let symbol = |path: &str, start, id| Symbol {
+            name: "same_name".into(),
+            kind: SymbolKind::Function,
+            file_path: path.into(),
+            range: crate::types::LineRange { start, end: start },
+            chunk_id: Uuid::from_u128(id),
+        };
+        let candidate = |source, path, start, target| StructuralMatch {
+            source: symbol("origin.rs", 1, source),
+            target: symbol(path, start, target),
+            relation: StructuralRelation::Calls,
+        };
+        let mut edges = vec![
+            candidate(3, "b.rs", 1, 7),
+            candidate(2, "a.rs", 1, 8),
+            candidate(1, "a.rs", 1, 8),
+            candidate(1, "a.rs", 2, 9),
+        ];
+        sort_relationships(&mut edges, false);
+        assert_eq!(
+            edges
+                .iter()
+                .map(|edge| (
+                    edge.source.chunk_id.as_u128(),
+                    edge.target.chunk_id.as_u128()
+                ))
+                .collect::<Vec<_>>(),
+            [(1, 8), (2, 8), (1, 9), (3, 7)]
+        );
+    }
 
     #[tokio::test]
     #[ignore = "requires the guarded disposable PostgreSQL harness"]

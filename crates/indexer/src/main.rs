@@ -408,7 +408,7 @@ async fn scan_and_dispatch(
                             {
                                 Ok(Ok(0)) => break,
                                 Ok(Ok(count)) => {
-                                    tracing::info!(%path, count, "stored pending vectors")
+                                    tracing::info!(%path, count, "resolved pending vector rows")
                                 }
                                 Ok(Err(error)) => {
                                     tracing::warn!(%path, %error, "vector backfill failed");

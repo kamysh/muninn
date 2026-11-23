@@ -101,6 +101,86 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         512,
     )
     .await?;
+    for (note_id, repo) in [
+        (note.id, linked.as_path()),
+        (Uuid::new_v4(), root.as_path()),
+    ] {
+        ensure!(
+            muninn_core::knowledge::upsert(
+                client,
+                Some(note_id),
+                repo.to_str().unwrap(),
+                "unintended write",
+                "invalid update target",
+                &[],
+                &[],
+                None,
+                512,
+            )
+            .await
+            .is_err(),
+            "an update must name an existing note in the selected scope"
+        );
+    }
+    ensure!(
+        muninn_core::knowledge::list(client, linked.to_str().unwrap())
+            .await?
+            .is_empty()
+    );
+    let retained = muninn_core::knowledge::list(client, root.to_str().unwrap()).await?;
+    ensure!(retained.len() == 1 && retained[0].id == note.id && retained[0].title == note.title);
+    use muninn_core::knowledge::{self, NoteLocation};
+    let primary_notes = NoteLocation::resolve(client, root.to_str().unwrap()).await?;
+    let linked_notes =
+        NoteLocation::resolve_for_checkout_note(client, linked.to_str().unwrap()).await?;
+    let shared = knowledge::upsert_scoped(
+        client,
+        &linked_notes,
+        false,
+        None,
+        "shared",
+        "family note",
+        &[],
+        &[],
+        None,
+        512,
+    )
+    .await?;
+    let local = knowledge::upsert_scoped(
+        client,
+        &linked_notes,
+        true,
+        None,
+        "local",
+        "checkout note",
+        &[],
+        &[],
+        None,
+        512,
+    )
+    .await?;
+    let from_primary = knowledge::list_scoped(client, &primary_notes).await?;
+    let from_linked = knowledge::list_scoped(client, &linked_notes).await?;
+    ensure!(from_primary.iter().any(|item| item.id == shared.id));
+    ensure!(from_linked.iter().any(|item| item.id == shared.id));
+    ensure!(from_linked.iter().any(|item| item.id == local.id));
+    ensure!(from_primary.iter().all(|item| item.id != local.id));
+    let query_vector = vec![1.0; 512];
+    ensure!(
+        knowledge::search_hybrid(client, &primary_notes, "checkout note", &query_vector, 10)
+            .await?
+            .iter()
+            .all(|hit| hit.item.id != local.id)
+    );
+    ensure!(
+        knowledge::search_hybrid(client, &linked_notes, "checkout note", &query_vector, 10)
+            .await?
+            .iter()
+            .any(|hit| hit.item.id == local.id)
+    );
+    ensure!(!knowledge::delete_scoped(client, &primary_notes, local.id).await?);
+    ensure!(!knowledge::delete(client, local.id).await?);
+    ensure!(knowledge::delete_scoped(client, &linked_notes, local.id).await?);
     ensure!(refresh(client, id, &root, false).await?.is_empty());
     let base = worktrees::resolve(client, &root).await?.unwrap();
     let sibling = worktrees::resolve(client, &linked).await?.unwrap();

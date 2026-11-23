@@ -150,6 +150,15 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
         policy::start::authorize(client, &root, &request, &global).await?; // idempotent
         assert_eq!(runtime::root(client, id, selected).await?, root);
         index(client, id, &root, counter.clone()).await?;
+        if !git_family {
+            let (results, coverage) =
+                worktrees::directory_semantic_search_report(client, id, &[1.0; 512], 5, true)
+                    .await?;
+            assert!(!results.is_empty());
+            assert_eq!(coverage.candidate_count, coverage.usable);
+            assert!(coverage.pending > 0);
+            assert!(!coverage.complete);
+        }
         for path in if git_family {
             vec![root.as_path(), linked.as_path()]
         } else {
@@ -234,33 +243,36 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
             );
         }
         if git_family {
-            // A policy save waits for any publication using the previous policy.
-            // After save commits, its invalidation cannot be cleared by old work.
+            // Vector work is independent of publication and cannot clear a
+            // policy change that happens while the provider is still running.
             let mut other = target.connect().await?;
-            let blocker = Arc::new(Blocking {
+            let blocker = Blocking {
                 entered: tokio::sync::Notify::new(),
                 release: tokio::sync::Notify::new(),
-            });
+            };
             fs::write(root.join("main.rs"), "fn concurrentword() {}\n")?;
-            let indexing = index(&mut other, id, &root, blocker.clone());
+            index(client, id, &root, counter.clone()).await?;
+            assert!(content(client, id, &root, "concurrentword").await?);
+            let embedding = async { pipeline::backfill_once(&mut other, id, &blocker, 512).await };
             let changing = async {
-                blocker.entered.notified().await;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    blocker.entered.notified(),
+                )
+                .await?;
                 let mut request = apply.clone();
                 request.expected_revision = 2;
                 request.policy.index.exclude.push("main.rs".into());
-                let change = policy::apply(client, id, &request);
-                tokio::pin!(change);
-                tokio::select! {
-                    _ = &mut change => anyhow::bail!("policy changed during older publication"),
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
-                }
+                let saved = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    policy::apply(client, id, &request),
+                )
+                .await??;
+                ensure!(saved.reconciliation_needed);
                 blocker.release.notify_one();
-                change.await?;
                 Ok::<_, anyhow::Error>(())
             };
-            let (indexed, changed) = tokio::join!(indexing, changing);
-            indexed?;
-            changed?;
+            tokio::try_join!(embedding, changing)?;
             assert!(client
                 .query_one(
                     "SELECT indexed_at IS NULL FROM public.repos WHERE id=$1",
@@ -271,6 +283,67 @@ pub async fn verify(target: &Target, client: &mut Client, fixtures: &Path) -> Re
             index(client, id, &root, counter.clone()).await?;
             assert!(!content(client, id, &root, "concurrentword").await?);
         }
+        let small = root.join("limits.rs");
+        let large = root.join("overlimit.rs");
+        fs::write(
+            &small,
+            "fn tiny() { tiny_target(); }\nfn tiny_target() {}\n",
+        )?;
+        fs::write(
+            &large,
+            format!("fn oldoverlimit() {{}}\n// {}\n", "x".repeat(80)),
+        )?;
+        #[cfg(unix)]
+        if !git_family {
+            std::os::unix::fs::symlink("limits.rs", root.join("alias.rs"))?;
+        }
+        index(client, id, &root, counter.clone()).await?;
+        assert!(content(client, id, &root, "oldoverlimit").await?);
+        let saved = policy::inspect(client, id).await?;
+        let mut restricted = saved.policy;
+        restricted.limits = muninn_core::config::FileLimits {
+            selected_bytes: 64,
+            structural_bytes: 1,
+        };
+        let request = policy::ApplyRequest {
+            api_version: 1,
+            expected_family_id: id,
+            expected_revision: saved.revision,
+            acknowledge_reindex: false,
+            policy: restricted,
+        };
+        assert!(
+            policy::apply(client, id, &request)
+                .await?
+                .reconciliation_needed
+        );
+        index(client, id, &root, counter.clone()).await?;
+        assert!(content(client, id, &root, "tiny").await?);
+        #[cfg(unix)]
+        if !git_family {
+            let aliases = search::fulltext_search(client, "tiny", id, 5).await?;
+            assert!(aliases
+                .iter()
+                .any(|hit| hit.chunk.file_path.ends_with("/alias.rs")));
+        }
+        assert!(!content(client, id, &root, "oldoverlimit").await?);
+        if git_family {
+            let view = worktrees::resolve(client, &root).await?.unwrap();
+            let (_, status) = worktrees::fulltext_search_report(client, &view, "tiny", 5).await?;
+            assert!(status.available && status.partial);
+            assert_eq!(status.oversized_files, 1);
+            assert_eq!(status.oversized_samples, vec!["overlimit.rs"]);
+            assert!(status.guidance.is_some());
+        }
+        assert!(muninn_core::graph::query_related(
+            client,
+            id,
+            "tiny",
+            muninn_core::types::StructuralRelation::Calls,
+            false
+        )
+        .await?
+        .is_empty());
         store::delete_repo(client, id).await?;
     }
     println!("policy runtime: explicit start, inventory parity, directory/Git indexing, saved exclusions and worktree inheritance verified");

@@ -176,6 +176,62 @@ pub(crate) async fn ensure_graph(client: &Client, repo_id: Uuid) -> Result<()> {
 }
 
 pub async fn delete_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
+    delete_family(client, repo_id, false).await
+}
+
+/// Explicit forget also removes user-authored records owned by the family.
+pub async fn forget_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
+    delete_family(client, repo_id, true).await
+}
+
+/// Retire the registration and remove derived code data while keeping
+/// configuration history, usage and curated notes.
+pub async fn unregister_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
+    let schema = repo_schema(repo_id);
+    crate::db::run_repo_migrations(client, &schema).await?;
+    let tx = client.transaction().await?;
+    crate::worktrees::lock(&tx, repo_id).await?;
+    tx.query_one(
+        "SELECT id FROM public.repos WHERE id=$1 AND retired_at IS NULL FOR UPDATE",
+        &[&repo_id],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE public.repos SET retired_at=now(), indexed_at=NULL WHERE id=$1",
+        &[&repo_id],
+    )
+    .await?;
+    for row in tx
+        .query(&format!("SELECT id FROM \"{schema}\".checkouts"), &[])
+        .await?
+    {
+        crate::graph::drop_graph(tx.client(), row.get(0)).await?;
+    }
+    crate::graph::drop_graph(tx.client(), repo_id).await?;
+    let s = format!("\"{schema}\"");
+    tx.batch_execute(&format!(
+        "DELETE FROM {s}.worktree_base;
+         DELETE FROM {s}.checkouts;
+         DELETE FROM {s}.file_versions;
+         DELETE FROM {s}.chunks;
+         DELETE FROM {s}.selection_maintenance;
+         DELETE FROM {s}.legacy_files;
+         DELETE FROM {s}.staging;
+         DELETE FROM {s}.accepted_work;
+         DELETE FROM {s}.cleanup_work;
+         DELETE FROM {s}.active_readers;
+         DELETE FROM {s}.continuations;
+         INSERT INTO public.receipt_markers (operation_id)
+           SELECT operation_id FROM {s}.receipts ON CONFLICT DO NOTHING;
+         DELETE FROM {s}.receipts;"
+    ))
+    .await?;
+    notify_repos_changed(tx.client()).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn delete_family(client: &mut Client, repo_id: Uuid, forget_notes: bool) -> Result<()> {
     let tx = client.transaction().await?;
     tx.query_one(
         "SELECT pg_advisory_xact_lock(hashtextextended($1,771913))",
@@ -183,6 +239,23 @@ pub async fn delete_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
     )
     .await?;
     let schema = repo_schema(repo_id);
+    if tx
+        .query_opt(
+            "SELECT id FROM public.repos WHERE id=$1 FOR UPDATE",
+            &[&repo_id],
+        )
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
+    if forget_notes {
+        tx.execute(
+            "DELETE FROM public.knowledge WHERE family_id=$1",
+            &[&repo_id],
+        )
+        .await?;
+    }
     if tx
         .query_one(
             "SELECT to_regclass($1) IS NOT NULL",
@@ -199,6 +272,23 @@ pub async fn delete_repo(client: &mut Client, repo_id: Uuid) -> Result<()> {
         }
     }
     crate::graph::drop_graph(tx.client(), repo_id).await?;
+    if tx
+        .query_one(
+            "SELECT to_regclass($1) IS NOT NULL",
+            &[&format!("{schema}.receipts")],
+        )
+        .await?
+        .get::<_, bool>(0)
+    {
+        tx.execute(
+            &format!(
+                "INSERT INTO public.receipt_markers (operation_id)
+            SELECT operation_id FROM \"{schema}\".receipts ON CONFLICT DO NOTHING"
+            ),
+            &[],
+        )
+        .await?;
+    }
     tx.batch_execute(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
         .await?;
     tx.execute("DELETE FROM public.repos WHERE id=$1", &[&repo_id])
@@ -385,7 +475,7 @@ pub async fn has_pending_embeddings(client: &Client, repo_id: Uuid) -> Result<bo
 pub(crate) async fn set_embeddings_for_contents(
     client: &Client,
     repo_id: Uuid,
-    contents: Vec<(Vec<u8>, String, Vec<f32>)>,
+    contents: Vec<(Vec<u8>, String, Option<Vec<f32>>)>,
 ) -> Result<u64> {
     let table = chunks_ref(repo_id);
     let mut hashes = Vec::with_capacity(contents.len());
@@ -394,13 +484,14 @@ pub(crate) async fn set_embeddings_for_contents(
     for (hash, text, embedding) in contents {
         hashes.push(hash);
         texts.push(text);
-        vectors.push(Vector::from(embedding));
+        vectors.push(embedding.map(Vector::from));
     }
     let n = client
         .execute(
             &format!(
                 "UPDATE {table} AS c
-                 SET embedding = incoming.embedding, embedding_state = 'embedded'
+                 SET embedding = incoming.embedding,
+                     embedding_state = CASE WHEN incoming.embedding IS NULL THEN 'absent' ELSE 'embedded' END
                  FROM unnest($1::bytea[], $2::text[], $3::public.vector[])
                     AS incoming(hash, content, embedding)
                  WHERE c.content_hash = incoming.hash AND c.content = incoming.content

@@ -1,3 +1,21 @@
+# Which selected files proceed to indexing
+
+The selected-file limit is measured in raw bytes. A file above the limit
+requires a choice before indexing it. Other eligible files can proceed.
+A supported source below the selected-file limit but above the structural
+limit still gets text indexing.
+
+The [family policy](../../crates/core/src/family_policy/types.rs) stores the
+two limits. The size limits apply to the primary checkout and linked
+worktrees. A changed structural limit can require a different stored chunk
+layout even when file contents are unchanged. The
+[policy runtime test](../../crates/core/tests/family_persistence/runtime.rs)
+exercises size changes and removal of previous results from an oversized
+file. Git search reports oversized paths with a bounded sample, a total count
+and the available choices. Directory indexing reports the paths in its
+diagnostics.
+
+```agda
 {-# OPTIONS --safe #-}
 -- The indexing admission batch schedules every ready selected file and retains
 -- each unresolved size question. A question never blocks admission of a peer.
@@ -88,3 +106,4 @@ module Checkout (selected : String → Set) (policy : C.FamilyPolicy) where
 
   admittedFits : ∀ (ready : Ready) → L.TextAllowed caps (File.contents (proj₁ ready))
   admittedFits (source , job) = L.workFits job
+```

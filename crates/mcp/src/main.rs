@@ -1,4 +1,5 @@
 mod admin;
+mod requests;
 mod tools;
 
 use clap::Parser;
@@ -150,6 +151,7 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
         "tools/list" => {
             let walk_suffix = "Supply 'repo' (absolute checkout/directory path) or 'cwd' (a directory inside it); 'repo' takes precedence. Git worktrees resolve through Git and registered families; directory roots through database registration. A first search can register and index a new linked worktree when its family already permits indexing. Subsequent searches use that checkout's last completed index; incomplete Git operations retain it.";
             let cwd_desc = "Directory inside the target checkout or registered directory. Used when 'repo' is absent; no configuration marker is needed.";
+            let operation_desc = "Caller-generated UUID. Supply it before a search if you need to resume it after disconnecting.";
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -164,7 +166,8 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                                     "query": {"type": "string"},
                                     "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
                                     "cwd": {"type": "string", "description": cwd_desc},
-                                    "limit": {"type": "integer"}
+                                    "limit": {"type": "integer"},
+                                    "operation_id": {"type": "string", "format": "uuid", "description": operation_desc}
                                 },
                                 "required": ["query"]
                             }
@@ -178,7 +181,8 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                                     "query": {"type": "string"},
                                     "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
                                     "cwd": {"type": "string", "description": cwd_desc},
-                                    "limit": {"type": "integer"}
+                                    "limit": {"type": "integer"},
+                                    "operation_id": {"type": "string", "format": "uuid", "description": operation_desc}
                                 },
                                 "required": ["query"]
                             }
@@ -192,7 +196,9 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                                     "query": {"type": "string"},
                                     "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
                                     "cwd": {"type": "string", "description": cwd_desc},
-                                    "limit": {"type": "integer"}
+                                    "limit": {"type": "integer"},
+                                    "exact": {"type": "boolean", "description": "Scan all eligible vectors in the selected index. Defaults to approximate candidate retrieval."},
+                                    "operation_id": {"type": "string", "format": "uuid", "description": operation_desc}
                                 },
                                 "required": ["query"]
                             }
@@ -209,35 +215,38 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                                         "enum": ["callers","callees","imports","defines","inheritors","inherits"]
                                     },
                                     "repo": {"type": "string", "description": "Absolute path of the target checkout/worktree or indexed directory. Optional if 'cwd' is provided."},
-                                    "cwd": {"type": "string", "description": cwd_desc}
+                                    "cwd": {"type": "string", "description": cwd_desc},
+                                    "operation_id": {"type": "string", "format": "uuid", "description": operation_desc}
                                 },
                                 "required": ["symbol", "relation"]
                             }
                         },
                         {
                             "name": "record_knowledge",
-                            "description": "Store a curated knowledge item under an exact repository-path key (no worktree/family resolution). Items are embedded and searchable via search_knowledge. Provide 'id' to update an existing item.",
+                            "description": "Store a curated knowledge item shared across a registered family by default. Choose checkout scope for a local note. Provide 'id' to update a visible item.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo":          {"type": "string", "description": "Exact repository-path key for curated knowledge. Worktree paths are not resolved to a shared family; use the established main-checkout key for shared notes."},
+                                    "repo":          {"type": "string", "description": "Registered repository or worktree path. Unregistered keys use literal scope."},
                                     "title":         {"type": "string", "description": "Short title."},
                                     "body":          {"type": "string", "description": "Full content of the note or lesson."},
                                     "tags":          {"type": "array", "items": {"type": "string"}, "description": "Optional tags for categorisation."},
                                     "related_files": {"type": "array", "items": {"type": "string"}, "description": "Repo-relative file paths that this item describes."},
-                                    "id":            {"type": "string", "description": "UUID of existing item to update. Omit to insert."}
+                                    "id":            {"type": "string", "description": "UUID of an existing visible item. Omit to insert."},
+                                    "scope":         {"type": "string", "enum": ["family", "checkout"], "description": "For new notes in registered families. Default is family."},
+                                    "operation_id":  {"type": "string", "format": "uuid", "description": "Caller-generated UUID for a resumable write in a registered family."}
                                 },
                                 "required": ["repo", "title", "body"]
                             }
                         },
                         {
                             "name": "search_knowledge",
-                            "description": "Hybrid semantic + fulltext search over curated notes under an exact repository-path key; no worktree/family resolution. Use the established main-checkout key for shared notes.",
+                            "description": "Hybrid search over family notes and checkout-local notes visible from the requested repository or worktree.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string"},
-                                    "repo":  {"type": "string", "description": "Exact repository-path key, usually the main checkout path for shared notes; no worktree/family resolution."},
+                                    "repo":  {"type": "string", "description": "Repository path or worktree path used to select visible notes."},
                                     "limit": {"type": "integer"}
                                 },
                                 "required": ["query", "repo"]
@@ -245,22 +254,24 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                         },
                         {
                             "name": "delete_knowledge",
-                            "description": "Delete a knowledge item by its UUID.",
+                            "description": "Delete a visible knowledge item by its UUID and repository path. A legacy path-keyed item can still be deleted using just its UUID.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "id": {"type": "string", "description": "UUID of the knowledge item to delete."}
+                                    "id": {"type": "string", "description": "UUID of the knowledge item to delete."},
+                                    "repo": {"type": "string", "description": "Repository or worktree path. Required for notes with a family or checkout scope."},
+                                    "operation_id": {"type": "string", "format": "uuid", "description": "Caller-generated UUID for a resumable deletion in a registered family."}
                                 },
                                 "required": ["id"]
                             }
                         },
                         {
                             "name": "list_knowledge",
-                            "description": "List knowledge for an exact repository-path key, ordered by most recently updated. Worktrees do not automatically share this key.",
+                            "description": "List notes visible from the selected repository or worktree, most recently updated first.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo": {"type": "string", "description": "Exact repository-path key, usually the main checkout path for shared notes; no worktree/family resolution."}
+                                    "repo": {"type": "string", "description": "Repository or worktree path used to select visible notes."}
                                 },
                                 "required": ["repo"]
                             }
@@ -388,7 +399,7 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                         },
                         {
                             "name": "unregister_family",
-                            "description": "Retire a registered family without deleting index data.",
+                            "description": "Retire a family and remove its derived code index. Preserve its settings and curated notes.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -399,7 +410,7 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                         },
                         {
                             "name": "forget_repository",
-                            "description": "Unregister and delete all owned index data.",
+                            "description": "Delete a registered or retired family, its index, settings and owned curated notes.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -410,11 +421,18 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                         },
                         {
                             "name": "recreate_index",
-                            "description": "Recreate derived index data for an embedding profile change.",
+                            "description": "Clear derived code and note vectors, then set a new embedding profile. Preserve family identity, note text, and other settings.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."},
+                                    "draft": {"type": "object", "properties": {
+                                        "api_version": {"type": "integer", "enum": [1]},
+                                        "expected_family_id": {"type": "string", "format": "uuid"},
+                                        "expected_revision": {"type": "integer"},
+                                        "backend": {"type": "string", "enum": ["local", "openai", "voyage"]},
+                                        "model": {"type": ["string", "null"]}
+                                    }, "required": ["api_version", "expected_family_id", "expected_revision", "backend", "model"]}
                                 },
                                 "required": ["repo", "draft"]
                             }
@@ -425,7 +443,12 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "draft": {"type": "object"}
+                                    "repo": {"type": "string", "description": "Absolute path of the registered directory, now a primary Git checkout."},
+                                    "draft": {"type": "object", "properties": {
+                                        "api_version": {"type": "integer", "enum": [1]},
+                                        "expected_family_id": {"type": "string", "format": "uuid"},
+                                        "expected_revision": {"type": "integer"}
+                                    }, "required": ["api_version", "expected_family_id", "expected_revision"]}
                                 },
                                 "required": ["repo", "draft"]
                             }
@@ -436,9 +459,9 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "repo": {"type": "string", "description": "Absolute path of the target checkout or indexed directory."}, "operation_id": {"type": "string"}, "message": {"type": "string"}
+                                    "operation_id": {"type": "string"}, "message": {"type": "string"}
                                 },
-                                "required": ["operation_id", "message"]
+                                "required": ["operation_id"]
                             }
                         },
                     ]
@@ -447,7 +470,7 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
         }
         "tools/call" => {
             let Some(ctx) = ctx else {
-                return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Cannot reach the database. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+                return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Cannot reach the database. Muninn will reconnect automatically. Retry with the original tool arguments when access returns."}});
             };
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params
@@ -492,7 +515,7 @@ async fn handle_request(ctx: Option<&SearchContext>, req: &serde_json::Value) ->
                 Err(e) => {
                     tracing::warn!(tool = tool_name, error = %e, "tool call failed");
                     if ctx.client.is_closed() {
-                        return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Database connection lost. Muninn will reconnect automatically; continue with the same request ID when access returns."}});
+                        return serde_json::json!({"jsonrpc":"2.0", "id":id, "error": {"code":-32603, "message":"Database connection lost. Muninn will reconnect automatically. Retry with the original arguments or call continue_request with the supplied operation_id."}});
                     }
                     serde_json::json!({
                         "jsonrpc": "2.0",
@@ -678,26 +701,10 @@ async fn dispatch_tool(
     args: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     match name {
-        "search_hybrid" => {
-            let params: tools::SearchParams = serde_json::from_value(args)?;
-            let resp = tools::search_hybrid(ctx, params).await?;
-            Ok(serde_json::to_value(resp)?)
-        }
-        "search_fulltext" => {
-            let params: tools::SearchParams = serde_json::from_value(args)?;
-            let resp = tools::search_fulltext(ctx, params).await?;
-            Ok(serde_json::to_value(resp)?)
-        }
-        "search_semantic" => {
-            let params: tools::SearchParams = serde_json::from_value(args)?;
-            let resp = tools::search_semantic(ctx, params).await?;
-            Ok(serde_json::to_value(resp)?)
-        }
-        "search_structural" => {
-            let params: tools::StructuralParams = serde_json::from_value(args)?;
-            let resp = tools::search_structural(ctx, params).await?;
-            Ok(resp)
-        }
+        "search_hybrid" => requests::search(ctx, "search_hybrid", args).await,
+        "search_fulltext" => requests::search(ctx, "search_fulltext", args).await,
+        "search_semantic" => requests::search(ctx, "search_semantic", args).await,
+        "search_structural" => requests::search(ctx, "search_structural", args).await,
         "record_knowledge" => {
             let params: tools::RecordKnowledgeParams = serde_json::from_value(args)?;
             let resp = tools::record_knowledge(ctx, params).await?;

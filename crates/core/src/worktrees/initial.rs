@@ -70,6 +70,12 @@ pub(super) async fn read(root: &Path, selection: &Selection) -> Result<Scan> {
             candidates.insert(path);
         }
     }
+    if candidates
+        .iter()
+        .any(|path| super::symlinks::has_alias(root, path, true))
+    {
+        return scan(root, selection).await;
+    }
     let paths: Vec<_> = candidates
         .into_iter()
         .filter(|path| {
@@ -84,11 +90,11 @@ pub(super) async fn read(root: &Path, selection: &Selection) -> Result<Scan> {
                 })
         })
         .collect();
-    let ignored = git_ignore::check(root, &paths).await?;
+    let ignored = git_ignore::check_native(root, &paths).await?;
     let mut scan = Scan::default();
     for (path, ignored) in paths.into_iter().zip(ignored) {
         if selection.classify_with_git(&path, false, ignored) != Decision::Drop {
-            if let Some(file) = observe_file(root, selection, &path, &mut scan.unreadable)? {
+            if let Some(file) = observe_file(root, selection, &path, &mut scan)? {
                 scan.files.push(file);
             }
         }

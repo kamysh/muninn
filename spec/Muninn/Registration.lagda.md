@@ -1,3 +1,18 @@
+# What registration authorizes
+
+Registration establishes a repository identity and its saved policy. First
+start is a separate decision. Saved defaults and the embedding profile
+belong to the registered family. Linked worktrees share that policy while
+they track and publish their own content.
+
+The registration model can represent an interrupted preparation. Retrying
+registration must preserve the original intent and cannot silently authorize
+initial indexing. The runtime must resolve the canonical repository identity
+and confirm which resources are actually ready before reporting completion.
+
+[Registration adapter](../../crates/core/src/family_policy/registration.rs) · [First-start adapter](../../crates/core/src/family_policy/start.rs) · [Registration and lifecycle checks](../../crates/core/tests/family_persistence.rs)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Durable creation intent is distinct from an imported/current family policy.
 -- Preparation failures retain the reservation; only explicit start (elsewhere)
@@ -58,3 +73,4 @@ completionRemainsComplete complete (retainCreation s) = complete
 recoveryDoesNotSubstitutePolicy : ∀ {s t p} → CreationState.creationPolicy s ≡ just p →
   CreationStep s t → CreationState.creationPolicy t ≡ just p
 recoveryDoesNotSubstitutePolicy stored step = trans (recoveryPreservesIntent step) stored
+```

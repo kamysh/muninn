@@ -140,15 +140,19 @@ def advertised(ts):
     return names
 
 
-def dispatched(ts):
-    starts = [i for i in range(len(ts)-1) if ts[i:i+2] == ['fn', 'dispatch_tool']]
+def dispatched(ts, function='dispatch_tool', argument='name', resumable=None):
+    if resumable is None and function == 'dispatch_tool':
+        sources = tokens((ROOT / 'crates/mcp/src/requests.rs').read_text())
+        resumable = dict(dispatched(sources, 'execute', 'tool'))
+    starts = [i for i in range(len(ts)-1) if ts[i:i+2] == ['fn', function]]
     if len(starts) != 1:
-        raise ValueError('expected one dispatch_tool function')
+        raise ValueError(f'expected one {function} function')
     function_start = next((i for i in range(starts[0] + 2, len(ts)) if ts[i] == '{'), None)
     if function_start is None:
         raise ValueError('missing dispatch_tool body')
     function_end = end(ts, function_start)
-    starts = [i for i in range(function_start, function_end - 2) if ts[i:i+3] == ['match', 'name', '{']]
+    starts = [i for i in range(function_start, function_end - 2)
+              if ts[i:i+3] == ['match', argument, '{']]
     if len(starts) != 1:
         raise ValueError('expected one match on the tool name')
     start = starts[0] + 2
@@ -182,6 +186,9 @@ def dispatched(ts):
         if name is not None:
             calls = [ts[j + 3] for j in range(body_start, i - 4)
                      if ts[j:j+3] in (['tools', ':', ':'], ['admin', ':', ':']) and ts[j+4] == '(']
+            adapter = ['requests', ':', ':', 'search', '(', 'ctx', ',', f'"{name}"', ',', 'args', ')', '.', 'await']
+            if resumable is not None and name in resumable and ts[body_start:i] == adapter:
+                calls.append(resumable[name])
             if len(calls) != 1:
                 raise ValueError(f'{name}: expected exactly one direct handler call')
             names.append((name, calls[0]))
