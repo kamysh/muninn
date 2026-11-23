@@ -19,8 +19,8 @@ jobs:
         # The disposable-database integration suite (crates/core/tests) needs
         # the postgres-ai harness and runs locally via muninn-setup/test-all.sh.
         run: nix develop --command cargo test --workspace --lib --bins
-      - name: Agda aggregate
-        run: nix develop --command sh -c 'cd spec && agda Muninn.agda'
+      - name: Agda aggregate and reader topics
+        run: nix develop --command python3 scripts/check_reader_spec.py
       - name: Catalog checkers
         run: |
           python3 scripts/check_mcp_catalog.py

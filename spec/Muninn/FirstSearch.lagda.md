@@ -1,3 +1,20 @@
+# What happens on the first search of a worktree
+
+A search is for one checkout. In MCP, an explicit `repo` takes precedence
+over `cwd`. If an enabled family has a worktree with no published view yet,
+its first search can arrange indexing for that checkout and use the view
+when it is ready. A checkout with a published view can answer while another
+checkout is still indexing.
+
+[Checkout publication](CheckoutPublication.lagda.md) · [Rust search entry point](../../crates/mcp/src/tools.rs) · [On-demand structural search test](../../crates/mcp/src/worktree_tests.rs)
+
+## What the request carries
+
+The intent contains the original query, the checkout once it has been
+resolved, and authorization for first indexing. The session carries that
+intent while work is pending.
+
+```agda
 {-# OPTIONS --safe #-}
 -- A search retains its intent while the selected checkout is made ready.
 module Muninn.FirstSearch where
@@ -30,6 +47,17 @@ record Session : Set where
   constructor session
   field request : Intent
 
+```
+
+## What a coverage report can say
+
+The model tracks whether a published view exists, whether its freshness was
+verified, whether files are still pending, and whether Git operations have
+suspended updates. A current report requires an observed file inventory
+matching the selected checkout's published view. The filesystem and Git
+adapter must justify that observation.
+
+```agda
 -- The checkout observation supplies freshness and pending-file facts; report
 -- all of them, including a stale or partial view during a Git operation.
 -- A current report requires an observed inventory matching the published view.
@@ -72,6 +100,17 @@ reportedAvailability : ∀ {baselines} {world : Storage.World baselines} {select
 reportedAvailability false freshness pending git = refl
 reportedAvailability true freshness pending git = refl
 
+```
+
+## Keep the query and checkout across interruptions
+
+Resolving the checkout preserves the original query. In the model, ordinary
+reconnection preserves both the query and the selected checkout. The linked
+Rust path can index an authorized worktree on demand and reuse committed file
+work. There is no demonstrated runtime mapping for resuming that same active
+search after the MCP connection closes.
+
+```agda
 resolveCheckout : W.Checkout → Intent → Intent
 resolveCheckout selected (intent query previous authorized) = intent query (just selected) authorized
 
@@ -98,6 +137,22 @@ startPrompt = Dialogue.prompt
   (Dialogue.text 'T' "his repository has not been started for indexing yet.")
   (Dialogue.text 'S' "tart indexing for this repository, then I will continue your search.") []
 
+```
+
+## Choose the next action
+
+| Situation | Model action |
+| --- | --- |
+| The checkout is unresolved | Ask for checkout context |
+| The selected checkout has a published view | Serve that view |
+| The selected checkout has no view and indexing is authorized | Arrange indexing |
+| The selected checkout has no view and indexing is unauthorized | Ask for first start |
+
+These cases determine the next action. `continuesWhenReady` applies once a
+published snapshot exists. Eventual publication also depends on the
+availability and scheduling of the underlying work.
+
+```agda
 -- Missing context or first-start authority is communicated; an authorized
 -- checkout with no view arranges indexing rather than ending at "pending".
 data Action : Set where
@@ -126,6 +181,16 @@ continuesWhenReady : ∀ {baselines} (world : Storage.World baselines) query sel
   next world (session (intent query (just selected) authorized)) ≡ serveView
 continuesWhenReady world query selected authorized snapshot present rewrite present = refl
 
+```
+
+## Reuse indexing already accepted
+
+When the system can accept work, a first search can give the indexing job
+its complete search intent. If there is already accepted work, the model
+keeps that work and carries the search intent separately. Resolving and
+reconnecting a search must preserve these inputs.
+
+```agda
 module Preparation (Results Temporary : Set) where
   module Indexing = Work.Model Intent Results Temporary
 
@@ -166,6 +231,17 @@ module Preparation (Results Temporary : Set) where
     arrange world (disconnect request) before ≡ arrange world request before
   reconnectKeepsPreparation world request before = refl
 
+```
+
+## Which files a result may cite
+
+Each modeled result carries evidence that its file belongs to the selected
+checkout's view, is in the policy's family, and passes selection. This
+excludes a result found only in a sibling checkout or from a file ruled
+out by selection. The module covers eligibility. Query matching and
+ranking are outside this contract.
+
+```agda
 -- Results can only cite files visible in the selected checkout under the
 -- current selection. Query matching and ranking are not modeled here.
 record Result {baselines : W.Baselines} (world : Storage.World baselines)
@@ -187,3 +263,4 @@ resultIsIncluded : ∀ {baselines} {world : Storage.World baselines} {selected p
   (found : Result world selected policy entries gitIgnored) →
   Ordered.included (Selection.classify policy entries (gitIgnored (Result.path found)) (FilePath.value (Result.path found)) false) ≡ true
 resultIsIncluded found = Result.allowed found
+```
