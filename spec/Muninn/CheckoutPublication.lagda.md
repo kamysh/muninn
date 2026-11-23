@@ -1,3 +1,23 @@
+# How worktrees publish and share indexes
+
+A repository family shares file versions and analysis. Each Git checkout
+publishes its own view of that shared data. If the primary checkout edits a
+file and publishes a new version, a linked worktree can keep returning its
+earlier version until its own files change and its next view is published.
+
+[Publication requirements](../CHECKOUT-PUBLICATION.md) · [Rust reconciliation](../../crates/core/src/worktrees/mod.rs) · [Persistence tests](../../crates/core/tests/family_persistence/worktrees.rs)
+
+## Shared versions and separate views
+
+A checkout slot holds its published snapshot and a generation number used to
+detect intervening publications. A snapshot describes the files and
+structural relationships a reader can see together. A family supplies a slot
+for each checkout and keeps the active selection policy. `commit` replaces
+just the target slot, and `siblingUntouched` preserves the entire slot for
+every other checkout. The storage model supplies the validity laws for the
+versions referenced by those slots.
+
+```agda
 {-# OPTIONS --safe #-}
 module Muninn.CheckoutPublication where
 
@@ -65,6 +85,22 @@ siblingUntouched (family state storage rules slots) target next sibling differen
 ... | yes same = ⊥-elim (different same)
 ... | no _ = refl
 
+```
+
+## When a new view can publish
+
+Preparation observes the checkout generation, policy revision and storage
+generation. Publication compares those observations with the current state
+and requires settled Git state. A merge or rebase in progress, a conflict, or
+a stale observation prevents the proposed view from replacing the last
+published view. The caller also supplies evidence that the new snapshot and
+its references are valid.
+
+An intervening publication in a different checkout preserves admission when
+these premises still hold. `independentCommitsCommute` compares the final
+slot for every checkout after two distinct commits in either order.
+
+```agda
 record Observation : Set where
   constructor observed
   field generation policyRevision storageGeneration : ℕ
@@ -186,6 +222,18 @@ independentCommitsCommute before first second firstView secondView different che
         (sym (trans (siblingUntouched afterSecond first firstView checkout notFirst)
           (siblingUntouched before second secondView checkout notSecond))))
 
+```
+
+## Searches while indexing continues
+
+An online family serves the selected checkout's published snapshot even if
+other work is preparing a replacement. If the checkout has yet to publish,
+the search follows the [first-search contract](FirstSearch.lagda.md).
+`searchSurvivesSiblingCommit` preserves the search admission decision when
+a sibling publishes. Storage replacement and destructive removal have a
+separate transition that can temporarily suspend access.
+
+```agda
 data SearchStart (baselines : W.Baselines) : Set where
   usePublished : Storage.PublishedSnapshot baselines → SearchStart baselines
   needsFirstView : SearchStart baselines
@@ -219,6 +267,20 @@ searchSurvivesSiblingCommit before@(family online storage rules slots) target ne
      | siblingUntouched before target next checkout different
 ... | .(slots checkout) | refl = refl
 
+```
+
+## Apply selection to search results
+
+A query can hold a previously selected snapshot. Results must still satisfy
+the current selection policy when they are materialized. For example, a new
+exclusion hides the file as soon as the policy takes effect, even while
+cleanup still has to reclaim the older data.
+
+The checked laws preserve snapshot references across policy acceptance and
+show that `visible` filters an excluded file. The runtime must establish
+which rules apply and make the corresponding observations consistently.
+
+```agda
 -- Re-authorize a pinned snapshot against current selection when materializing
 -- results. A cleanup or policy update cannot leak an excluded saved entry.
 visible : ∀ {baselines} → Family baselines → W.CheckoutId →
@@ -253,6 +315,22 @@ policyAcceptanceKeepsAdmission (family online storage rules slots) admits checko
 ... | nothing = refl
 ... | just snapshot = refl
 
+```
+
+## Resume from completed file work
+
+For each path, the model compares the saved file version's analysis input
+with a fresh observation, including compatibility of analysis settings.
+Matching input keeps the saved version. Changed or missing input invalidates
+the saved preparation for that path. This is a per-path decision, so an edit
+to one file leaves compatible work from other files available.
+
+The file and Git observations, the atomic publication transaction and the
+lifetime of referenced storage are runtime obligations. The propositions
+below establish when prepared work is reusable. They supply no bound on
+when indexing finishes.
+
+```agda
 -- The checkout observation supplies new exact analysis inputs. Git evidence,
 -- checked against the current worktree, and verified bytes can supply that
 -- observation. A commit ID or matching metadata alone cannot certify bytes.
@@ -289,3 +367,4 @@ missingInputCannotPublishSaved : ∀ prepared current path →
 missingInputCannotPublishSaved prepared current path missing rewrite missing with prepared path
 ... | just saved = refl
 ... | nothing = refl
+```

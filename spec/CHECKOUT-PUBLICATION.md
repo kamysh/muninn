@@ -93,14 +93,14 @@ and the current filesystem.
 
 ## Formal and implementation obligations
 
-[`CheckoutPublication`](Muninn/CheckoutPublication.agda) proves preservation
+[`CheckoutPublication`](Muninn/CheckoutPublication.lagda.md) proves preservation
 of the entire sibling slot, independence of distinct commits, admission under
 unchanged checkout and storage generations and policy, use of a published snapshot
 while storage is online, current-policy filtering of a pinned snapshot, and
 preservation of compatible prepared inputs. It uses
 [`Storage`](Muninn/Storage.agda) and [`Worktree`](Muninn/Worktree.agda) for
 immutable references and coherent graph membership. The existing
-[`FirstSearch`](Muninn/FirstSearch.agda),
+[`FirstSearch`](Muninn/FirstSearch.lagda.md),
 [`IncrementalObservation`](Muninn/IncrementalObservation.agda),
 [`CheckoutState`](Muninn/CheckoutState.agda),
 [`ReusePolicy`](Muninn/ReusePolicy.agda), and

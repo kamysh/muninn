@@ -6,6 +6,9 @@ are not generated Rust and do not constitute a refinement proof of the running
 application. [Development](../docs/development.md) describes the 1.4.0
 implementation; historical proposal/status records remain under `docs/plans/`.
 
+The [reading guide](../SPEC-READING-GUIDE.md) links to the literate worktree
+publication and first-search topics.
+
 ## Current implementation in brief
 
 The application uses one schema per family, managed through Kryzhen. Checkouts

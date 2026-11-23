@@ -22,6 +22,9 @@ available; hosted embeddings send selected source chunks to the provider.
 Start with [Getting started](docs/get-started.md). Agents performing installation
 use [AGENTS.md](AGENTS.md).
 
+The [specification reading guide](SPEC-READING-GUIDE.md) explains how worktree
+indexes publish and how Muninn handles a first search.
+
 **Article:** [Muninn code search across Git worktrees](docs/articles/worktree-code-search.md).
 
 ## Install the binaries with Nix
