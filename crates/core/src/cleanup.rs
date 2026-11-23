@@ -79,7 +79,7 @@ pub async fn run_batch(client: &mut Client, schema: &str, task: &CleanupTask) ->
         .execute(
             &format!(
                 "DELETE FROM {chunks} WHERE id = ANY($1) \
-                 AND NOT (in_base) \
+                 AND file_version IS NULL AND NOT (in_base) \
                  AND NOT EXISTS (SELECT 1 FROM {readers} r WHERE id = ANY(r.references)) \
                  AND NOT EXISTS (SELECT 1 FROM {work} w WHERE id = ANY(w.captured_ids))",
                 chunks = qualified(schema, "chunks"),

@@ -1,5 +1,6 @@
 {-# OPTIONS --safe #-}
 -- Observable maintenance laws; no SQL, Git, lock or graph implementation.
+-- Historical issue #203 admission model. CheckoutPublication governs 1.4.0.
 module Muninn.SerializedMaintenance where
 
 open import Data.Nat using (ℕ; zero; suc; _≟_)

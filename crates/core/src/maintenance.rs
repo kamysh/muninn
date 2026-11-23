@@ -1,5 +1,9 @@
-//! Serialized selection maintenance using the existing family lock key.
-use anyhow::{ensure, Result};
+//! Durable checkout-local selection refresh receipts.
+use anyhow::Result;
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
@@ -35,37 +39,93 @@ pub async fn pending(client: &impl GenericClient, family: Uuid) -> Result<bool> 
         .get(0))
 }
 
-pub async fn read(client: &mut Client, family: Uuid) -> Result<Transaction<'_>> {
-    let tx = client.transaction().await?;
-    let admitted: bool = tx
-        .query_one(
-            "SELECT pg_try_advisory_xact_lock_shared(hashtextextended($1,771913))",
-            &[&family.to_string()],
-        )
-        .await?
-        .get(0);
-    ensure!(
-        admitted,
-        "family_busy: indexing or maintenance is running; retry later"
-    );
-    ensure!(
-        !pending(&tx, family).await?,
-        "family_maintenance: selection refresh is pending; inspect family status"
-    );
-    Ok(tx)
+pub async fn read(client: &mut Client, _family: Uuid) -> Result<Transaction<'_>> {
+    Ok(client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?)
 }
 
+/// Older standalone indexes have absolute chunk paths and no checkout
+/// membership. A pending policy still filters that committed view.
+pub async fn legacy_hidden_paths(tx: &Transaction<'_>, family: Uuid) -> Result<BTreeSet<String>> {
+    if !pending(tx, family).await? {
+        return Ok(BTreeSet::new());
+    }
+    let root: String = tx
+        .query_one("SELECT path FROM public.repos WHERE id=$1", &[&family])
+        .await?
+        .get(0);
+    let root = Path::new(&root);
+    let policy = crate::family_policy::runtime::policy(tx, family).await?;
+    let selection = crate::family_policy::runtime::Selection::new(root, policy.as_ref(), &[], &[])?;
+    let paths: Vec<String> = tx
+        .query(
+            &format!(
+                "SELECT DISTINCT file_path FROM {} WHERE file_version IS NULL",
+                crate::store::chunks_ref(family)
+            ),
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let relative: Vec<_> = paths
+        .iter()
+        .map(|path| {
+            Path::new(path)
+                .strip_prefix(root)
+                .unwrap_or(Path::new(path))
+                .to_owned()
+        })
+        .collect();
+    let ignored = if crate::repo_resolver::discover_git_checkout(root)
+        .await?
+        .is_some()
+    {
+        let paths: Vec<PathBuf> = relative
+            .iter()
+            .filter(|path| path.is_relative())
+            .cloned()
+            .collect();
+        let mut ignored = crate::git_ignore::check(root, &paths).await?.into_iter();
+        relative
+            .iter()
+            .map(|path| path.is_relative() && ignored.next().unwrap_or(false))
+            .collect()
+    } else {
+        vec![false; relative.len()]
+    };
+    Ok(paths
+        .into_iter()
+        .zip(relative)
+        .zip(ignored)
+        .filter_map(|((path, relative), ignored)| {
+            use crate::pipeline::Decision::Drop;
+            (relative.is_absolute()
+                || selection.classify_with_git(&relative, false, ignored) == Drop
+                || relative
+                    .ancestors()
+                    .skip(1)
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .any(|p| selection.classify(p, true) == Drop))
+            .then_some(path)
+        })
+        .collect())
+}
+
+/// Serialize writes to the legacy single-checkout index. Worktree versions
+/// and membership updates have their own narrower coordination.
 pub async fn ordinary_write(client: &mut Client, family: Uuid) -> Result<Transaction<'_>> {
     let tx = client.transaction().await?;
     crate::worktrees::lock(&tx, family).await?;
-    ensure!(
-        !pending(&tx, family).await?,
-        "family_maintenance: selection refresh is pending"
-    );
     Ok(tx)
 }
 
-// Call under the exclusive family lock. PostgreSQL rejects counter overflow.
+// The upsert serializes concurrent requests for this target.
 pub(crate) async fn request(tx: &Transaction<'_>, family: Uuid, target: Uuid) -> Result<()> {
     let table = table(family);
     tx.execute(&format!("INSERT INTO {table}(target,requested,completed) VALUES($1,1,0) ON CONFLICT(target) DO UPDATE SET requested=selection_maintenance.requested+1,last_error=NULL"), &[&target]).await?;
@@ -126,7 +186,7 @@ pub(crate) async fn complete(
     let table = table(family);
     if let Some(generation) = generation {
         tx.execute(
-            &format!("UPDATE {table} SET completed=$2,last_error=NULL WHERE target=$1"),
+            &format!("UPDATE {table} SET completed=greatest(completed,$2),last_error=NULL WHERE target=$1"),
             &[&target, &generation],
         )
         .await?;
@@ -149,7 +209,6 @@ pub(crate) async fn failed(
 ) -> Result<()> {
     let table = table(family);
     let tx = client.transaction().await?;
-    crate::worktrees::lock(&tx, family).await?;
     let error: String = error.chars().take(2048).collect();
     tx.execute(
         &format!("UPDATE {table} SET last_error=$2 WHERE target=$1 AND requested>completed"),

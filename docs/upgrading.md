@@ -4,6 +4,22 @@ Application upgrades update the three Muninn binaries and apply schema changes
 automatically during normal startup/preparation. PostgreSQL or extension upgrades
 are a separate operation with their own compatibility requirements.
 
+## Clean deployment of 1.4.0
+
+Use an empty Muninn database for the new index. Before switching, record your
+registered repositories and their selection policies. Keep any curated notes
+you want to transfer. A clean deployment rebuilds code indexes from Git and
+the working files.
+
+Follow the database setup in [Getting started](get-started.md). Build the
+three 1.4.0 binaries from the matching source with
+`nix build .#muninn-static`. Stop the old watcher and reconnect MCP
+clients after changing the database target. Re-register the repositories with
+their saved policies and start indexing. Verify a full-text and a semantic
+query in the intended checkout.
+
+## Earlier upgrades
+
 The worktree structural-snapshot migration adds a table to each prepared family
 schema. New linked worktrees publish into it; existing linked AGE graphs remain
 readable until those checkouts are reconciled. The first search of a new linked

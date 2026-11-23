@@ -1936,6 +1936,17 @@ async fn automatic_worktree_reconciliation_lifecycle() -> Result<()> {
     worktree_runtime::verify(&target, &mut client, fixtures.path()).await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires the guarded disposable persistence fixture"]
+async fn initial_worktree_reuses_progress_after_checkout_changes() -> Result<()> {
+    let path = std::env::var_os("MUNINN_PERSISTENCE_TEST_CONFIG").context("fixture required")?;
+    let target: Target = serde_json::from_slice(&fs::read(path)?)?;
+    let mut client = target.connect().await?;
+    db::run_migrations(&mut client).await?;
+    let fixtures = tempfile::tempdir_in(&target.fixture_root)?;
+    worktree_runtime::verify_initial_progress(&target, &mut client, fixtures.path()).await
+}
+
 #[path = "family_persistence/maintenance.rs"]
 mod serialized_maintenance_cases;
 

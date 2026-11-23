@@ -79,17 +79,16 @@ The four crates are `core` (shared implementation), `cli` (`muninn`), `indexer`
 `tokio-postgres`; SQLx migration/cache instructions from older plans do not apply.
 
 The index saves repeated exploration and embedding work. Linked worktrees need
-independent searchable views of largely identical files. Independent full copies
-multiply both storage and index-building cost. Sharing a mutable main index alone
-would instead make a worktree's results change when main updates. The current
-moving-base/file-delta design addresses both problems.
+independent searchable views of largely identical files. Every checkout commits
+its own view of family-shared file versions. Search uses the selected checkout's
+published view while preparation continues.
 
 ### Storage ownership
 
 | Area | Ownership and contents |
 | --- | --- |
 | `public.repos` | Family routing, identity, preparation state and indexing authorization; retains legacy locator fields |
-| `repo_<uuid>` | One application schema per Git family or independent directory: chunks, file versions, base/deltas, linked-checkout structural snapshots, checkout registry and saved policy/history |
+| `repo_<uuid>` | One application schema per Git family or independent directory: chunks, shared file versions, checkout memberships, structural snapshots, checkout registry and saved policy/history |
 | AGE graph schemas | Structural relationships for the primary checkout and older linked checkouts that have not published a snapshot. AGE creates/removes these through its API |
 | `public.knowledge` | Curated notes, keyed by exact repository-path strings; currently separate from family identity |
 
@@ -109,37 +108,25 @@ to edit its settings.
 `family_store` coordinates identity/preparation; `family_policy` implements policy,
 preflight and start; `worktrees` reconciles file versions and structural views.
 
-The primary checkout is the current base. `base_files` maps its paths to shared
-`file_versions`; `file_deltas` contains only checkout-specific path overrides or
-deletions. Chunks and embeddings are stored with file versions. When the base
-moves, formerly inherited versions needed by another checkout become references
-in its delta. Redundant overrides are removed. This changes representation while
-preserving other published views; it does not force every worktree to adopt main.
+Each checkout references immutable family-shared `file_versions` through
+`checkout_file_versions`. Updating a checkout replaces only its affected
+references. Text chunks and compatible vectors are shared. Preparations commit
+per file before publication, so compatible work can survive retries. New
+vectors are filled separately from text and structural publication.
 
-Family locking serializes publication. Base changes, deltas and the reconciled
-checkout's structural view commit transactionally. Embeddings can be reused for
-matching content. A full primary AGE graph replacement recreates that owned graph,
-its labels and indexes inside the publication transaction; failure restores the
-previous graph. New linked checkouts store
-symbols and edges in one transactional JSONB snapshot instead of constructing a
-separate AGE graph. Structural search reads that snapshot, falling back to an
-older linked checkout's AGE graph until it next reconciles.
+The selected checkout's membership, structural snapshot, and publication
+generation advance in one transaction. Structural search uses the saved
+snapshot and can read an older checkout's AGE graph until its next publication.
+Read transactions retain a committed view through PostgreSQL MVCC while
+publication and reclamation proceed. A short lock coordinates competing
+registry updates, and publication checks the selected checkout and policy
+generations. See the [checkout publication contract](../spec/CHECKOUT-PUBLICATION.md).
 
-Selection maintenance uses that same family lock. Searches hold a shared lock
-through result materialization; writers hold its exclusive form. Git ignore
-changes and saved selection changes create durable refresh requests. The daemon
-reconciles each requested checkout and removes derived data with no retained
-references in the same transaction. Searches return `family_busy` during an
-exclusive operation or `family_maintenance` while requests remain pending.
-A paused or Git-blocked checkout can therefore keep its whole family unavailable
-until it can refresh. Status/configuration inspection and unrelated families
-remain available. See the [serialized maintenance contract](../spec/ISSUE-203-SERIALIZED-MAINTENANCE.md).
-
-Text/vector queries combine visible base chunks with the selected delta. The
-base has partial GIN/HNSW indexes; semantic delta search is exact. Excluded paths
-mask base candidates before ranking. Hybrid search ranks each modality across
-base and delta before RRF in one SQL statement/snapshot. Approximate base vector
-retrieval still has recall tradeoffs; a small RRF score is not a confidence estimate.
+Git ignore changes and saved policy changes enqueue durable refresh requests.
+Search filters affected paths before ranking even while a refresh is pending.
+Text and vector queries rank versions referenced by the selected checkout.
+Hybrid search ranks both modalities against one snapshot before RRF. HNSW
+retrieval has recall tradeoffs, and an RRF score measures rank rather than confidence.
 
 File watching and fallback Git discovery find edits, newly linked checkouts and
 worktree removal. A first search of a new linked checkout in an already indexed,
@@ -198,10 +185,10 @@ This limits duplicate output, but does not bound logs containing unique events.
 Existing directory and legacy registrations use the pipeline
 appropriate to their registration state.
 
-Indexing exclusion uses advisory locks and cooperative preemption, not the old
-`indexing_heartbeat` mechanism. Removal waits for indexing coordination rather
-than merely refusing every active index. Family publication also holds its
-transaction advisory lock.
+Foreground and background full-index jobs coordinate admission and handover.
+Ordinary checkout publication validates the selected checkout and current
+family policy in a short transaction. Search can use the committed view while
+file preparation and publication continue.
 
 ### MCP and knowledge
 

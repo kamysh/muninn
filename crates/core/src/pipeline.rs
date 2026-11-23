@@ -166,54 +166,14 @@ pub(crate) async fn prepare_chunks(
     expected_dim: usize,
     tier: Tier,
 ) -> Result<(Vec<crate::types::Chunk>, Vec<crate::parser::ParsedSymbol>)> {
-    let detected_language = detect_language(&file_path);
-    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
-        tracing::info!(
-            file = %file_path,
-            size_bytes = source.len(),
-            threshold_bytes = MAX_PARSER_BYTES,
-            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
-        );
-        None
-    } else {
-        detected_language
-    };
-    let symbols = match &language {
-        Some(lang) => parse_file(&source, *lang).unwrap_or_default(),
-        None => vec![],
-    };
-
-    let mut chunks = chunk_file(&source, &symbols, max_chars);
-    for c in &mut chunks {
-        c.repo_id = repo_id;
-        c.file_path = file_path.clone();
-        // Tier and content_hash are set for every chunk at index time. The hash
-        // lets the daemon dedup identical Tier-2 content during backfill.
-        c.tier = tier;
-        c.content_hash = Some(content_sha256(&c.content));
-    }
-
+    let (mut chunks, symbols) = prepare_text_chunks(repo_id, &file_path, &source, max_chars, tier);
     if chunks.is_empty() {
-        return Ok((vec![], symbols));
+        return Ok((chunks, symbols));
     }
-
-    chunks.retain(|c| {
-        if c.content.is_empty() {
-            tracing::warn!("dropping empty-content chunk in {}", file_path);
-            false
-        } else {
-            true
-        }
-    });
-    if chunks.is_empty() {
-        return Ok((vec![], symbols));
-    }
-
     match tier {
-        // Tier 1 (first-party): embed eagerly. Spec: Muninn.Types.Tier1NeverPending.
         Tier::Tier1 => {
             let batch_size = if embed_batch_size == 0 {
-                chunks.len().max(1)
+                chunks.len()
             } else {
                 embed_batch_size
             };
@@ -228,13 +188,13 @@ pub(crate) async fn prepare_chunks(
                         );
                         c.embedding_state = EmbeddingState::Absent;
                     } else if emb.len() != expected_dim {
-                        return Err(anyhow::anyhow!(
+                        anyhow::bail!(
                             "ValidStoredEmbedding violation: embedding dimension {} != expected {} \
                              for chunk in {}; switching backends requires unregister + re-index",
                             emb.len(),
                             expected_dim,
                             file_path
-                        ));
+                        );
                     } else {
                         c.embedding = Some(emb);
                         c.embedding_state = EmbeddingState::Embedded;
@@ -242,17 +202,58 @@ pub(crate) async fn prepare_chunks(
                 }
             }
         }
-        // Tier 2 (vendored): full-text indexed now, embedded lazily by the daemon.
-        // Leave embedding = None and mark Pending; the backfill task fills it in.
         Tier::Tier2 => {
             for c in &mut chunks {
-                c.embedding = None;
                 c.embedding_state = EmbeddingState::Pending;
             }
         }
     }
-
     Ok((chunks, symbols))
+}
+
+pub(crate) fn prepare_text_chunks(
+    repo_id: Uuid,
+    file_path: &str,
+    source: &str,
+    max_chars: usize,
+    tier: Tier,
+) -> (Vec<crate::types::Chunk>, Vec<crate::parser::ParsedSymbol>) {
+    let detected_language = detect_language(file_path);
+    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
+        tracing::info!(
+            file = %file_path,
+            size_bytes = source.len(),
+            threshold_bytes = MAX_PARSER_BYTES,
+            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
+        );
+        None
+    } else {
+        detected_language
+    };
+    let symbols = match &language {
+        Some(lang) => parse_file(source, *lang).unwrap_or_default(),
+        None => vec![],
+    };
+
+    let mut chunks = chunk_file(source, &symbols, max_chars);
+    for c in &mut chunks {
+        c.repo_id = repo_id;
+        c.file_path = file_path.to_owned();
+        // Tier and content_hash are set for every chunk at index time. The hash
+        // lets the daemon dedup identical Tier-2 content during backfill.
+        c.tier = tier;
+        c.content_hash = Some(content_sha256(&c.content));
+    }
+
+    chunks.retain(|c| {
+        if c.content.is_empty() {
+            tracing::warn!("dropping empty-content chunk in {}", file_path);
+            false
+        } else {
+            true
+        }
+    });
+    (chunks, symbols)
 }
 
 /// One file's worth of work for `backfill_structural_edges`, factored out so
@@ -678,16 +679,14 @@ pub async fn backfill_once(
     embedder: &dyn EmbeddingBackend,
     expected_dim: usize,
 ) -> Result<usize> {
-    let tx = crate::maintenance::ordinary_write(client, repo_id).await?;
-    let client = tx.client();
     let groups = crate::store::pending_content_groups(client, repo_id, BACKFILL_BATCH).await?;
     if groups.is_empty() {
         return Ok(0);
     }
     let texts: Vec<String> = groups.iter().map(|(_, c)| c.clone()).collect();
     let embeddings = embedder.embed(&texts).await?;
-    let mut updated = 0usize;
-    for ((hash, _), emb) in groups.iter().zip(embeddings) {
+    let mut valid = Vec::with_capacity(groups.len());
+    for ((hash, content), emb) in groups.into_iter().zip(embeddings) {
         if emb.is_empty() {
             tracing::warn!(
                 "backfill: embedder returned empty vector for a Tier-2 content in repo {}; \
@@ -707,11 +706,12 @@ pub async fn backfill_once(
             );
             continue;
         }
-        updated +=
-            crate::store::set_embedding_for_hash(client, repo_id, hash, &emb).await? as usize;
+        valid.push((hash, content, emb));
     }
-    tx.commit().await?;
-    Ok(updated)
+    if valid.is_empty() {
+        return Ok(0);
+    }
+    Ok(crate::store::set_embeddings_for_contents(client, repo_id, valid).await? as usize)
 }
 
 #[cfg(test)]

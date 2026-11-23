@@ -87,12 +87,20 @@ async fn main() -> anyhow::Result<()> {
     // config changes and restart the watcher so newly-excluded paths stop
     // being re-indexed by a stale watcher after a foreground CLI reindex.
     let mut watched: HashMap<Uuid, WatcherEntry> = HashMap::new();
+    let mut vector_workers = HashMap::new();
     // Track repos with a reindex in flight to prevent duplicate spawns.
     let reindexing: Arc<Mutex<std::collections::HashSet<Uuid>>> =
         Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Initial scan
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
 
     let mut notifications_open = true;
     loop {
@@ -107,7 +115,14 @@ async fn main() -> anyhow::Result<()> {
                     notify_rx = new_rx;
                     notifications_open = true;
                     tracing::info!("database connections restored");
-                    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+                    scan_and_dispatch(
+                        &cfg,
+                        &mut client,
+                        &mut watched,
+                        &reindexing,
+                        &mut vector_workers,
+                    )
+                    .await;
                 }
                 Err(error) => {
                     tracing::warn!("database reconnect failed: {error:#}");
@@ -127,7 +142,14 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
         }
-        scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+        scan_and_dispatch(
+            &cfg,
+            &mut client,
+            &mut watched,
+            &reindexing,
+            &mut vector_workers,
+        )
+        .await;
     }
 
     summary_task.abort();
@@ -223,6 +245,7 @@ async fn scan_and_dispatch(
     client: &mut tokio_postgres::Client,
     watched: &mut HashMap<Uuid, WatcherEntry>,
     reindexing: &Arc<Mutex<std::collections::HashSet<Uuid>>>,
+    vector_workers: &mut HashMap<Uuid, tokio::task::JoinHandle<()>>,
 ) {
     let repos = match store::list_repos(client).await {
         Ok(r) => r,
@@ -236,6 +259,12 @@ async fn scan_and_dispatch(
     // longer registered. Without this, an unregistered repo's watcher keeps
     // running and tries to write into a dropped chunks table.
     let live_ids: std::collections::HashSet<Uuid> = repos.iter().map(|r| r.id).collect();
+    vector_workers.retain(|id, worker| {
+        if !live_ids.contains(id) {
+            worker.abort();
+        }
+        live_ids.contains(id) && !worker.is_finished()
+    });
     watched.retain(|id, (handle, _)| {
         if live_ids.contains(id) {
             true
@@ -249,6 +278,9 @@ async fn scan_and_dispatch(
     for repo in repos {
         match muninn_core::family_store::retire_if_missing(client, repo.id).await {
             Ok(muninn_core::family_store::MissingState::Retired) => {
+                if let Some(worker) = vector_workers.remove(&repo.id) {
+                    worker.abort();
+                }
                 if let Some((handle, _)) = watched.remove(&repo.id) {
                     handle.abort();
                 }
@@ -256,6 +288,9 @@ async fn scan_and_dispatch(
                 continue;
             }
             Ok(muninn_core::family_store::MissingState::Pending) => {
+                if let Some(worker) = vector_workers.remove(&repo.id) {
+                    worker.abort();
+                }
                 if let Some((handle, _)) = watched.remove(&repo.id) {
                     handle.abort();
                 }
@@ -270,6 +305,9 @@ async fn scan_and_dispatch(
         // dropping data. If a watcher is running for a now-paused repo, evict it.
         // Spec: Muninn.Index.daemonDecision (paused → Skip).
         if repo.paused {
+            if let Some(worker) = vector_workers.remove(&repo.id) {
+                worker.abort();
+            }
             if let Some((handle, _)) = watched.remove(&repo.id) {
                 handle.abort();
                 tracing::info!("paused {} — stopped its watcher", repo.path);
@@ -307,6 +345,9 @@ async fn scan_and_dispatch(
             }
         };
         if policy.as_ref().is_some_and(|p| !p.indexing_enabled) {
+            if let Some(worker) = vector_workers.remove(&repo.id) {
+                worker.abort();
+            }
             if let Some((handle, _)) = watched.remove(&repo.id) {
                 handle.abort();
             }
@@ -331,6 +372,62 @@ async fn scan_and_dispatch(
                 repo_dim
             );
             continue;
+        }
+
+        // Provider latency must not delay attaching the watcher or dispatching
+        // work for other families. Keep one active vector batch per family.
+        if !vector_workers.contains_key(&repo.id) {
+            match store::has_pending_embeddings(client, repo.id).await {
+                Ok(true) => {
+                    let embedder = make_backend(&eff.embeddings);
+                    let database = cfg.database.clone();
+                    let id = repo.id;
+                    let path = repo.path.clone();
+                    let task = tokio::spawn(async move {
+                        let mut writer = match db::connect_with_app_name(
+                            &database,
+                            "muninn-index-vectors",
+                        )
+                        .await
+                        {
+                            Ok(writer) => writer,
+                            Err(error) => {
+                                tracing::warn!(%path, %error, "cannot connect vector worker");
+                                return;
+                            }
+                        };
+                        loop {
+                            let batch = muninn_core::pipeline::backfill_once(
+                                &mut writer,
+                                id,
+                                embedder.as_ref(),
+                                repo_dim,
+                            );
+                            match tokio::time::timeout(std::time::Duration::from_secs(60), batch)
+                                .await
+                            {
+                                Ok(Ok(0)) => break,
+                                Ok(Ok(count)) => {
+                                    tracing::info!(%path, count, "stored pending vectors")
+                                }
+                                Ok(Err(error)) => {
+                                    tracing::warn!(%path, %error, "vector backfill failed");
+                                    break;
+                                }
+                                Err(_) => {
+                                    tracing::warn!(%path, "vector batch timed out and remains pending");
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                    vector_workers.insert(id, task);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(path=%repo.path, %error, "cannot inspect pending vectors")
+                }
+            }
         }
 
         if repo.indexed_at.is_none() {
@@ -507,23 +604,6 @@ async fn scan_and_dispatch(
                 reindexing2.lock().await.remove(&repo_id);
             });
             continue;
-        }
-
-        // indexed_at IS NOT NULL: this repo is Indexed. Drain ONE bounded batch
-        // of its Tier-2 embedding backlog (pending chunks embedded lazily during
-        // the foreground index). One batch per scan tick keeps the tick
-        // cooperative; the NOTIFY + 60s fallback poll re-scans until the backlog
-        // is empty. Spec: Muninn.IndexFsm.EmbedStep.
-        {
-            let embedder: Arc<dyn muninn_core::embeddings::EmbeddingBackend> =
-                Arc::from(make_backend(&eff.embeddings));
-            match muninn_core::pipeline::backfill_once(client, repo.id, embedder.as_ref(), repo_dim)
-                .await
-            {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("backfilled {} Tier-2 embedding(s) for {}", n, repo.path),
-                Err(e) => tracing::warn!("backfill for {} failed: {}", repo.path, e),
-            }
         }
 
         // start watcher if not already watching, or restart it if the

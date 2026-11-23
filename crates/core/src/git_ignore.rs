@@ -6,7 +6,7 @@ use tokio::io::AsyncWriteExt;
 
 pub(crate) async fn check(root: &Path, paths: &[PathBuf]) -> Result<Vec<bool>> {
     let mut answers = Vec::with_capacity(paths.len());
-    for batch in paths.chunks(128) {
+    for batch in paths.chunks(4096) {
         let mut input = Vec::new();
         for path in batch {
             input.extend_from_slice(path.to_str().context("Git path is not UTF-8")?.as_bytes());

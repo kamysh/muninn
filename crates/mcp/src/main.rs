@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::from(make_backend(&cfg.embeddings));
     let embedding_dim = expected_dimension(&cfg.embeddings);
     let mut ctx = match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
-        Ok(connected) => Some(connected),
+        Ok(connected) => Some(Arc::new(connected)),
         Err(error) => {
             tracing::warn!("database connection unavailable: {error:#}");
             None
@@ -44,14 +44,28 @@ async fn main() -> anyhow::Result<()> {
     let mut lines = BufReader::new(stdin).lines();
     let mut writer = stdout;
     let mut reconnect_timer = tokio::time::interval(Duration::from_secs(1));
+    let mut requests = tokio::task::JoinSet::new();
+    let mut input_closed = false;
 
-    loop {
+    while !input_closed || !requests.is_empty() {
         let line = tokio::select! {
-            result = lines.next_line() => result?,
-            _ = reconnect_timer.tick() => {
+            result = lines.next_line(), if !input_closed => result?,
+            result = requests.join_next(), if !requests.is_empty() => {
+                if let Some(result) = result {
+                    let response: Option<serde_json::Value> = result?;
+                    if let Some(response) = response {
+                        let mut out = serde_json::to_string(&response)?;
+                        out.push('\n');
+                        writer.write_all(out.as_bytes()).await?;
+                        writer.flush().await?;
+                    }
+                }
+                continue;
+            }
+            _ = reconnect_timer.tick(), if !input_closed => {
                 if ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
                     if let Ok(connected) = connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
-                        ctx = Some(connected);
+                        ctx = Some(Arc::new(connected));
                         tracing::info!("database connection restored");
                     }
                 }
@@ -59,7 +73,8 @@ async fn main() -> anyhow::Result<()> {
             }
         };
         let Some(line) = line else {
-            break;
+            input_closed = true;
+            continue;
         };
 
         let request: serde_json::Value = match serde_json::from_str(line.trim()) {
@@ -71,20 +86,18 @@ async fn main() -> anyhow::Result<()> {
         let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
         if method == "tools/call" && ctx.as_ref().is_none_or(|c| c.client.is_closed()) {
             match connect_context(&cfg, Arc::clone(&embedder), embedding_dim).await {
-                Ok(connected) => ctx = Some(connected),
+                Ok(connected) => ctx = Some(Arc::new(connected)),
                 Err(error) => {
                     tracing::warn!("database connection unavailable: {error:#}");
                     ctx = None;
                 }
             }
         }
-        let response = handle_request(ctx.as_ref(), &request).await;
-        if !is_notification {
-            let mut out = serde_json::to_string(&response)?;
-            out.push('\n');
-            writer.write_all(out.as_bytes()).await?;
-            writer.flush().await?;
-        }
+        let request_context = ctx.clone();
+        requests.spawn(async move {
+            let response = handle_request(request_context.as_deref(), &request).await;
+            (!is_notification).then_some(response)
+        });
     }
 
     Ok(())

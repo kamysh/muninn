@@ -115,6 +115,7 @@ import Muninn.CleanupProgress
 import Muninn.CleanupEffects
 import Muninn.ExclusionClassifier
 import Muninn.ContentPublication
+import Muninn.CheckoutPublication
 import Muninn.ContentViews
 import Muninn.GenericFileMap
 import Muninn.RetrievalNumerics
@@ -124,7 +125,7 @@ import Muninn.RetrievalCorpus
 import Muninn.Retrieval
 import Muninn.StructuralSearch
 import Muninn.ExclusionOutcomes
-import Muninn.SerializedMaintenance
+import Muninn.SerializedMaintenance -- pre-1.4.0 admission model
 
 open import Muninn.Float        public
 open import Muninn.AdvisoryLock public

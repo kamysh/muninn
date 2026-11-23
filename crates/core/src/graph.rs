@@ -1,6 +1,6 @@
 use crate::store::graph_name;
 use crate::types::{LineRange, StructuralEdge, StructuralRelation, Symbol, SymbolKind};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -108,185 +108,6 @@ pub async fn drop_graph(client: &Client, id: Uuid) -> Result<()> {
         client
             .batch_execute(&format!("SELECT ag_catalog.drop_graph('{name}', true)"))
             .await?;
-    }
-    Ok(())
-}
-
-/// Strict transactional replacement: unlike best-effort legacy graph writes,
-/// any error aborts the caller's entire checkout publication.
-pub(crate) async fn replace_graph(
-    client: &Client,
-    id: Uuid,
-    nodes: &[SymbolNodeInput],
-    edges: &[StructuralEdge],
-) -> Result<()> {
-    let g = graph_name(id);
-    const INSERT_BATCH: usize = 1024;
-    // Replace the entire owned graph atomically with the selected manifest.
-    // The publication transaction restores the old graph if any later step fails.
-    drop_graph(client, id)
-        .await
-        .context("replace owned graph")?;
-    crate::store::ensure_graph(client, id)
-        .await
-        .context("initialize replacement graph")?;
-    let mut kinds = std::collections::HashMap::new();
-    for node in nodes {
-        kinds.insert(node.chunk_id, kind_label(&node.kind));
-    }
-    for kind in [
-        SymbolKind::Function,
-        SymbolKind::Class,
-        SymbolKind::Module,
-        SymbolKind::Import,
-    ] {
-        let label = kind_label(&kind);
-        let values: Vec<_> = nodes.iter().filter(|n|n.kind==kind).map(|n|serde_json::json!({"chunk_id":n.chunk_id.to_string(),"name":n.name,"kind":label,"file_path":n.file_path,"start_line":n.start_line,"end_line":n.end_line})).collect();
-        for batch in values.chunks(INSERT_BATCH) {
-            let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
-            // Set properties at creation: a following SET re-locates every
-            // newly created vertex in AGE 1.6.
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r CREATE (n:{label} {{chunk_id:r.chunk_id,name:r.name,kind:r.kind,file_path:r.file_path,start_line:r.start_line,end_line:r.end_line}}) $$, $1) AS (v ag_catalog.agtype)");
-            age_execute(
-                client,
-                &stmt,
-                &sql,
-                &serde_json::json!({"rows":batch}).to_string(),
-            )
-            .await
-            .with_context(|| format!("create AGE {label} node batch"))?;
-        }
-    }
-    // Repeated calls resolve to one relationship. Deduplicate before CREATE
-    // because this transaction has just emptied the graph. Explicit endpoint
-    // labels and equality predicates avoid unlabelled containment joins.
-    let mut groups = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
-    for edge in edges {
-        if let (Some(from), Some(to)) = (kinds.get(&edge.from), kinds.get(&edge.to)) {
-            groups
-                .entry((relation_label(&edge.relation), *from, *to))
-                .or_default()
-                .insert((edge.from, edge.to));
-        }
-    }
-    for ((relation, from, to), pairs) in groups {
-        let values: Vec<_> = pairs
-            .into_iter()
-            .map(|(a, b)| serde_json::json!({"from":a.to_string(),"to":b.to_string()}))
-            .collect();
-        for batch in values.chunks(INSERT_BATCH) {
-            let stmt = format!("muninn_replace_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{g}', $$ UNWIND $rows AS r MATCH (a:{from}), (b:{to}) WHERE a.chunk_id = r.from AND b.chunk_id = r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
-            age_execute(
-                client,
-                &stmt,
-                &sql,
-                &serde_json::json!({"rows":batch}).to_string(),
-            )
-            .await
-            .with_context(|| format!("create AGE {relation} edge batch ({from} -> {to})"))?;
-        }
-    }
-    Ok(())
-}
-
-/// Update only changed-file nodes and edges whose resolution may have changed.
-/// Errors propagate to the caller's checkout publication transaction.
-pub(crate) async fn patch_graph(
-    client: &Client,
-    id: Uuid,
-    changed_paths: &[String],
-    affected_names: &[String],
-    all_nodes: &[SymbolNodeInput],
-    changed_nodes: &[&SymbolNodeInput],
-    affected_edges: &[StructuralEdge],
-) -> Result<()> {
-    let graph = graph_name(id);
-    const BATCH: usize = 256;
-    for paths in changed_paths.chunks(BATCH) {
-        let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
-        let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (n {{file_path:r.path}}) DETACH DELETE n $$, $1) AS (v ag_catalog.agtype)");
-        let rows: Vec<_> = paths
-            .iter()
-            .map(|path| serde_json::json!({"path":path}))
-            .collect();
-        age_execute(
-            client,
-            &stmt,
-            &sql,
-            &serde_json::json!({"rows":rows}).to_string(),
-        )
-        .await
-        .context("delete changed AGE nodes")?;
-    }
-    for names in affected_names.chunks(BATCH) {
-        let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
-        let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH ()-[e]->(b {{name:r.name}}) DELETE e $$, $1) AS (v ag_catalog.agtype)");
-        let rows: Vec<_> = names
-            .iter()
-            .map(|name| serde_json::json!({"name":name}))
-            .collect();
-        age_execute(
-            client,
-            &stmt,
-            &sql,
-            &serde_json::json!({"rows":rows}).to_string(),
-        )
-        .await
-        .context("delete AGE edges for changed target names")?;
-    }
-    for kind in [
-        SymbolKind::Function,
-        SymbolKind::Class,
-        SymbolKind::Module,
-        SymbolKind::Import,
-    ] {
-        let label = kind_label(&kind);
-        let rows: Vec<_> = changed_nodes.iter().filter(|node| node.kind == kind)
-            .map(|node| serde_json::json!({"chunk_id":node.chunk_id.to_string(),"name":node.name,"kind":label,"file_path":node.file_path,"start_line":node.start_line,"end_line":node.end_line})).collect();
-        for batch in rows.chunks(BATCH) {
-            let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r CREATE (n:{label} {{chunk_id:r.chunk_id,name:r.name,kind:r.kind,file_path:r.file_path,start_line:r.start_line,end_line:r.end_line}}) $$, $1) AS (v ag_catalog.agtype)");
-            age_execute(
-                client,
-                &stmt,
-                &sql,
-                &serde_json::json!({"rows":batch}).to_string(),
-            )
-            .await
-            .context("create changed AGE nodes")?;
-        }
-    }
-    let kinds: std::collections::HashMap<_, _> = all_nodes
-        .iter()
-        .map(|node| (node.chunk_id, kind_label(&node.kind)))
-        .collect();
-    let mut groups = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
-    for edge in affected_edges {
-        if let (Some(from), Some(to)) = (kinds.get(&edge.from), kinds.get(&edge.to)) {
-            groups
-                .entry((relation_label(&edge.relation), *from, *to))
-                .or_default()
-                .insert((edge.from, edge.to));
-        }
-    }
-    for ((relation, from, to), pairs) in groups {
-        let rows: Vec<_> = pairs
-            .into_iter()
-            .map(|(a, b)| serde_json::json!({"from":a.to_string(),"to":b.to_string()}))
-            .collect();
-        for batch in rows.chunks(BATCH) {
-            let stmt = format!("muninn_patch_{}", Uuid::new_v4().simple());
-            let sql = format!("PREPARE {stmt}(agtype) AS SELECT * FROM ag_catalog.cypher('{graph}', $$ UNWIND $rows AS r MATCH (a:{from}), (b:{to}) WHERE a.chunk_id = r.from AND b.chunk_id = r.to CREATE (a)-[:{relation}]->(b) $$, $1) AS (v ag_catalog.agtype)");
-            age_execute(
-                client,
-                &stmt,
-                &sql,
-                &serde_json::json!({"rows":batch}).to_string(),
-            )
-            .await
-            .context("create affected AGE edges")?;
-        }
     }
     Ok(())
 }
@@ -464,8 +285,21 @@ pub async fn query_related(
     relation: StructuralRelation,
     incoming: bool,
 ) -> Result<Vec<Symbol>> {
+    if let Some(target) = crate::worktrees::base_target(client, repo_id).await? {
+        return crate::worktrees::query_related(client, &target, symbol_name, relation, incoming)
+            .await;
+    }
     let guard = crate::maintenance::read(client, repo_id).await?;
-    query_related_unlocked(guard.client(), repo_id, symbol_name, relation, incoming).await
+    let hidden = crate::maintenance::legacy_hidden_paths(&guard, repo_id).await?;
+    query_related_unlocked(
+        guard.client(),
+        repo_id,
+        symbol_name,
+        relation,
+        incoming,
+        &hidden,
+    )
+    .await
 }
 
 pub(crate) async fn query_related_unlocked(
@@ -474,6 +308,7 @@ pub(crate) async fn query_related_unlocked(
     symbol_name: &str,
     relation: StructuralRelation,
     incoming: bool,
+    hidden: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<Symbol>> {
     let gname = graph_name(repo_id);
 
@@ -492,13 +327,15 @@ pub(crate) async fn query_related_unlocked(
         format!(
             r#"MATCH (a)-[:{edge_type}]->(b {{name: $sym_name}})
                RETURN {{chunk_id: a.chunk_id, name: a.name, file_path: a.file_path,
-                        kind: a.kind, start_line: a.start_line, end_line: a.end_line}}"#,
+                        kind: a.kind, start_line: a.start_line, end_line: a.end_line,
+                        origin_path: b.file_path}}"#,
         )
     } else {
         format!(
             r#"MATCH (a {{name: $sym_name}})-[:{edge_type}]->(b)
                RETURN {{chunk_id: b.chunk_id, name: b.name, file_path: b.file_path,
-                        kind: b.kind, start_line: b.start_line, end_line: b.end_line}}"#,
+                        kind: b.kind, start_line: b.start_line, end_line: b.end_line,
+                        origin_path: a.file_path}}"#,
         )
     };
 
@@ -531,6 +368,14 @@ pub(crate) async fn query_related_unlocked(
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
+            if hidden.contains(&file_path)
+                || map
+                    .get("origin_path")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|path| hidden.contains(path.trim_matches('"')))
+            {
+                continue;
+            }
             let kind_str = map
                 .get("kind")
                 .and_then(|v| v.as_str())
@@ -659,54 +504,6 @@ fn parse_symbol_kind(s: &str) -> SymbolKind {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
-
-    #[tokio::test]
-    #[ignore = "requires the guarded disposable PostgreSQL harness"]
-    async fn test_graph_replacement_rollback() -> Result<()> {
-        let mut client = crate::test_support::connect().await?;
-        let id = Uuid::new_v4();
-        let node = SymbolNodeInput {
-            chunk_id: Uuid::new_v4(),
-            name: "retained".into(),
-            kind: SymbolKind::Function,
-            file_path: "/retained.rs".into(),
-            start_line: 1,
-            end_line: 1,
-        };
-        let tx = client.transaction().await?;
-        replace_graph(tx.client(), id, &[node], &[]).await?;
-        tx.commit().await?;
-        let g = graph_name(id);
-        let graph_oid_sql = "SELECT graphid::bigint FROM ag_catalog.ag_graph WHERE name=$1";
-        let old_oid: i64 = client.query_one(graph_oid_sql, &[&g]).await?.get(0);
-        let tx = client.transaction().await?;
-        replace_graph(tx.client(), id, &[], &[]).await?;
-        assert!(tx.query_one("SELECT 1/0", &[]).await.is_err());
-        tx.rollback().await?;
-        let restored_oid: i64 = client.query_one(graph_oid_sql, &[&g]).await?.get(0);
-        assert_eq!(
-            restored_oid, old_oid,
-            "rollback must restore the original graph"
-        );
-        let count: i64 = client
-            .query_one(&format!("SELECT count(*) FROM {g}.\"Function\""), &[])
-            .await?
-            .get(0);
-        assert_eq!(count, 1, "rollback must preserve the old graph contents");
-        let tx = client.transaction().await?;
-        replace_graph(tx.client(), id, &[], &[]).await?;
-        tx.commit().await?;
-        let count: i64 = client
-            .query_one(&format!("SELECT count(*) FROM {g}.\"Function\""), &[])
-            .await?
-            .get(0);
-        assert_eq!(
-            count, 0,
-            "a successful replacement must remove old contents"
-        );
-        drop_graph(&client, id).await?;
-        Ok(())
-    }
 
     #[tokio::test]
     #[ignore = "requires the guarded disposable PostgreSQL harness"]

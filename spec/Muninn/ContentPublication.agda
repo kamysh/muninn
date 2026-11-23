@@ -1,6 +1,8 @@
 {-# OPTIONS --safe #-}
 -- Fixed publication intent over owned rows. Storage must realize this intent;
 -- neither a handler nor a storage adapter can choose a weaker success predicate.
+-- Moving-base representation for issue #30, superseded by CheckoutPublication
+-- for ordinary 1.4.0 publication.
 module Muninn.ContentPublication where
 
 import Muninn.ContentViews as Content

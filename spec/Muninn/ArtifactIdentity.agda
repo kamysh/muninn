@@ -39,3 +39,7 @@ EmbeddingKey? first second = map′
 FamilyId? : ∀ (first second : W.FamilyId) → Dec (first ≡ second)
 FamilyId? first second = map′ (λ { refl → refl }) (λ { refl → refl })
   (string? (T.UUID.value (W.FamilyId.value first)) (T.UUID.value (W.FamilyId.value second)))
+
+CheckoutId? : ∀ (first second : W.CheckoutId) → Dec (first ≡ second)
+CheckoutId? first second = map′ (λ { refl → refl }) (λ { refl → refl })
+  (string? (T.UUID.value (W.CheckoutId.value first)) (T.UUID.value (W.CheckoutId.value second)))

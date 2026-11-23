@@ -67,8 +67,16 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     .await?;
     let id: Uuid = receipt["family_id"].as_str().unwrap().parse()?;
     let mut watched = HashMap::new();
+    let mut vector_workers = HashMap::new();
     let reindexing = Arc::new(Mutex::new(std::collections::HashSet::new()));
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     assert!(!watched.contains_key(&id));
     assert!(!reindexing.lock().await.contains(&id));
     policy::start::authorize(
@@ -83,7 +91,14 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     )
     .await?;
     // Simulate an interrupted foreground start. The daemon must resume it.
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if client
@@ -102,7 +117,14 @@ async fn policy_dispatch() -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     assert!(watched.contains_key(&id));
     tokio::time::sleep(Duration::from_millis(150)).await;
     let before = client
@@ -150,7 +172,14 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     assert!(tokio::time::timeout(Duration::from_secs(3), rx.recv())
         .await?
         .is_some());
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     let signature = &watched.get(&id).unwrap().1;
     assert_eq!(signature.2, 35);
     assert_eq!(signature.4, Some(2));
@@ -181,7 +210,14 @@ async fn policy_dispatch() -> anyhow::Result<()> {
     .await?;
     let first_id: Uuid = first["family_id"].as_str().unwrap().parse()?;
     std::fs::remove_dir(&removed)?;
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     assert!(client
         .query_one(
             "SELECT missing_since IS NOT NULL AND retired_at IS NULL FROM public.repos WHERE id=$1",
@@ -190,7 +226,14 @@ async fn policy_dispatch() -> anyhow::Result<()> {
         .await?
         .get::<_, bool>(0));
     std::fs::create_dir(&removed)?;
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     assert!(client
         .query_one(
             "SELECT missing_since IS NULL AND retired_at IS NULL FROM public.repos WHERE id=$1",
@@ -199,14 +242,28 @@ async fn policy_dispatch() -> anyhow::Result<()> {
         .await?
         .get::<_, bool>(0));
     std::fs::remove_dir(&removed)?;
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     client
         .execute(
             "UPDATE public.repos SET missing_since=now()-interval '61 seconds' WHERE id=$1",
             &[&first_id],
         )
         .await?;
-    scan_and_dispatch(&cfg, &mut client, &mut watched, &reindexing).await;
+    scan_and_dispatch(
+        &cfg,
+        &mut client,
+        &mut watched,
+        &reindexing,
+        &mut vector_workers,
+    )
+    .await;
     assert!(client
         .query_one(
             "SELECT retired_at IS NOT NULL FROM public.repos WHERE id=$1",
