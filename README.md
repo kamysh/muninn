@@ -59,9 +59,9 @@ agent can find relevant source, then read and verify it.
 Git worktrees add a second problem: each checkout has its own files, but copying
 a full chunk/vector index for every branch wastes space and embedding work.
 Muninn groups linked worktrees into a **repository family**. It shares
-unchanged file versions and embeddings, stores file differences per checkout,
-and searches the checkout the caller selected. Updating the primary checkout
-adjusts those differences without changing another checkout's published view.
+unchanged file versions and embeddings and publishes each checkout's own view.
+Search uses the selected checkout's published view while changes to another
+checkout are prepared.
 
 Registration is explicit. A cheap inventory helps a human or agent choose which
 files matter before the first index starts. An enabled family discovers linked
@@ -108,8 +108,9 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-These docs describe the **1.2.4 source tree**. Install matching binaries from
-[v1.2.4](https://github.com/kamysh/muninn/releases/tag/v1.2.4) or build from this source tree.
+This source tree builds **Muninn 1.4.0**. Use three matching binaries when
+installing or upgrading. [Build instructions](docs/development.md#building-and-testing) ·
+[Upgrade guide](docs/upgrading.md)
 
 | Task | Guide |
 | --- | --- |

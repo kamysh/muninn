@@ -1,5 +1,9 @@
 # Issue #203: serialized selection maintenance
 
+This contract describes the earlier implementation. The
+[1.4.0 publication contract](CHECKOUT-PUBLICATION.md) supersedes its moving
+base and family-wide admission rules for ordinary work.
+
 Status: approved design with a local runtime implementation; not released.
 Baseline: published v1.3.0, commit 7fd9bd34023f50c766d676b6eb13aa3282463d7b.
 

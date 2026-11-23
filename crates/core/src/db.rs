@@ -332,6 +332,8 @@ mod migration_tests {
                     "repo-worktree-structural-snapshots",
                     "repo-owned-control-records",
                     "repo-selection-maintenance",
+                    "repo-worktree-initial-progress",
+                    "repo-checkout-file-versions",
                 ],
             ),
         ] {

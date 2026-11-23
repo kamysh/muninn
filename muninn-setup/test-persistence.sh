@@ -111,6 +111,8 @@ model = "voyage-code-3"
 batch_size = 64
 [watcher]
 debounce_ms = 300
+[mcp.logging]
+enabled = false
 TOML
 # Present disposable credentials and configuration at the real lookup paths,
 # including configuration reloaded by the TUI. These mounts exist only in each

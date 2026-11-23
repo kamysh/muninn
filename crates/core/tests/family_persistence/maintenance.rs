@@ -190,12 +190,18 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
             .is_empty()
     );
 
-    let graph = store::graph_name(id);
-    let ids_sql = format!("SELECT array_agg(id::text ORDER BY id) FROM {graph}._ag_label_vertex");
-    let graph_before: Vec<String> = client.query_one(&ids_sql, &[]).await?.get(0);
+    let snapshot_sql =
+        format!("SELECT nodes FROM {schema}.checkout_structural_snapshots WHERE checkout=$1");
+    let graph_before: serde_json::Value = client
+        .query_one(&snapshot_sql, &[&base.checkout])
+        .await?
+        .get(0);
     ensure!(refresh(client, id, &root, false).await?.is_empty());
     let requested_after: i64 = client.query_one(&requested_sql, &[]).await?.get(0);
-    let graph_after: Vec<String> = client.query_one(&ids_sql, &[]).await?.get(0);
+    let graph_after: serde_json::Value = client
+        .query_one(&snapshot_sql, &[&base.checkout])
+        .await?
+        .get(0);
     ensure!(
         requested_after == requested_before,
         "an audit must not request policy maintenance"
@@ -247,7 +253,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .get(0);
     ensure!(versions == 1, "unchanged worktree content must be shared");
 
-    // The gate is database-wide, not an in-process mutex; another family works.
+    // Even a legacy exclusive family lock cannot refuse current reads.
     let other_root = parent.join("serialized-other");
     fs::create_dir(&other_root)?;
     fs::write(other_root.join("other.rs"), "fn independentword() {}\n")?;
@@ -262,10 +268,9 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         &[&id.to_string()],
     )
     .await?;
-    let error = worktrees::fulltext_search(client, &base, "sharedword", 10)
-        .await
-        .unwrap_err();
-    ensure!(error.to_string().contains("family_busy"));
+    ensure!(!worktrees::fulltext_search(client, &base, "sharedword", 10)
+        .await?
+        .is_empty());
     ensure!(
         !search::fulltext_search(client, "independentword", other_id, 10)
             .await?
@@ -334,7 +339,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     .await?
     .is_empty());
 
-    // A paused pending target retains data, blocks new searches, and reports why.
+    // A paused pending checkout retains references and filters its results.
     client
         .execute(
             &format!("UPDATE {schema}.checkouts SET paused=true WHERE id=$1"),
@@ -356,11 +361,14 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     )
     .await?;
     ensure!(!skips.is_empty() && maintenance::pending(client, id).await?);
-    ensure!(worktrees::fulltext_search(client, &base, "anchorword", 10)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("family_maintenance"));
+    ensure!(!worktrees::fulltext_search(client, &base, "anchorword", 10)
+        .await?
+        .is_empty());
+    ensure!(
+        worktrees::fulltext_search(client, &sibling, "sharedword", 10)
+            .await?
+            .is_empty()
+    );
     ensure!(!maintenance::status(client, id).await?["targets"][0]["last_error"].is_null());
     client
         .execute(
@@ -369,9 +377,11 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         )
         .await?;
 
-    // Force preparation failure. The old shared version survives rollback.
+    // Git suspension retains the old shared version without blocking its siblings.
     fs::write(linked.join("new.rs"), "fn newlyembeddedword() {}\n")?;
-    let _ = refresh(client, id, &root, true).await;
+    let merge_head = root.join(".git/worktrees/serialized-linked/MERGE_HEAD");
+    fs::write(&merge_head, "0000000000000000000000000000000000000000\n")?;
+    let _ = refresh(client, id, &root, false).await;
     ensure!(maintenance::pending(client, id).await?);
     let versions: i64 = client
         .query_one(
@@ -381,6 +391,7 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .await?
         .get(0);
     ensure!(versions == 1);
+    fs::remove_file(merge_head)?;
     let mut restarted = target.connect().await?;
     ensure!(refresh(&mut restarted, id, &root, false).await?.is_empty());
     ensure!(!maintenance::pending(&restarted, id).await?);
@@ -430,6 +441,11 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
     )
     .await?;
     ensure!(maintenance::pending(&restarted, id).await?);
+    ensure!(
+        worktrees::fulltext_search(&mut restarted, &base, "sharedword", 10)
+            .await?
+            .is_empty()
+    );
     ensure!(refresh(&mut restarted, id, &root, false).await?.is_empty());
     ensure!(
         worktrees::fulltext_search(&mut restarted, &base, "sharedword", 10)
@@ -442,15 +458,16 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
             .iter()
             .any(|item| item.id == note.id)
     );
-    // An accepted policy change waits for an already admitted reader to leave.
+    // Policy acceptance and new searches proceed while an older snapshot lives.
     let mut reader = target.connect().await?;
     let held_reader = maintenance::read(&mut reader, id).await?;
+    held_reader.query_one("SELECT 1", &[]).await?;
     let view = policy::inspect(&restarted, id).await?;
     let mut candidate = view.policy;
     candidate.index.exclude.push("anchor.rs".into());
     let mut writer = target.connect().await?;
     let (started, ready) = tokio::sync::oneshot::channel();
-    let mut update = tokio::spawn(async move {
+    let update = tokio::spawn(async move {
         let _ = started.send(());
         policy::apply(
             &mut writer,
@@ -466,13 +483,13 @@ pub(super) async fn verify(target: &Target, client: &mut Client, parent: &Path) 
         .await
     });
     ready.await?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), update).await???;
     ensure!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), &mut update)
-            .await
-            .is_err()
+        worktrees::fulltext_search(&mut restarted, &base, "anchorword", 10)
+            .await?
+            .is_empty()
     );
     held_reader.rollback().await?;
-    update.await??;
     ensure!(refresh(&mut restarted, id, &root, false).await?.is_empty());
 
     // Directory families use their family ID as the single maintenance target.

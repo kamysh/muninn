@@ -1,8 +1,7 @@
 {-# OPTIONS --safe #-}
--- A family application schema contains shared file versions and a current base.
--- Each checkout has its own AGE graph and path-specific differences.
--- Baseline IDs below name logical states, not separately retained SQL snapshots;
--- FileMap.moveBase proves preservation when the current base is replaced.
+-- A family shares immutable file versions and stable baseline manifests.
+-- Each checkout selects its own view, with differences relative to a stable
+-- baseline. The model gives no mandatory physical representation.
 module Muninn.Worktree where
 
 open import Data.Bool using (Bool)

@@ -45,19 +45,21 @@
       "tokio::time::sleep": {"count": 1, "targets": ["control:notification", "job:fleetScan"]}
     },
     "main:scan_and_dispatch": {
-      "db::connect_with_app_name": {"count": 2, "targets": ["job:reconcileFamily", "job:watchBatch"]},
+      "db::connect_with_app_name": {"count": 3, "targets": ["job:reconcileFamily", "job:watchBatch", "job:embedCode"]},
       "db::run_repo_migrations": {"count": 1, "targets": ["job:prepareFamily"]},
       "family_store::retire_if_missing": {"count": 1, "targets": ["job:reclaimRetired"]},
       "index_repo": {"count": 1, "targets": ["job:reconcileFamily"]},
       "pipeline::backfill_once": {"count": 1, "targets": ["job:embedCode"]},
+      "store::has_pending_embeddings": {"count": 1, "targets": ["job:embedCode"]},
       "store::is_preempt_requested": {"count": 1, "targets": ["job:handoff"]},
       "store::list_repos": {"count": 1, "targets": ["job:fleetScan"]},
       "store::notify_repos_changed": {"count": 1, "targets": ["control:notification"]},
       "store::repo_schema": {"count": 1, "targets": ["job:prepareFamily"]},
       "store::try_lock": {"count": 1, "targets": ["job:handoff"]},
       "store::unlock": {"count": 2, "targets": ["job:handoff"]},
-      "tokio::spawn": {"count": 2, "targets": ["job:reconcileFamily", "job:watchBatch"]},
+      "tokio::spawn": {"count": 3, "targets": ["job:reconcileFamily", "job:watchBatch", "job:embedCode"]},
       "tokio::time::interval": {"count": 1, "targets": ["job:handoff"]},
+      "tokio::time::timeout": {"count": 1, "targets": ["job:embedCode"]},
       "watcher::watch_repo": {"count": 1, "targets": ["job:watchBatch"]}
     },
     "watcher:watch_repo": {

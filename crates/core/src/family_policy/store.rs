@@ -257,9 +257,15 @@ async fn apply_locked(
     id: Uuid,
     request: &ApplyRequest,
 ) -> Result<ApplyResult> {
-    crate::worktrees::lock(&tx, id)
-        .await
-        .map_err(|_| PolicyError::new("database_error", "cannot lock family"))?;
+    tx.query_one(
+        &format!(
+            "SELECT current_revision FROM {}.family_policy WHERE singleton FOR UPDATE",
+            schema(id)
+        ),
+        &[],
+    )
+    .await
+    .map_err(|_| PolicyError::new("database_error", "cannot lock policy revision"))?;
     let family = family(&tx, id).await?;
     let view = read(&tx, &family).await?.ok_or_else(|| {
         PolicyError::new(

@@ -28,7 +28,11 @@ pub async fn fulltext_search(
         return crate::worktrees::fulltext_search(client, &target, query, limit).await;
     }
     let guard = crate::maintenance::read(client, repo_id).await?;
-    fulltext_search_unlocked(guard.client(), query, repo_id, limit).await
+    let hidden: Vec<_> = crate::maintenance::legacy_hidden_paths(&guard, repo_id)
+        .await?
+        .into_iter()
+        .collect();
+    fulltext_search_unlocked(guard.client(), query, repo_id, limit, &hidden).await
 }
 
 async fn fulltext_search_unlocked(
@@ -36,6 +40,7 @@ async fn fulltext_search_unlocked(
     query: &str,
     repo_id: Uuid,
     limit: i64,
+    hidden: &[String],
 ) -> Result<Vec<SearchResult>> {
     let table = chunks_ref(repo_id);
     let rows = client
@@ -46,11 +51,13 @@ async fn fulltext_search_unlocked(
                ts_rank(ts_vector, plainto_tsquery('english', $1)) AS score
         FROM {table}
         WHERE ts_vector @@ plainto_tsquery('english', $1)
+          AND file_version IS NULL
+          AND file_path <> ALL($3::text[])
         ORDER BY score DESC
         LIMIT $2
         "#
             ),
-            &[&query, &limit],
+            &[&query, &limit, &hidden],
         )
         .await?;
 
@@ -90,7 +97,11 @@ pub async fn semantic_search(
         return crate::worktrees::semantic_search(client, &target, query_embedding, limit).await;
     }
     let guard = crate::maintenance::read(client, repo_id).await?;
-    semantic_search_unlocked(guard.client(), query_embedding, repo_id, limit).await
+    let hidden: Vec<_> = crate::maintenance::legacy_hidden_paths(&guard, repo_id)
+        .await?
+        .into_iter()
+        .collect();
+    semantic_search_unlocked(guard.client(), query_embedding, repo_id, limit, &hidden).await
 }
 
 async fn semantic_search_unlocked(
@@ -98,6 +109,7 @@ async fn semantic_search_unlocked(
     query_embedding: &[f32],
     repo_id: Uuid,
     limit: i64,
+    hidden: &[String],
 ) -> Result<Vec<SearchResult>> {
     let table = chunks_ref(repo_id);
     let vec = Vector::from(query_embedding.to_vec());
@@ -110,12 +122,14 @@ async fn semantic_search_unlocked(
                (1 - (embedding <=> $1))::float4 AS score
         FROM {table}
         WHERE embedding IS NOT NULL
+          AND file_version IS NULL
+          AND file_path <> ALL($3::text[])
           AND (1 - (embedding <=> $1)) > 0.0
         ORDER BY embedding <=> $1
         LIMIT $2
         "#
             ),
-            &[&vec, &limit],
+            &[&vec, &limit, &hidden],
         )
         .await?;
 
@@ -157,10 +171,21 @@ pub async fn hybrid_search(
             .await;
     }
     let guard = crate::maintenance::read(client, repo_id).await?;
+    let hidden: Vec<_> = crate::maintenance::legacy_hidden_paths(&guard, repo_id)
+        .await?
+        .into_iter()
+        .collect();
     let candidates = (limit * 10).min(MAX_LIMIT);
-    let semantic =
-        semantic_search_unlocked(guard.client(), query_embedding, repo_id, candidates).await?;
-    let fulltext = fulltext_search_unlocked(guard.client(), query, repo_id, candidates).await?;
+    let semantic = semantic_search_unlocked(
+        guard.client(),
+        query_embedding,
+        repo_id,
+        candidates,
+        &hidden,
+    )
+    .await?;
+    let fulltext =
+        fulltext_search_unlocked(guard.client(), query, repo_id, candidates, &hidden).await?;
     Ok(rrf_merge(semantic, fulltext, limit as usize))
 }
 

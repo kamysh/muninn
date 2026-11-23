@@ -350,10 +350,10 @@ pub async fn pending_content_groups(
     let rows = client
         .query(
             &format!(
-                r#"SELECT DISTINCT ON (content_hash) content_hash, content
+                r#"SELECT DISTINCT ON (content_hash, content) content_hash, content
                    FROM {table}
                    WHERE embedding_state = 'pending' AND content_hash IS NOT NULL
-                   ORDER BY content_hash
+                   ORDER BY content_hash, content
                    LIMIT $1"#
             ),
             &[&limit],
@@ -365,26 +365,48 @@ pub async fn pending_content_groups(
         .collect())
 }
 
+pub async fn has_pending_embeddings(client: &Client, repo_id: Uuid) -> Result<bool> {
+    Ok(client
+        .query_one(
+            &format!(
+                "SELECT EXISTS(SELECT FROM {} WHERE embedding_state='pending')",
+                chunks_ref(repo_id)
+            ),
+            &[],
+        )
+        .await?
+        .get(0))
+}
+
 /// Set the embedding (and flip `embedding_state` to 'embedded') for every still
 /// -pending chunk whose `content_hash` matches — fanning one embedding out to all
 /// duplicate chunks. Returns the number of rows updated. Spec: Muninn.IndexFsm
 /// .EmbedStep (Pending → Embedded; never touches an already-embedded chunk).
-pub async fn set_embedding_for_hash(
+pub(crate) async fn set_embeddings_for_contents(
     client: &Client,
     repo_id: Uuid,
-    content_hash: &[u8],
-    embedding: &[f32],
+    contents: Vec<(Vec<u8>, String, Vec<f32>)>,
 ) -> Result<u64> {
     let table = chunks_ref(repo_id);
-    let vec = Vector::from(embedding.to_vec());
+    let mut hashes = Vec::with_capacity(contents.len());
+    let mut texts = Vec::with_capacity(contents.len());
+    let mut vectors = Vec::with_capacity(contents.len());
+    for (hash, text, embedding) in contents {
+        hashes.push(hash);
+        texts.push(text);
+        vectors.push(Vector::from(embedding));
+    }
     let n = client
         .execute(
             &format!(
-                r#"UPDATE {table}
-                   SET embedding = $1, embedding_state = 'embedded'
-                   WHERE content_hash = $2 AND embedding_state = 'pending'"#
+                "UPDATE {table} AS c
+                 SET embedding = incoming.embedding, embedding_state = 'embedded'
+                 FROM unnest($1::bytea[], $2::text[], $3::public.vector[])
+                    AS incoming(hash, content, embedding)
+                 WHERE c.content_hash = incoming.hash AND c.content = incoming.content
+                   AND c.embedding_state = 'pending'"
             ),
-            &[&vec, &content_hash],
+            &[&hashes, &texts, &vectors],
         )
         .await?;
     Ok(n)

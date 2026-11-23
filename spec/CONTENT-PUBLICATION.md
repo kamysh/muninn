@@ -1,5 +1,8 @@
 # Content and structural publication
 
+The [1.4.0 publication contract](CHECKOUT-PUBLICATION.md) supersedes this
+contract's moving-base representation and sibling overlay rewrites.
+
 This is the issue #30 specification contract. It adds no Rust implementation,
 SQL migration, runtime installation or live database change.
 

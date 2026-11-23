@@ -1,5 +1,4 @@
-//! A moving base and ordinary file-level deltas. All publications for a family
-//! use the same transaction-owned advisory lock; readers see committed views.
+//! Independently published checkout memberships in family-shared file versions.
 use crate::pipeline::SkipRecord;
 use crate::{
     embeddings::EmbeddingBackend,
@@ -18,6 +17,8 @@ use std::{
 use tokio_postgres::{Client, Transaction};
 use uuid::Uuid;
 
+mod initial;
+mod prepared;
 mod search;
 pub use search::{fulltext_search, hybrid_search, semantic_search};
 
@@ -46,6 +47,21 @@ impl std::error::Error for PendingIndex {}
 
 fn schema(family: Uuid) -> String {
     format!("\"{}\"", store::repo_schema(family))
+}
+
+async fn ensure_checkout_schema(client: &mut Client, family: Uuid) -> Result<()> {
+    let schema = store::repo_schema(family);
+    let exists: bool = client
+        .query_one(
+            "SELECT to_regclass($1) IS NOT NULL",
+            &[&format!("{schema}.checkout_file_versions")],
+        )
+        .await?
+        .get(0);
+    if !exists {
+        crate::db::run_repo_migrations(client, &schema).await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn lock(tx: &Transaction<'_>, family: Uuid) -> Result<()> {
@@ -123,33 +139,40 @@ pub async fn resolve(client: &Client, path: &Path) -> Result<Option<Target>> {
         tokio::fs::canonicalize(path).await?
     };
     let stored = StoredPath::canonicalize(&root).await?;
-    for repo in store::list_repos(client).await? {
-        let s = schema(repo.id);
-        let exists: bool = client
-            .query_one(
-                "SELECT to_regclass($1) IS NOT NULL",
-                &[&format!("{}.worktree_base", s)],
-            )
-            .await?
-            .get(0);
-        if !exists {
-            continue;
-        }
-        if let Some(row) = client.query_opt(&format!(
-            "SELECT c.id,c.indexed_at IS NOT NULL,b.checkout=c.id AS is_base FROM {s}.checkouts c CROSS JOIN {s}.worktree_base b WHERE c.root=$1 AND c.registration_state='active'"), &[&stored.bytes()]).await? {
-            if !row.get::<_,bool>(1) && row.get::<_,bool>(2) && repo.ever_indexed {
-                // An interrupted first conversion must still serve the existing
-                // primary index through the legacy search path.
-                return Ok(None);
-            }
-            if !row.get::<_, bool>(1) {
-                return Err(PendingIndex(root).into());
-            }
-            let id: Uuid = row.get(0);
-            return Ok(Some(Target { family:repo.id, checkout:id, graph:if row.get(2) {repo.id} else {id},root }));
-        }
+    let Some(repo) = registered_family(client, &root).await? else {
+        return Ok(None);
+    };
+    let s = schema(repo.id);
+    let exists: bool = client
+        .query_one(
+            "SELECT to_regclass($1) IS NOT NULL",
+            &[&format!("{}.worktree_base", s)],
+        )
+        .await?
+        .get(0);
+    if !exists {
+        return Ok(None);
     }
-    Ok(None)
+    let Some(row) = client.query_opt(&format!(
+        "SELECT c.id,c.indexed_at IS NOT NULL,b.checkout=c.id AS is_base FROM {s}.checkouts c CROSS JOIN {s}.worktree_base b WHERE c.root=$1 AND c.registration_state='active'"), &[&stored.bytes()]).await? else {
+        return Ok(None);
+    };
+    let is_base: bool = row.get(2);
+    if !row.get::<_, bool>(1) {
+        return if is_base && repo.ever_indexed {
+            // An interrupted first conversion can still serve the primary index.
+            Ok(None)
+        } else {
+            Err(PendingIndex(root).into())
+        };
+    }
+    let id: Uuid = row.get(0);
+    Ok(Some(Target {
+        family: repo.id,
+        checkout: id,
+        graph: if is_base { repo.id } else { id },
+        root,
+    }))
 }
 
 /// Return the primary checkout and all registered Git worktree locations.
@@ -230,7 +253,7 @@ pub async fn reconcile_requested_checkout(
 ) -> Result<()> {
     // MCP can reach an already registered family before its watcher has
     // started. Apply the new per-repo table migration on this path as well.
-    crate::db::run_repo_migrations(client, &store::repo_schema(family)).await?;
+    ensure_checkout_schema(client, family).await?;
     let (_, skips) = reconcile_family_targets(
         client,
         family,
@@ -261,15 +284,16 @@ async fn reconcile_family_targets(
     client: &mut Client,
     family: Uuid,
     root: &Path,
-    embedder: Arc<dyn EmbeddingBackend>,
-    batch_size: usize,
-    dimension: usize,
+    _embedder: Arc<dyn EmbeddingBackend>,
+    _batch_size: usize,
+    _dimension: usize,
     exclude: &[String],
     vendor: &[String],
     progress: impl Fn(usize, usize, &Path),
     changed: Option<&[PathBuf]>,
     requested: Option<&Path>,
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
+    ensure_checkout_schema(client, family).await?;
     if let Some(view) = crate::family_policy::runtime::policy(client, family).await? {
         ensure!(
             view.indexing_enabled && !view.paused,
@@ -288,13 +312,14 @@ async fn reconcile_family_targets(
         return Ok((BatchOutcome::AllSucceeded, Vec::new()));
     }
     let s = schema(family);
-    let tx = client.transaction().await?;
-    lock(&tx, family).await?;
     let mut targets = Vec::new();
     let mut listed = Vec::new();
     let mut missing_listed = Vec::new();
     let mut available = Vec::new();
     for entry in &entries {
+        if requested.is_some_and(|path| path != entry.path && primary.root != entry.path) {
+            continue;
+        }
         // Git can keep a deleted worktree in its registry until pruning. A
         // concrete NotFound is removal evidence; access errors are not.
         if matches!(tokio::fs::metadata(&entry.path).await, Err(ref error) if error.kind() == std::io::ErrorKind::NotFound)
@@ -321,6 +346,14 @@ async fn reconcile_family_targets(
         let admin = StoredPath::canonicalize(&git.git_dir).await?;
         available.push((git, stored, admin));
     }
+    let tx = client.transaction().await?;
+    // Coordinate only competing Git-registry reconciliations. Search and
+    // checkout publication never take the registry lock.
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 317530))",
+        &[&family.to_string()],
+    )
+    .await?;
     // Retire absent identities before inserting replacements. A moved checkout
     // still has its Git administrative identity, even though its old root is
     // absent; a briefly missing Git-listed entry keeps its completed view.
@@ -342,6 +375,11 @@ async fn reconcile_family_targets(
         #[cfg(windows)]
         let encoding = "windows-utf16le";
         let path = StoredPath::from_db(encoding, bytes)?.to_path_buf()?;
+        if requested.is_some_and(|requested| requested != path && primary.root != path)
+            && !available.iter().any(|(_, _, git_dir)| Some(git_dir.bytes()) == admin.as_deref())
+        {
+            continue;
+        }
         let identity_present = available
             .iter()
             .any(|(_, _, git_dir)| Some(git_dir.bytes()) == admin.as_deref());
@@ -382,10 +420,9 @@ async fn reconcile_family_targets(
             .await?;
         }
         if !identity_present && (!listed.contains(&path) || replaced) {
-            if missing_on_disk {
-                // Pin the retained view before it leaves the moving base.
-                tx.execute(&format!("INSERT INTO {s}.file_deltas(checkout,path,version) SELECT $1,path,version FROM {s}.base_files ON CONFLICT(checkout,path) DO NOTHING"), &[&id]).await?;
-            }
+            // Prevent a same-checkout publication from committing between
+            // removing its membership and marking its registration retired.
+            tx.query_one(&format!("SELECT id FROM {s}.checkouts WHERE id=$1 FOR UPDATE"), &[&id]).await?;
             // Keep a missing checkout's stored view for explicit recovery.
             // Registry removal keeps its established storage cleanup behavior.
             if !missing_on_disk {
@@ -396,12 +433,17 @@ async fn reconcile_family_targets(
                 )
                 .await?;
                 tx.execute(
-                    &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
+                    &format!("DELETE FROM {s}.checkout_file_versions WHERE checkout=$1"),
                     &[&id],
                 )
                 .await?;
             }
             crate::maintenance::forget(&tx, family, id).await?;
+            tx.execute(
+                &format!("DELETE FROM {s}.checkout_prepared_files WHERE checkout=$1"),
+                &[&id],
+            )
+            .await?;
             tx.execute(&format!("UPDATE {s}.checkouts SET registration_state='retired',retired_at=now(),indexed_at=NULL WHERE id=$1"), &[&id]).await?;
         }
     }
@@ -470,12 +512,7 @@ async fn reconcile_family_targets(
         targets.first().map(|(_, t, _)| &t.root) == Some(&primary.root),
         "primary checkout cannot be indexed"
     );
-    if requested.is_some() {
-        ensure!(
-            !crate::maintenance::pending(&tx, family).await?,
-            "family_maintenance: selection refresh is pending"
-        );
-    } else {
+    if requested.is_none() {
         let already_pending = crate::maintenance::pending(&tx, family).await?;
         for (initialized, target, git) in &targets {
             let refresh =
@@ -504,20 +541,21 @@ async fn reconcile_family_targets(
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    garbage_collect(&tx, &s).await?;
+    let unreadable: BTreeSet<Uuid> = tx.query(
+        &format!("SELECT id FROM {s}.checkouts WHERE registration_state='active' AND cardinality(unreadable_paths)>0"),
+        &[],
+    ).await?.into_iter().map(|row| row.get(0)).collect();
     tx.commit().await?;
     let mut skips = Vec::new();
     let mut completed = 0;
     let mut attempted = 0;
     for (initialized, target, git) in targets {
-        if !pending.is_empty() && !pending.contains(&target.checkout) {
-            continue;
-        }
         if requested.is_some_and(|path| path != target.root) {
             continue;
         }
         if initialized
             && !pending.contains(&target.checkout)
+            && !unreadable.contains(&target.checkout)
             && changed.is_some_and(|paths| {
                 !paths
                     .iter()
@@ -531,9 +569,6 @@ async fn reconcile_family_targets(
             client,
             &target,
             &git,
-            embedder.as_ref(),
-            batch_size,
-            dimension,
             exclude,
             vendor,
             &progress,
@@ -557,6 +592,9 @@ async fn reconcile_family_targets(
             }
         }
     }
+    if requested.is_none() {
+        garbage_collect(client, &s).await?;
+    }
     ensure!(
         completed > 0 || attempted == 0 || changed.is_some(),
         "no checkout reconciled: {}",
@@ -576,42 +614,6 @@ async fn reconcile_family_targets(
     ))
 }
 
-// Reuse vectors already stored by the original indexer during the first
-// worktree-aware reconciliation. Content is compared exactly; paths constrain
-// the lookup to the file rather than scanning the whole repository per chunk.
-struct ReuseEmbeddings<'a> {
-    vectors: std::collections::HashMap<String, Vec<f32>>,
-    backend: &'a dyn EmbeddingBackend,
-}
-impl EmbeddingBackend for ReuseEmbeddings<'_> {
-    fn embed<'a>(&'a self, texts: &'a [String]) -> crate::embeddings::EmbedFuture<'a> {
-        Box::pin(async move {
-            let mut vectors = vec![Vec::new(); texts.len()];
-            let mut missing = Vec::new();
-            let mut positions = Vec::new();
-            for (i, text) in texts.iter().enumerate() {
-                if let Some(vector) = self.vectors.get(text) {
-                    vectors[i] = vector.clone();
-                } else {
-                    missing.push(text.clone());
-                    positions.push(i);
-                }
-            }
-            if !missing.is_empty() {
-                let new = self.backend.embed(&missing).await?;
-                ensure!(
-                    new.len() == missing.len(),
-                    "embedding backend returned wrong result count"
-                );
-                for (i, v) in positions.into_iter().zip(new) {
-                    vectors[i] = v;
-                }
-            }
-            Ok(vectors)
-        })
-    }
-}
-
 #[derive(Clone)]
 struct SourceFile {
     path: String,
@@ -622,59 +624,81 @@ struct SourceFile {
     tier: Tier,
 }
 
-type VersionCandidates = HashMap<(String, Vec<u8>, i16), Vec<(Uuid, Option<String>)>>;
+#[derive(Default)]
+struct Scan {
+    files: Vec<SourceFile>,
+    unreadable: BTreeSet<String>,
+}
 
-async fn scan(
-    root: &Path,
-    selection: &crate::family_policy::runtime::Selection,
-) -> Result<Vec<SourceFile>> {
+fn io_path(error: &ignore::Error) -> Option<&Path> {
+    match error {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+            io_path(err)
+        }
+        _ => None,
+    }
+}
+
+async fn scan(root: &Path, selection: &crate::family_policy::runtime::Selection) -> Result<Scan> {
     let walker = selection.walker(root);
     let mut paths = Vec::new();
+    let mut scan = Scan::default();
     for entry in walker {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.io_error().is_some() => {
+                if let Some(path) = io_path(&error)
+                    .and_then(|path| path.strip_prefix(root).ok())
+                    .filter(|path| !path.as_os_str().is_empty())
+                {
+                    scan.unreadable.insert(
+                        path.to_str()
+                            .context("unreadable path is not UTF-8")?
+                            .to_owned(),
+                    );
+                    continue;
+                }
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
         paths.push(entry.path().strip_prefix(root)?.to_path_buf());
     }
     let ignored = crate::git_ignore::check(root, &paths).await?;
-    let mut files = Vec::new();
     for (rel, ignored) in paths.iter().zip(ignored) {
         if selection.classify_with_git(rel, false, ignored) == pipeline::Decision::Drop {
             continue;
         }
-        let owned = root.join(rel);
-        let path = owned.as_path();
-        if std::fs::metadata(path)?.len() > 10 * 1024 * 1024 {
-            continue;
+        if let Some(file) = observe_file(root, selection, rel, &mut scan.unreadable)? {
+            scan.files.push(file);
         }
-        let bytes = std::fs::read(path)?;
-        if bytes.contains(&0) {
-            continue;
-        }
-        let Ok(source) = String::from_utf8(bytes) else {
-            continue;
-        };
-        let rel = path.strip_prefix(root)?;
-        let relative = rel
-            .to_str()
-            .context("indexed file path is not UTF-8")?
-            .to_owned();
-        let tier = if selection.classify(rel, false) == pipeline::Decision::Tier2 {
-            Tier::Tier2
-        } else {
-            Tier::Tier1
-        };
-        files.push(SourceFile {
-            path: relative,
-            hash: content_sha256(&source),
-            source_size: source.len(),
-            source: Some(source),
-            tier,
-        });
     }
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    scan.files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(scan)
+}
+
+fn observe_file(
+    root: &Path,
+    selection: &crate::family_policy::runtime::Selection,
+    path: &Path,
+    unreadable: &mut BTreeSet<String>,
+) -> Result<Option<SourceFile>> {
+    match scan_changed_file(root, selection, path) {
+        Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
+            unreadable.insert(
+                path.to_str()
+                    .context("unreadable path is not UTF-8")?
+                    .to_owned(),
+            );
+            tracing::warn!(checkout=%root.display(), path=%path.display(), %error, "file remains pending");
+            Ok(None)
+        }
+        result => result,
+    }
 }
 
 fn git_bookkeeping(common_dir: &Path, path: &Path) -> bool {
@@ -789,8 +813,12 @@ fn scan_changed_file(
     if !metadata.file_type().is_file() || metadata.len() > 10 * 1024 * 1024 {
         return Ok(None);
     }
-    let bytes = std::fs::read(&path)?;
-    if bytes.contains(&0) {
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if bytes.len() > 10 * 1024 * 1024 || bytes.contains(&0) {
         return Ok(None);
     }
     let Ok(source) = String::from_utf8(bytes) else {
@@ -834,8 +862,12 @@ async fn git_stamp(git: &GitCheckout) -> Result<String> {
     })
 }
 
-async fn manifest(tx: &Transaction<'_>, s: &str, checkout: Uuid) -> Result<BTreeMap<String, Uuid>> {
-    let rows=tx.query(&format!("SELECT b.path,b.version FROM {s}.base_files b WHERE NOT EXISTS(SELECT 1 FROM {s}.file_deltas d WHERE d.checkout=$1 AND d.path=b.path) UNION ALL SELECT path,version FROM {s}.file_deltas WHERE checkout=$1 AND version IS NOT NULL"),&[&checkout]).await?;
+async fn manifest(
+    client: &impl tokio_postgres::GenericClient,
+    s: &str,
+    checkout: Uuid,
+) -> Result<BTreeMap<String, Uuid>> {
+    let rows=client.query(&format!("SELECT v.path,v.id FROM {s}.checkout_file_versions m JOIN {s}.file_versions v ON v.id=m.version WHERE m.checkout=$1"),&[&checkout]).await?;
     Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
 }
 
@@ -844,31 +876,52 @@ async fn reconcile_checkout(
     client: &mut Client,
     target: &Target,
     git: &GitCheckout,
-    embedder: &dyn EmbeddingBackend,
-    batch_size: usize,
-    dimension: usize,
     exclude: &[String],
     vendor: &[String],
     progress: &impl Fn(usize, usize, &Path),
     refresh_graph: bool,
     events: Option<&[PathBuf]>,
 ) -> Result<()> {
+    loop {
+        if reconcile_checkout_pass(
+            client,
+            target,
+            git,
+            exclude,
+            vendor,
+            progress,
+            refresh_graph,
+            events,
+        )
+        .await?
+        {
+            return Ok(());
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_checkout_pass(
+    client: &mut Client,
+    target: &Target,
+    git: &GitCheckout,
+    exclude: &[String],
+    vendor: &[String],
+    progress: &impl Fn(usize, usize, &Path),
+    refresh_graph: bool,
+    events: Option<&[PathBuf]>,
+) -> Result<bool> {
     let started = std::time::Instant::now();
     let stamp = git_stamp(git).await?;
     let s = schema(target.family);
-    let tx = client.transaction().await?;
-    tx.batch_execute("SET LOCAL statement_timeout='60s'")
+    let tx = client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
         .await?;
-    lock(&tx, target.family).await?;
     let maintenance_generation =
         crate::maintenance::generation(&tx, target.family, target.checkout).await?;
-    // Policy acceptance can occur after discovery releases the family gate.
-    // Decide admission and scan scope again under this publication transaction.
-    ensure!(
-        maintenance_generation.is_some()
-            || !crate::maintenance::pending(&tx, target.family).await?,
-        "family_maintenance: another checkout has a pending selection refresh"
-    );
     let refresh_graph = refresh_graph || maintenance_generation.is_some();
     let events = if maintenance_generation.is_some() {
         None
@@ -877,42 +930,39 @@ async fn reconcile_checkout(
     };
     let family = tx
         .query_opt(
-            "SELECT paused FROM public.repos WHERE id=$1",
+            "SELECT paused,storage_generation FROM public.repos WHERE id=$1 AND retired_at IS NULL",
             &[&target.family],
         )
         .await?
         .context("family removed")?;
     ensure!(!family.get::<_, bool>(0), "family is paused");
-    let row=tx.query_one(&format!("SELECT registration_state,paused,indexed_at IS NOT NULL FROM {s}.checkouts WHERE id=$1"),&[&target.checkout]).await?;
+    let storage_generation: String = family.get(1);
+    let row=tx.query_one(&format!("SELECT registration_state,paused,indexed_at IS NOT NULL,publication_generation,root,
+        indexed_git_head,cardinality(unreadable_paths)>0 FROM {s}.checkouts WHERE id=$1"),&[&target.checkout]).await?;
     ensure!(
         row.get::<_, String>(0) == "active" && !row.get::<_, bool>(1),
         "checkout is inactive or paused"
     );
+    let generation: i64 = row.get(3);
+    let root: Vec<u8> = row.get(4);
     let initialized: bool = row.get(2);
-    if target.graph != target.family {
-        let base_ready:bool=tx.query_one(&format!("SELECT c.indexed_at IS NOT NULL FROM {s}.worktree_base b JOIN {s}.checkouts c ON c.id=b.checkout"),&[]).await?.get(0);
-        ensure!(
-            base_ready,
-            "primary checkout has no completed base yet; retaining pending worktree"
-        );
-    }
-
-    let policy = crate::family_policy::runtime::lock_policy(&tx, target.family).await?;
+    let initial_linked = !initialized && target.graph != target.family;
+    let policy = crate::family_policy::runtime::policy(&tx, target.family).await?;
     let selection = crate::family_policy::runtime::Selection::new(
         &target.root,
         policy.as_ref(),
         exclude,
         vendor,
     )?;
-    let batch_size = policy
-        .as_ref()
-        .map_or(batch_size, |p| p.policy.embeddings.batch_size as usize);
     let previous = if initialized {
         manifest(&tx, &s, target.checkout).await?
     } else {
         BTreeMap::new()
     };
-    let candidates = if initialized {
+    let candidates = if initialized
+        && row.get::<_, Option<String>>(5).as_deref() == Some(stamp.as_str())
+        && !row.get::<_, bool>(6)
+    {
         changed_paths(target, git, events, &previous)
     } else {
         None
@@ -941,7 +991,9 @@ async fn reconcile_checkout(
             });
         }
     }
-    let files = if let Some(paths) = candidates.filter(|_| inherited.len() == previous.len()) {
+    tx.commit().await?;
+    let observed = if let Some(paths) = candidates.filter(|_| inherited.len() == previous.len()) {
+        let mut unreadable = BTreeSet::new();
         let mut observed = Vec::with_capacity(paths.len());
         let ignored = crate::git_ignore::check(&target.root, &paths).await?;
         for (path, ignored) in paths.into_iter().zip(ignored) {
@@ -953,7 +1005,7 @@ async fn reconcile_checkout(
                 if selection.classify_with_git(&path, false, ignored) == pipeline::Decision::Drop {
                     None
                 } else {
-                    scan_changed_file(&target.root, &selection, &path)?
+                    observe_file(&target.root, &selection, &path, &mut unreadable)?
                 };
             inherited.remove(&key);
             if let Some(value) = &file {
@@ -962,169 +1014,71 @@ async fn reconcile_checkout(
             observed.push((path, file));
         }
         fast_changes = Some(observed);
-        inherited.into_values().collect()
+        Scan {
+            files: inherited.into_values().collect(),
+            unreadable,
+        }
+    } else if initial_linked {
+        initial::read(&target.root, &selection).await?
     } else {
         scan(&target.root, &selection).await?
     };
+    let files = &observed.files;
     let scanned = started.elapsed();
-    let mut desired = BTreeMap::new();
-    let paths: Vec<_> = files
-        .iter()
-        .filter(|file| file.source.is_some())
-        .map(|file| file.path.clone())
-        .collect();
-    let mut versions = VersionCandidates::new();
-    for row in tx
-        .query(
-            &format!("SELECT v.id,v.path,v.content_hash,v.tier,c.source FROM {s}.file_versions v LEFT JOIN {s}.file_content_cache c ON c.file_version=v.id WHERE v.path=ANY($1)"),
-            &[&paths],
-        )
-        .await? {
-        versions.entry((row.get(1), row.get(2), row.get(3))).or_default().push((row.get(0), row.get(4)));
-    }
-    let mut pending_sources = Vec::new();
-    for (n, file) in files.iter().enumerate() {
-        let Some(source) = &file.source else {
-            desired.insert(
-                file.path.clone(),
-                *previous
-                    .get(&file.path)
-                    .context("missing inherited file version")?,
-            );
-            continue;
-        };
-        let version = if let Some((version, _)) = versions
-            .get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16()))
-            .and_then(|candidates| {
-                candidates
-                    .iter()
-                    .find(|(_, cached)| cached.as_deref() == Some(source.as_str()))
-            }) {
-            *version
-        } else {
-            let version = Uuid::new_v4();
-            let paths = vec![
-                file.path.clone(),
-                target.root.join(&file.path).to_string_lossy().into_owned(),
-            ];
-            // Read reusable vectors once per file, rather than scanning its
-            // stored chunks once for every candidate chunk.
-            let rows = tx.query(&format!("SELECT content,embedding FROM {s}.chunks WHERE file_path=ANY($1) AND embedding IS NOT NULL"), &[&paths]).await
-                .with_context(|| format!("load reusable embeddings for {}", file.path))?;
-            let vectors = rows
-                .into_iter()
-                .map(|row| {
-                    (
-                        row.get::<_, String>(0),
-                        row.get::<_, pgvector::Vector>(1).to_vec(),
-                    )
-                })
-                .collect();
-            let reuse = ReuseEmbeddings {
-                vectors,
-                backend: embedder,
-            };
-            let (chunks, _) = tokio::time::timeout(
-                std::time::Duration::from_secs(120),
-                pipeline::prepare_chunks(
-                    target.family,
-                    file.path.clone(),
-                    source.clone(),
-                    &reuse,
-                    1500,
-                    batch_size,
-                    dimension,
-                    file.tier,
-                ),
-            )
-            .await
-            .with_context(|| format!("prepare {} exceeded 120 seconds", file.path))?
-            .with_context(|| format!("prepare {}", file.path))?;
-            tx.execute(
-                &format!(
-                    "INSERT INTO {s}.file_versions(id,path,content_hash,tier) VALUES($1,$2,$3,$4)"
-                ),
-                &[&version, &file.path, &file.hash, &file.tier.as_i16()],
-            )
-            .await?;
-            pending_sources.push((version, source.as_str()));
-            for chunk in chunks {
-                let vector = chunk.embedding.map(pgvector::Vector::from);
-                tx.execute(&format!("INSERT INTO {s}.chunks(id,repo_id,file_path,start_line,end_line,content,embedding,tier,embedding_state,content_hash,file_version,in_base) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false)"),
-                    &[&chunk.id,&target.family,&file.path,&(chunk.range.start as i32),&(chunk.range.end as i32),&chunk.content,&vector,&chunk.tier.as_i16(),&chunk.embedding_state.as_str(),&chunk.content_hash,&version]).await?;
-            }
-            version
-        };
-        desired.insert(file.path.clone(), version);
-        progress(n + 1, files.len(), &target.root.join(&file.path));
-    }
-    for batch in pending_sources.chunks(128) {
-        let ids: Vec<Uuid> = batch.iter().map(|(id, _)| *id).collect();
-        let sources: Vec<&str> = batch.iter().map(|(_, source)| *source).collect();
-        tx.execute(
-            &format!("INSERT INTO {s}.file_content_cache(file_version,source) SELECT * FROM unnest($1::uuid[],$2::text[])"),
-            &[&ids, &sources],
-        ).await?;
-    }
+    let desired = prepared::prepare(client, target, files, &previous, progress).await?;
     let versioned = started.elapsed();
-    let publish = refresh_graph || !initialized || previous != desired;
-    if publish {
-        if target.graph == target.family {
-            publish_base(&tx, &s, target.checkout, &desired).await?;
-            // Legacy rows have no reliable file-version identity. They remain
-            // visible until this first complete base publication commits.
-            tx.execute(
-                &format!("DELETE FROM {s}.chunks WHERE file_version IS NULL"),
-                &[],
-            )
-            .await?;
-        } else {
-            tx.execute(
-                &format!("DELETE FROM {s}.file_deltas WHERE checkout=$1"),
-                &[&target.checkout],
-            )
-            .await?;
-            let base: BTreeMap<String, Uuid> = tx
-                .query(&format!("SELECT path,version FROM {s}.base_files"), &[])
-                .await?
-                .into_iter()
-                .map(|r| (r.get(0), r.get(1)))
-                .collect();
-            for path in base.keys().chain(desired.keys()).collect::<BTreeSet<_>>() {
-                if base.get(path) != desired.get(path) {
-                    tx.execute(
-                        &format!(
-                            "INSERT INTO {s}.file_deltas(checkout,path,version) VALUES($1,$2,$3)"
-                        ),
-                        &[&target.checkout, path, &desired.get(path)],
-                    )
-                    .await?;
-                }
-            }
-        }
-        rebuild_graph(
-            &tx,
-            target,
-            &files,
-            &previous,
-            &desired,
-            fast_changes.is_some() && !refresh_graph,
-        )
-        .await
-        .context("publish checkout structural index")?;
+    if initial_linked && git_stamp(git).await? != stamp {
+        return Ok(false);
     }
+    let structural = if refresh_graph || !initialized || previous != desired {
+        Some(
+            prepare_graph(
+                client,
+                target,
+                files,
+                &previous,
+                &desired,
+                fast_changes.is_some() && !refresh_graph,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let graphed = started.elapsed();
-    // Re-read the selection and hashes before committing. A read/scan failure or
-    // Git blocker rolls back chunks, deltas and graph together.
-    if let Some(changes) = fast_changes.as_ref().filter(|_| publish) {
+    let tx = client.transaction().await?;
+    let current = tx.query_one(
+        &format!("SELECT publication_generation,root,registration_state,paused,unreadable_paths FROM {s}.checkouts WHERE id=$1 FOR UPDATE"),
+        &[&target.checkout],
+    ).await?;
+    ensure!(
+        current.get::<_, Vec<u8>>(1) == root,
+        "checkout moved during indexing"
+    );
+    ensure!(
+        current.get::<_, String>(2) == "active" && !current.get::<_, bool>(3),
+        "checkout is inactive or paused"
+    );
+    if current.get::<_, i64>(0) != generation {
+        return Ok(false);
+    }
+    let view_changed = structural.is_some()
+        || !current
+            .get::<_, Vec<String>>(4)
+            .iter()
+            .eq(observed.unreadable.iter());
+    // Revalidate the checkout before taking the policy row lock.
+    // Prepared file versions survive a stale observation or interrupted commit.
+    if let Some(changes) = fast_changes.as_ref().filter(|_| view_changed) {
         let paths: Vec<_> = changes.iter().map(|(path, _)| path.clone()).collect();
         let ignored = crate::git_ignore::check(&target.root, &paths).await?;
+        let mut unreadable = BTreeSet::new();
         for ((path, before), ignored) in changes.iter().zip(ignored) {
             let after =
                 if selection.classify_with_git(path, false, ignored) == pipeline::Decision::Drop {
                     None
                 } else {
-                    scan_changed_file(&target.root, &selection, path)?
+                    observe_file(&target.root, &selection, path, &mut unreadable)?
                 };
             ensure!(
                 match (before, &after) {
@@ -1135,27 +1089,77 @@ async fn reconcile_checkout(
                 "files changed during indexing; retaining previous index"
             );
         }
-    } else if publish {
+        ensure!(
+            unreadable == observed.unreadable,
+            "unreadable paths changed during indexing"
+        );
+    } else if initial_linked {
+        if !initial_matches(target, git, &selection, &observed, &stamp).await? {
+            return Ok(false);
+        }
+    } else if view_changed {
         let after = scan(&target.root, &selection).await?;
         ensure!(
-            files.len() == after.len()
-                && files
-                    .iter()
-                    .zip(&after)
-                    .all(|(a, b)| a.path == b.path && a.source == b.source && a.tier == b.tier),
+            same_scan(&observed, &after),
             "files changed during indexing; retaining previous index"
         );
     }
-    ensure!(
-        git_stamp(git).await? == stamp,
-        "Git HEAD changed during indexing; retaining previous index"
-    );
-    tx.execute(&format!("UPDATE {s}.checkouts SET indexed_at=CASE WHEN $2 THEN now() ELSE indexed_at END,availability='available',git_state='clear',merge_in_progress=false,rebase_merge_in_progress=false,rebase_apply_in_progress=false,unmerged_index=false,observed_at=now(),last_seen_at=now() WHERE id=$1"),&[&target.checkout, &publish]).await?;
-    if publish && target.graph == target.family {
+    if !initial_linked {
+        ensure!(
+            git_stamp(git).await? == stamp,
+            "Git HEAD changed during indexing; retaining previous index"
+        );
+    }
+    let family = tx
+        .query_opt(
+            "SELECT paused,storage_generation,indexed_at IS NULL FROM public.repos WHERE id=$1 AND retired_at IS NULL",
+            &[&target.family],
+        )
+        .await?
+        .context("family removed")?;
+    ensure!(!family.get::<_, bool>(0), "family is paused");
+    let current_policy = crate::family_policy::runtime::lock_policy(&tx, target.family).await?;
+    if family.get::<_, String>(1) != storage_generation
+        || current_policy.as_ref().map(|view| view.revision)
+            != policy.as_ref().map(|view| view.revision)
+        || crate::maintenance::generation(&tx, target.family, target.checkout).await?
+            != maintenance_generation
+    {
+        return Ok(false);
+    }
+    if let Some((nodes, edges)) = structural {
+        publish_membership(&tx, &s, target.checkout, &previous, &desired).await?;
+        if target.graph == target.family {
+            // Legacy rows have no reliable file-version identity. They remain
+            // visible until this first complete base publication commits.
+            tx.execute(
+                &format!("DELETE FROM {s}.chunks WHERE file_version IS NULL"),
+                &[],
+            )
+            .await?;
+        }
+        tx.execute(
+            &format!("INSERT INTO {s}.checkout_structural_snapshots(checkout,nodes,edges) VALUES($1,$2,$3)
+              ON CONFLICT(checkout) DO UPDATE SET nodes=EXCLUDED.nodes,edges=EXCLUDED.edges"),
+            &[&target.checkout, &nodes, &edges],
+        ).await.context("publish checkout structural index")?;
+    }
+    tx.execute(
+        &format!("DELETE FROM {s}.checkout_prepared_files WHERE checkout=$1"),
+        &[&target.checkout],
+    )
+    .await?;
+    let unreadable: Vec<_> = observed.unreadable.iter().collect();
+    tx.execute(&format!("UPDATE {s}.checkouts SET indexed_at=CASE WHEN $4 THEN now() ELSE indexed_at END,
+        publication_generation=publication_generation+CASE WHEN $4 THEN 1 ELSE 0 END,
+        indexed_git_head=$2,unreadable_paths=$3,availability='available',git_state='clear',merge_in_progress=false,
+        rebase_merge_in_progress=false,rebase_apply_in_progress=false,unmerged_index=false,observed_at=now(),
+        last_seen_at=now() WHERE id=$1"),&[&target.checkout,&stamp,&unreadable,&view_changed]).await?;
+    if target.graph == target.family && (view_changed || family.get::<_, bool>(2)) {
         store::mark_indexed(tx.client(), target.family).await?;
     }
-    if publish {
-        garbage_collect(&tx, &s).await?;
+    if !initialized {
+        store::notify_repos_changed(tx.client()).await?;
     }
     crate::maintenance::complete(&tx, target.family, target.checkout, maintenance_generation)
         .await?;
@@ -1171,99 +1175,99 @@ async fn reconcile_checkout(
             "worktree reconciliation completed"
         );
     }
-    Ok(())
+    Ok(true)
 }
 
-async fn publish_base(
+async fn initial_matches(
+    target: &Target,
+    git: &GitCheckout,
+    selection: &crate::family_policy::runtime::Selection,
+    observed: &Scan,
+    stamp: &str,
+) -> Result<bool> {
+    let after = initial::read(&target.root, selection).await?;
+    Ok(git_stamp(git).await? == stamp && same_scan(observed, &after))
+}
+
+fn same_scan(before: &Scan, after: &Scan) -> bool {
+    before.unreadable == after.unreadable
+        && before.files.len() == after.files.len()
+        && before
+            .files
+            .iter()
+            .zip(&after.files)
+            .all(|(before, after)| {
+                before.path == after.path
+                    && before.source == after.source
+                    && before.tier == after.tier
+            })
+}
+
+async fn publish_membership(
     tx: &Transaction<'_>,
     s: &str,
-    base: Uuid,
+    checkout: Uuid,
+    previous: &BTreeMap<String, Uuid>,
     desired: &BTreeMap<String, Uuid>,
 ) -> Result<()> {
-    let previous: BTreeMap<String, Uuid> = tx
-        .query(&format!("SELECT path,version FROM {s}.base_files"), &[])
-        .await?
-        .into_iter()
-        .map(|r| (r.get(0), r.get(1)))
+    let removed: Vec<_> = previous
+        .iter()
+        .filter_map(|(path, version)| (desired.get(path) != Some(version)).then_some(*version))
         .collect();
-    for path in previous
-        .keys()
-        .chain(desired.keys())
-        .collect::<BTreeSet<_>>()
-    {
-        let old = previous.get(path);
-        let new = desired.get(path);
-        if old == new {
-            continue;
-        }
-        // Preserve inherited old values before replacing the base. Existing
-        // explicit overrides win, including NULL tombstones.
-        tx.execute(&format!("INSERT INTO {s}.file_deltas(checkout,path,version) SELECT id,$1,$2 FROM {s}.checkouts WHERE id<>$3 AND indexed_at IS NOT NULL AND registration_state<>'retired' ON CONFLICT(checkout,path) DO NOTHING"),&[path,&old,&base]).await?;
+    let added: Vec<_> = desired
+        .iter()
+        .filter_map(|(path, version)| (previous.get(path) != Some(version)).then_some(*version))
+        .collect();
+    if !removed.is_empty() {
         tx.execute(
             &format!(
-                "DELETE FROM {s}.file_deltas WHERE path=$1 AND version IS NOT DISTINCT FROM $2"
+                "DELETE FROM {s}.checkout_file_versions WHERE checkout=$1 AND version=ANY($2)"
             ),
-            &[path, &new],
+            &[&checkout, &removed],
         )
         .await?;
-        if let Some(old) = old {
-            tx.execute(
-                &format!("UPDATE {s}.chunks SET in_base=false WHERE file_version=$1"),
-                &[old],
-            )
-            .await?;
-        }
-        match new {
-            Some(version) => {
-                tx.execute(&format!("INSERT INTO {s}.base_files(path,version) VALUES($1,$2) ON CONFLICT(path) DO UPDATE SET version=EXCLUDED.version"),&[path,version]).await?;
-                tx.execute(
-                    &format!("UPDATE {s}.chunks SET in_base=true WHERE file_version=$1"),
-                    &[version],
-                )
-                .await?;
-            }
-            None => {
-                tx.execute(
-                    &format!("DELETE FROM {s}.base_files WHERE path=$1"),
-                    &[path],
-                )
-                .await?;
-            }
-        }
+    }
+    if !added.is_empty() {
+        tx.execute(
+            &format!("INSERT INTO {s}.checkout_file_versions(checkout,version) SELECT $1,unnest($2::uuid[])"),
+            &[&checkout, &added],
+        ).await?;
     }
     Ok(())
 }
 
-async fn garbage_collect(tx: &Transaction<'_>, s: &str) -> Result<()> {
-    // A base binding shadowed in every live view is no longer a storage root.
-    let unused = format!("SELECT b.version FROM {s}.base_files b WHERE NOT EXISTS(SELECT 1 FROM {s}.checkouts c WHERE c.registration_state<>'retired' AND c.indexed_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM {s}.file_deltas d WHERE d.checkout=c.id AND d.path=b.path))");
-    tx.execute(
-        &format!("UPDATE {s}.chunks SET in_base=false WHERE file_version IN ({unused})"),
-        &[],
-    )
-    .await?;
-    tx.execute(
-        &format!("DELETE FROM {s}.base_files WHERE version IN ({unused})"),
-        &[],
-    )
-    .await?;
+async fn garbage_collect(client: &mut Client, s: &str) -> Result<()> {
+    let unreferenced = format!(
+        "NOT EXISTS(SELECT FROM {s}.checkout_file_versions m WHERE m.version=v.id)
+        AND NOT EXISTS(SELECT FROM {s}.checkout_prepared_files p WHERE p.version=v.id)"
+    );
     loop {
-        let deleted = tx.execute(&format!("DELETE FROM {s}.file_versions WHERE id IN (SELECT v.id FROM {s}.file_versions v WHERE NOT EXISTS(SELECT 1 FROM {s}.base_files b WHERE b.version=v.id) AND NOT EXISTS(SELECT 1 FROM {s}.file_deltas d WHERE d.version=v.id) LIMIT 64)"),&[]).await?;
-        if deleted == 0 {
-            break;
+        let tx = client.transaction().await?;
+        let candidates: Vec<Uuid> = tx.query(
+            &format!("SELECT v.id FROM {s}.file_versions v WHERE {unreferenced} LIMIT 64 FOR UPDATE OF v SKIP LOCKED"),
+            &[],
+        ).await?.into_iter().map(|row| row.get(0)).collect();
+        if candidates.is_empty() {
+            return Ok(());
         }
+        // A fresh statement sees any reference acquired before the row lock.
+        tx.execute(
+            &format!("DELETE FROM {s}.file_versions v WHERE v.id=ANY($1) AND {unreferenced}"),
+            &[&candidates],
+        )
+        .await?;
+        tx.commit().await?;
     }
-    Ok(())
 }
 
-async fn rebuild_graph(
-    tx: &Transaction<'_>,
+async fn prepare_graph(
+    tx: &Client,
     target: &Target,
     files: &[SourceFile],
     previous: &BTreeMap<String, Uuid>,
     desired: &BTreeMap<String, Uuid>,
     allow_patch: bool,
-) -> Result<()> {
+) -> Result<(serde_json::Value, serde_json::Value)> {
     let started = std::time::Instant::now();
     let s = schema(target.family);
     let versions: Vec<Uuid> = desired.values().copied().collect();
@@ -1280,15 +1284,7 @@ async fn rebuild_graph(
     let mut patchable = allow_patch && !changed_files.is_empty();
     let mut old_snapshot = None;
     let mut affected_names = BTreeSet::new();
-    if patchable && target.graph == target.family {
-        patchable = tx
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name=$1)",
-                &[&store::graph_name(target.graph)],
-            )
-            .await?
-            .get(0);
-    } else if patchable {
+    if patchable {
         if let Some(row) = tx
             .query_opt(
                 &format!(
@@ -1446,7 +1442,8 @@ async fn rebuild_graph(
             .map(|(_, _, _, candidates)| candidates)
             .collect();
         tx.execute(
-            &format!("INSERT INTO {s}.file_analysis_cache(file_version,analysis_identity,symbols,candidates) SELECT * FROM unnest($1::uuid[],$2::text[],$3::jsonb[],$4::jsonb[])"),
+            &format!("INSERT INTO {s}.file_analysis_cache(file_version,analysis_identity,symbols,candidates)
+              SELECT * FROM unnest($1::uuid[],$2::text[],$3::jsonb[],$4::jsonb[]) ON CONFLICT DO NOTHING"),
             &[&ids, &identities, &symbols, &candidates],
         ).await?;
     }
@@ -1481,113 +1478,65 @@ async fn rebuild_graph(
             }
         }
     }
-    let prepared = started.elapsed();
     let node_count = nodes.len();
     let edge_count = edges.len();
-    if target.graph == target.family {
-        // The primary checkout and legacy graph readers retain their existing
-        // AGE representation. Linked checkouts use a single transactional row.
-        store::ensure_graph(tx.client(), target.graph).await?;
-        if patchable {
-            let changed_paths: Vec<String> = changed_files
-                .iter()
-                .map(|path| {
-                    target
-                        .root
-                        .join(path)
-                        .to_str()
-                        .map(str::to_owned)
-                        .context("non-UTF8 checkout root")
-                })
-                .collect::<Result<_>>()?;
-            let changed_nodes: Vec<_> = nodes
-                .iter()
-                .filter(|node| changed_paths.contains(&node.file_path))
-                .collect();
-            graph::patch_graph(
-                tx.client(),
-                target.graph,
-                &changed_paths,
-                &affected_names.into_iter().collect::<Vec<_>>(),
-                &nodes,
-                &changed_nodes,
-                &edges,
-            )
-            .await?;
-        } else {
-            graph::replace_graph(tx.client(), target.graph, &nodes, &edges).await?;
-        }
-    } else {
-        if patchable {
-            let (old_symbols, old_edges) = old_snapshot.context("missing structural snapshot")?;
-            let changed_paths: std::collections::HashSet<_> = changed_files
-                .iter()
-                .map(|path| {
-                    target
-                        .root
-                        .join(path)
-                        .to_str()
-                        .map(str::to_owned)
-                        .context("non-UTF8 checkout root")
-                })
-                .collect::<Result<_>>()?;
-            let changed_ids: std::collections::HashSet<_> = old_symbols
-                .iter()
-                .filter(|symbol| changed_paths.contains(&symbol.file_path))
-                .map(|symbol| symbol.chunk_id)
-                .collect();
-            let affected_ids: std::collections::HashSet<_> = old_symbols
-                .iter()
-                .filter(|symbol| affected_names.contains(&symbol.name))
-                .map(|symbol| symbol.chunk_id)
-                .collect();
-            edges.extend(old_edges.into_iter().filter(|edge| {
-                !changed_ids.contains(&edge.from)
-                    && !changed_ids.contains(&edge.to)
-                    && !affected_ids.contains(&edge.to)
-            }));
-        }
-        let symbols: Vec<Symbol> = nodes
-            .into_iter()
-            .map(|node| Symbol {
-                name: node.name,
-                kind: node.kind,
-                file_path: node.file_path,
-                range: LineRange {
-                    start: node.start_line,
-                    end: node.end_line,
-                },
-                chunk_id: node.chunk_id,
+    if patchable {
+        let (old_symbols, old_edges) = old_snapshot.context("missing structural snapshot")?;
+        let changed_paths: std::collections::HashSet<_> = changed_files
+            .iter()
+            .map(|path| {
+                target
+                    .root
+                    .join(path)
+                    .to_str()
+                    .map(str::to_owned)
+                    .context("non-UTF8 checkout root")
             })
+            .collect::<Result<_>>()?;
+        let changed_ids: std::collections::HashSet<_> = old_symbols
+            .iter()
+            .filter(|symbol| changed_paths.contains(&symbol.file_path))
+            .map(|symbol| symbol.chunk_id)
             .collect();
-        let mut seen = std::collections::HashSet::new();
-        edges.retain(|edge| seen.insert((edge.from, edge.to, edge.relation.clone())));
-        let node_json = serde_json::to_value(symbols)?;
-        let edge_json = serde_json::to_value(edges)?;
-        tx.execute(
-            &format!("INSERT INTO {s}.checkout_structural_snapshots(checkout,nodes,edges) VALUES($1,$2,$3) ON CONFLICT(checkout) DO UPDATE SET nodes=EXCLUDED.nodes,edges=EXCLUDED.edges"),
-            &[&target.checkout, &node_json, &edge_json],
-        )
-        .await?;
+        let affected_ids: std::collections::HashSet<_> = old_symbols
+            .iter()
+            .filter(|symbol| affected_names.contains(&symbol.name))
+            .map(|symbol| symbol.chunk_id)
+            .collect();
+        edges.extend(old_edges.into_iter().filter(|edge| {
+            !changed_ids.contains(&edge.from)
+                && !changed_ids.contains(&edge.to)
+                && !affected_ids.contains(&edge.to)
+        }));
     }
-    if target.graph != target.family {
-        // The transactional snapshot replaces any pre-snapshot AGE graph.
-        graph::drop_graph(tx.client(), target.graph).await?;
-    }
+    let symbols: Vec<Symbol> = nodes
+        .into_iter()
+        .map(|node| Symbol {
+            name: node.name,
+            kind: node.kind,
+            file_path: node.file_path,
+            range: LineRange {
+                start: node.start_line,
+                end: node.end_line,
+            },
+            chunk_id: node.chunk_id,
+        })
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    edges.retain(|edge| seen.insert((edge.from, edge.to, edge.relation.clone())));
     if started.elapsed().as_secs() >= 5 {
         tracing::info!(
             checkout = %target.root.display(),
             nodes = node_count,
             edges = edge_count,
-            prepare_ms = prepared.as_millis() as u64,
-            write_ms = (started.elapsed() - prepared).as_millis() as u64,
-            "worktree structural publication completed"
+            prepare_ms = started.elapsed().as_millis() as u64,
+            "worktree structural preparation completed"
         );
     }
-    Ok(())
+    Ok((serde_json::to_value(symbols)?, serde_json::to_value(edges)?))
 }
 
-/// Read a linked checkout's structural snapshot. Indexed checkouts created by
+/// Read a checkout's structural snapshot. Indexed checkouts created by
 /// older binaries keep their AGE graph until their next reconciliation.
 pub async fn query_related(
     client: &mut Client,
@@ -1596,11 +1545,35 @@ pub async fn query_related(
     relation: StructuralRelation,
     incoming: bool,
 ) -> Result<Vec<Symbol>> {
-    let guard = crate::maintenance::read(client, target.family).await?;
-    let client = guard.client();
+    ensure_checkout_schema(client, target.family).await?;
+    loop {
+        let guard = crate::maintenance::read(client, target.family).await?;
+        let expected = search::visibility_epoch(&guard, target).await?;
+        let results =
+            query_related_snapshot(&guard, target, symbol_name, relation.clone(), incoming).await?;
+        guard.commit().await?;
+        if search::visibility_epoch(client, target).await? == expected {
+            return Ok(results);
+        }
+    }
+}
+
+async fn query_related_snapshot(
+    tx: &Transaction<'_>,
+    target: &Target,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<Vec<Symbol>> {
+    let hidden: BTreeSet<String> = search::hidden_paths(tx, target)
+        .await?
+        .into_keys()
+        .map(|path| target.root.join(path).to_string_lossy().into_owned())
+        .collect();
+    let client = tx.client();
     let active: bool = client.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {}.checkouts WHERE id=$1 AND registration_state='active' AND indexed_at IS NOT NULL)", schema(target.family)), &[&target.checkout]).await?.get(0);
     ensure!(active, "checkout has no available published view");
-    if target.graph != target.family {
+    {
         let s = schema(target.family);
         let snapshot_table_exists: bool = client
             .query_one(
@@ -1632,15 +1605,24 @@ pub async fn query_related(
                         } else {
                             (edge.from, edge.to)
                         };
-                        if by_id.get(&origin)?.name == symbol_name {
-                            by_id.get(&related).cloned()
-                        } else {
-                            None
-                        }
+                        let origin = by_id.get(&origin)?;
+                        let related = by_id.get(&related)?;
+                        (origin.name == symbol_name
+                            && !hidden.contains(&origin.file_path)
+                            && !hidden.contains(&related.file_path))
+                        .then(|| related.clone())
                     })
                     .collect());
             }
         }
     }
-    graph::query_related_unlocked(client, target.graph, symbol_name, relation, incoming).await
+    graph::query_related_unlocked(
+        client,
+        target.graph,
+        symbol_name,
+        relation,
+        incoming,
+        &hidden,
+    )
+    .await
 }

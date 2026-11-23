@@ -3,16 +3,16 @@
 `Muninn.agda` is the aggregate entry point. These modules state mathematical
 contracts for chunks, policies, registration, checkout views and indexing. They
 are not generated Rust and do not constitute a refinement proof of the running
-application. [Development](../docs/development.md) describes the current 1.1
+application. [Development](../docs/development.md) describes the 1.4.0
 implementation; historical proposal/status records remain under `docs/plans/`.
 
 ## Current implementation in brief
 
-The application uses one schema per family, managed through the Kryzhen library,
-an AGE graph for the primary checkout, and transactional structural snapshots
-for linked worktrees. File versions/chunks are shared through a moving base and
-relational file deltas. Main updates preserve
-other published checkout views. There are no custom physical prefix/radix trees.
+The application uses one schema per family, managed through Kryzhen. Checkouts
+share immutable file versions and chunks through ordinary membership references.
+Each checkout publishes its own membership and structural snapshot in one
+transaction. Structural search can use older AGE graphs until their checkout
+publishes a replacement snapshot.
 
 Family policies/default histories are in the database. A TUI and guarded JSON
 interface provide configuration and metadata preflight, with explicit first start.
@@ -23,9 +23,18 @@ publish again.
 Those runtime statements are established by code and implementation verification,
 not solely by the model's type check.
 
-## Serialized selection maintenance (issue #203)
+## Checkout publication for 1.4.0
 
-The approved restart contract is
+[Checkout publication and sharing](CHECKOUT-PUBLICATION.md) governs the 1.4.0
+rewrite. Each checkout advances its own stable view of shared immutable
+versions. Ordinary indexing and searches can proceed concurrently, and
+invalidation of a path preserves compatible work already prepared for others.
+`Muninn.CheckoutPublication` states and proves the selector, admission, and
+preparation laws.
+
+## Historical serialized selection maintenance (issue #203)
+
+The earlier restart contract was
 [serialized selection maintenance](ISSUE-203-SERIALIZED-MAINTENANCE.md).
 It permits temporary family unavailability and transaction retry instead of
 requiring concurrent cleanup, durable reader pins and cleanup receipt machinery
@@ -39,7 +48,8 @@ the released binaries implement that protocol.
 
 | Modules | Scope |
 | --- | --- |
-| `Worktree`, `FileMap` | Abstract file lookup, overrides/deletions, minimal differences and moving-base preservation |
+| `Worktree`, `FileMap` | Abstract file lookup over stable baselines, overrides/deletions and minimal differences |
+| `CheckoutPublication` | Checkout-local selector updates, independent publications, ordinary search admission, and per-file continuation |
 | `Schema`, `Storage` | Application/graph roles, readiness evidence, family isolation and abstract publication/reference lifetimes |
 | `GraphMembership` | Selected-view symbol/edge membership and endpoint visibility; no compiler name-resolution proof |
 | `Config`, `Policy`, `Registration` | Bootstrap/policy separation, frozen defaults, revision guards, registration intent/retry and authorization preservation |
@@ -175,7 +185,12 @@ filesystem, parser, policy and runtime correspondence boundaries.
 `StatusReport` reads saved request and indexing progress, reports vector coverage from published content, and exposes stored guidance when vector work needs attention. It distinguishes a saved result from an independently verified cleanup outcome and checks for recorded cleanup work. Usage rows are structured and separate from local logs, whose default retention is seven days. These are specification guarantees; the running implementation still requires correspondence work.
 ## Lock ownership and handoff
 
-`LockOwnership` distinguishes the session and request holding the indexing lock from the owner of a publication transaction. Interactive requests acquire in queue order; release, preemption and session loss preserve committed work. Notifications and a configurable ten-second polling fallback do not imply a handoff deadline. The database and scheduler must provide the corresponding observations and execution.
+`LockOwnership` models the earlier indexing mutex and distinguishes the
+session and request holding it from the owner of a publication transaction.
+Release, preemption and session loss preserve committed work. This ownership
+model does not require a family-wide mutex for ordinary 1.4.0 operations.
+Exceptional coordination follows the
+[checkout publication contract](CHECKOUT-PUBLICATION.md).
 
 ## Repository identity and registration
 
@@ -272,7 +287,7 @@ registration and full instance. See [the dispatcher contract](DISPATCHER.md).
 Catalog/coverage consistency is enforced mechanically by the three catalog
 checkers (#48–#50); Rust correspondence and the final audit remain #52–#54.
 
-## Checkout publication
+## Historical moving-base publication
 
 `ContentPublication` fixes the publication result independently of the storage transaction: the current family selection policy is applied to the completed selected file map, the shared base advances for a base publication, other checkouts retain their completed maps filtered by the current policy, and stored rows are checked against those calculated maps. `ContentViews` projects actual base and delta binding rows into logical maps; `GenericFileMap` supplies the logical map algebra. `Plan` proves map resolution and minimal overlays; `PolicyGuard` reads the expected immutable policy pointer inside the shared transaction and returns to the corrective dialogue when it changed; `Outcome` fixes the real final world including other-checkout isolation, structural snapshot publication, captured obsolete references and the durable cleanup task; `Prepared` carries the adapter's actual `ReceiptLedger.Effect` with its commit proof and the fixed outcome; `Run` composes the guarded effect with the receipt checkpoint and proves commit, retry, boundary and convergence. Storage realization and Rust correspondence remain separate obligations (#51, #52).
 

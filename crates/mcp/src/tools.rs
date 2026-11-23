@@ -223,18 +223,16 @@ async fn resolve_worktree(
     let Some(repo) = worktrees::registered_family(&ctx.client, &git.root).await? else {
         return Ok(None);
     };
-    // A search may initialize a linked checkout only for a family whose first
-    // indexing was already authorized and completed.
-    if !repo.ever_indexed || repo.paused {
+    if repo.paused {
         return pending.map_or(Ok(None), Err);
     }
     let (effective, policy) =
         muninn_core::family_policy::runtime::config(&*ctx.client, repo.id, &git.root, &ctx.config)
             .await?;
-    if policy
-        .as_ref()
-        .is_some_and(|view| !view.indexing_enabled || view.paused)
-    {
+    let authorized = policy.as_ref().map_or(repo.ever_indexed, |view| {
+        view.indexing_enabled && !view.paused
+    });
+    if !authorized {
         return pending.map_or(Ok(None), Err);
     }
     let root = muninn_core::family_policy::runtime::root(
