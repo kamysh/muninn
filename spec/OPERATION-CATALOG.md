@@ -36,13 +36,12 @@ in `crates/mcp/src/main.rs`; their handlers are in `crates/mcp/src/tools.rs`.
 | `deleteKnowledge` | `delete_knowledge` | `delete_knowledge` |
 | `listKnowledge` | `list_knowledge` | `list_knowledge` |
 
-## Planned MCP administration
+## MCP administration and continuation
 
-The following names were approved for the planned administration surface. They
-are not advertised or implemented by the current MCP server. `continue_request`
-is also planned for continuing a request or providing an answer.
+The current server advertises and dispatches these names. The administration
+handlers are in [admin.rs](../crates/mcp/src/admin.rs).
 
-| Catalog | Planned wire name |
+| Catalog | Wire name |
 | --- | --- |
 | `inspect` | `inspect_policy` |
 | `check` | `check_policy` |
@@ -59,6 +58,7 @@ is also planned for continuing a request or providing an answer.
 | `forgetRepository` | `forget_repository` |
 | `recreateDerived` | `recreate_index` |
 | `convert` | `convert_directory` |
+| Conversation continuation | `continue_request` (resumable searches and receipt inspection) |
 
 ## CLI, editor and background work
 
@@ -100,5 +100,4 @@ standalone handler. Several logical jobs are parts of one existing function.
 
 The catalog does not establish that the above mappings are complete or that
 Rust handlers follow the modeled inputs and outcomes. Those checks remain the
-existing coverage and correspondence issues; this inventory is not a claim
-that the missing MCP administration or background adapters exist.
+existing coverage and correspondence issues.

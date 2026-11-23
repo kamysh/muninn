@@ -107,8 +107,11 @@ reportedAvailability true freshness pending git = refl
 Resolving the checkout preserves the original query. In the model, ordinary
 reconnection preserves both the query and the selected checkout. The linked
 Rust path can index an authorized worktree on demand and reuse committed file
-work. There is no demonstrated runtime mapping for resuming that same active
-search after the MCP connection closes.
+work. Supply a caller-generated `operation_id` for recovery across MCP connections.
+The server saves the request before indexing. After reconnecting, call
+`continue_request` with that ID to execute the saved search or retrieve its
+finished result. The saved request cannot be rebound to a different query or
+checkout. The active request still depends on its checkout being available.
 
 ```agda
 resolveCheckout : W.Checkout → Intent → Intent

@@ -12,7 +12,7 @@ use std::{
 use tokio_postgres::{Client, Transaction};
 use uuid::Uuid;
 
-type Candidates = HashMap<(String, Vec<u8>, i16), Vec<(Uuid, String)>>;
+type Candidates = HashMap<(String, Vec<u8>, i16, bool), Vec<(Uuid, String)>>;
 const FILES_PER_COMMIT: usize = 32;
 
 pub(super) async fn prepare(
@@ -29,13 +29,15 @@ pub(super) async fn prepare(
         .map(|file| &file.path)
         .collect();
     let tx = client.transaction().await?;
+    super::pin_registered_family(&tx, target.family).await?;
     let mut candidates = Candidates::new();
     for row in tx.query(
-        &format!("SELECT v.id,v.path,v.content_hash,v.tier,c.source FROM {s}.file_versions v
+        &format!("SELECT v.id,v.path,v.content_hash,v.tier,c.source,
+          COALESCE(v.structured, octet_length(c.source) <= 1048576) FROM {s}.file_versions v
           JOIN {s}.file_content_cache c ON c.file_version=v.id WHERE v.path=ANY($1) FOR KEY SHARE OF v"),
         &[&paths],
     ).await? {
-        candidates.entry((row.get(1), row.get(2), row.get(3)))
+        candidates.entry((row.get(1), row.get(2), row.get(3), row.get(5)))
             .or_default().push((row.get(0), row.get(4)));
     }
     let mut desired = BTreeMap::new();
@@ -47,7 +49,12 @@ pub(super) async fn prepare(
                     .context("missing inherited version")?,
             ),
             Some(source) => candidates
-                .get(&(file.path.clone(), file.hash.clone(), file.tier.as_i16()))
+                .get(&(
+                    file.path.clone(),
+                    file.hash.clone(),
+                    file.tier.as_i16(),
+                    file.structured,
+                ))
                 .and_then(|matches| matches.iter().find(|(_, saved)| saved == source))
                 .map(|(version, _)| *version),
         };
@@ -87,10 +94,12 @@ pub(super) async fn prepare(
                     source,
                     1500,
                     file.tier,
+                    file.structured,
                 );
                 inputs.push((file, chunks));
             }
             let tx = client.transaction().await?;
+            super::pin_registered_family(&tx, target.family).await?;
             lock_versions(&tx, target, &inputs).await?;
             for (file, chunks) in inputs {
                 let version = prepare_file(&tx, target, &s, file, &chunks).await?;
@@ -136,8 +145,10 @@ async fn prepare_file(
     let source = file.source.as_deref().context("missing file input")?;
     let saved = tx.query_opt(
         &format!("SELECT v.id FROM {s}.file_versions v JOIN {s}.file_content_cache c ON c.file_version=v.id
-          WHERE v.path=$1 AND v.content_hash=$2 AND v.tier=$3 AND c.source=$4 ORDER BY v.id LIMIT 1 FOR KEY SHARE OF v"),
-        &[&file.path, &file.hash, &file.tier.as_i16(), &source],
+          WHERE v.path=$1 AND v.content_hash=$2 AND v.tier=$3 AND c.source=$4
+          AND COALESCE(v.structured, octet_length(c.source) <= 1048576)=$5
+          ORDER BY v.id LIMIT 1 FOR KEY SHARE OF v"),
+        &[&file.path, &file.hash, &file.tier.as_i16(), &source, &file.structured],
     ).await?;
     let version = if let Some(saved) = saved {
         saved.get(0)
@@ -153,9 +164,9 @@ async fn prepare_file(
         let version = Uuid::new_v4();
         tx.execute(
             &format!(
-                "INSERT INTO {s}.file_versions(id,path,content_hash,tier) VALUES($1,$2,$3,$4)"
+                "INSERT INTO {s}.file_versions(id,path,content_hash,tier,structured) VALUES($1,$2,$3,$4,$5)"
             ),
-            &[&version, &file.path, &file.hash, &file.tier.as_i16()],
+            &[&version, &file.path, &file.hash, &file.tier.as_i16(), &file.structured],
         )
         .await?;
         tx.execute(

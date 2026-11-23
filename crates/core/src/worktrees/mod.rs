@@ -20,7 +20,11 @@ use uuid::Uuid;
 mod initial;
 mod prepared;
 mod search;
-pub use search::{fulltext_search, hybrid_search, semantic_search};
+pub(crate) mod symlinks;
+pub use search::{
+    directory_semantic_search_report, fulltext_search, fulltext_search_report, hybrid_search,
+    hybrid_search_report, semantic_search, semantic_search_report, SemanticCoverage,
+};
 
 #[derive(Debug, Clone)]
 pub struct Target {
@@ -28,6 +32,50 @@ pub struct Target {
     pub checkout: Uuid,
     pub graph: Uuid,
     pub root: PathBuf,
+}
+
+#[derive(serde::Serialize)]
+pub struct CheckoutCoverage {
+    pub available: bool,
+    pub freshness: &'static str,
+    pub partial: bool,
+    pub git_suspended: bool,
+    pub publication_generation: i64,
+    pub oversized_files: i32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub oversized_samples: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<&'static str>,
+}
+
+async fn checkout_coverage(tx: &Transaction<'_>, target: &Target) -> Result<CheckoutCoverage> {
+    let s = schema(target.family);
+    let row = tx
+        .query_opt(
+            &format!(
+                "SELECT indexed_at IS NOT NULL AND registration_state='active',
+            cardinality(unreadable_paths)>0 OR cardinality(oversized_paths)>0,
+            git_state='blocked', publication_generation,
+            cardinality(oversized_paths), oversized_paths[1:20]
+            FROM {s}.checkouts WHERE id=$1"
+            ),
+            &[&target.checkout],
+        )
+        .await?
+        .context("checkout no longer exists")?;
+    let oversized_files = row.get(4);
+    Ok(CheckoutCoverage {
+        available: row.get(0),
+        freshness: "unverified",
+        partial: row.get(1),
+        git_suspended: row.get(2),
+        publication_generation: row.get(3),
+        oversized_files,
+        oversized_samples: row.get(5),
+        guidance: (oversized_files > 0).then_some(
+            "Some selected files exceed the family byte limit. Raise the limit, exclude those paths, or reduce or split the files."
+        ),
+    })
 }
 
 #[derive(Debug)]
@@ -53,8 +101,13 @@ async fn ensure_checkout_schema(client: &mut Client, family: Uuid) -> Result<()>
     let schema = store::repo_schema(family);
     let exists: bool = client
         .query_one(
-            "SELECT to_regclass($1) IS NOT NULL",
-            &[&format!("{schema}.checkout_file_versions")],
+            "SELECT to_regclass($1) IS NOT NULL AND EXISTS
+              (SELECT FROM pg_attribute WHERE attrelid=to_regclass($2)
+                AND attname='structured' AND NOT attisdropped)",
+            &[
+                &format!("{schema}.checkout_file_versions"),
+                &format!("{schema}.file_versions"),
+            ],
         )
         .await?
         .get(0);
@@ -70,6 +123,18 @@ pub(crate) async fn lock(tx: &Transaction<'_>, family: Uuid) -> Result<()> {
         &[&family.to_string()],
     )
     .await?;
+    Ok(())
+}
+
+/// Lifetime guard shared by short writes. Family removal takes the
+/// conflicting row lock. Ordinary readers and filesystem scans do not.
+pub(crate) async fn pin_registered_family(tx: &Transaction<'_>, family: Uuid) -> Result<()> {
+    tx.query_opt(
+        "SELECT id FROM public.repos WHERE id=$1 AND retired_at IS NULL FOR KEY SHARE",
+        &[&family],
+    )
+    .await?
+    .context("family removed or retired")?;
     Ok(())
 }
 
@@ -294,6 +359,15 @@ async fn reconcile_family_targets(
     requested: Option<&Path>,
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     ensure_checkout_schema(client, family).await?;
+    if let Some(identity) = crate::family_store::get_family(client, family)
+        .await?
+        .and_then(|family| family.identity)
+    {
+        ensure!(
+            identity.kind == crate::family_store::FamilyKind::Git,
+            "registered directory needs explicit convert_directory before Git indexing"
+        );
+    }
     if let Some(view) = crate::family_policy::runtime::policy(client, family).await? {
         ensure!(
             view.indexing_enabled && !view.paused,
@@ -354,6 +428,7 @@ async fn reconcile_family_targets(
         &[&family.to_string()],
     )
     .await?;
+    pin_registered_family(&tx, family).await?;
     // Retire absent identities before inserting replacements. A moved checkout
     // still has its Git administrative identity, even though its old root is
     // absent; a briefly missing Git-listed entry keeps its completed view.
@@ -619,7 +694,7 @@ struct SourceFile {
     path: String,
     // An inherited published version needs no filesystem content read.
     source: Option<String>,
-    source_size: usize,
+    structured: bool,
     hash: Vec<u8>,
     tier: Tier,
 }
@@ -628,6 +703,8 @@ struct SourceFile {
 struct Scan {
     files: Vec<SourceFile>,
     unreadable: BTreeSet<String>,
+    oversized: BTreeSet<String>,
+    scans_aliases: bool,
 }
 
 fn io_path(error: &ignore::Error) -> Option<&Path> {
@@ -663,17 +740,41 @@ async fn scan(root: &Path, selection: &crate::family_policy::runtime::Selection)
             }
             Err(error) => return Err(error.into()),
         };
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
+        let relative = entry.path().strip_prefix(root)?;
+        if entry.file_type().is_some_and(|t| t.is_symlink()) {
+            scan.scans_aliases = true;
+            let mut unreadable = Vec::new();
+            symlinks::visit_files(
+                root,
+                relative,
+                |path, is_dir| selection.classify(path, is_dir) != pipeline::Decision::Drop,
+                |path, _| paths.push(path.to_owned()),
+                |path, error| {
+                    tracing::warn!(checkout=%root.display(), path=%path.display(), %error, "alias path remains pending");
+                    unreadable.push(path.to_owned());
+                },
+            );
+            for path in unreadable {
+                scan.unreadable.insert(
+                    path.to_str()
+                        .context("unreadable path is not UTF-8")?
+                        .to_owned(),
+                );
+            }
+        } else if entry.file_type().is_some_and(|t| t.is_file()) {
+            paths.push(relative.to_owned());
         }
-        paths.push(entry.path().strip_prefix(root)?.to_path_buf());
     }
-    let ignored = crate::git_ignore::check(root, &paths).await?;
+    let ignored = if scan.scans_aliases {
+        crate::git_ignore::check(root, &paths).await?
+    } else {
+        crate::git_ignore::check_native(root, &paths).await?
+    };
     for (rel, ignored) in paths.iter().zip(ignored) {
         if selection.classify_with_git(rel, false, ignored) == pipeline::Decision::Drop {
             continue;
         }
-        if let Some(file) = observe_file(root, selection, rel, &mut scan.unreadable)? {
+        if let Some(file) = observe_file(root, selection, rel, &mut scan)? {
             scan.files.push(file);
         }
     }
@@ -685,15 +786,13 @@ fn observe_file(
     root: &Path,
     selection: &crate::family_policy::runtime::Selection,
     path: &Path,
-    unreadable: &mut BTreeSet<String>,
+    scan: &mut Scan,
 ) -> Result<Option<SourceFile>> {
-    match scan_changed_file(root, selection, path) {
+    let key = path.to_str().context("indexed file path is not UTF-8")?;
+    scan.oversized.remove(key);
+    match scan_changed_file(root, selection, path, &mut scan.oversized) {
         Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
-            unreadable.insert(
-                path.to_str()
-                    .context("unreadable path is not UTF-8")?
-                    .to_owned(),
-            );
+            scan.unreadable.insert(key.to_owned());
             tracing::warn!(checkout=%root.display(), path=%path.display(), %error, "file remains pending");
             Ok(None)
         }
@@ -767,6 +866,7 @@ fn changed_paths(
                 .components()
                 .any(|c| !matches!(c, std::path::Component::Normal(_)))
             || event.is_dir()
+            || std::fs::symlink_metadata(event).is_ok_and(|metadata| metadata.is_symlink())
             || previous.keys().any(|path| {
                 let path = Path::new(path);
                 path != relative && path.starts_with(relative)
@@ -784,6 +884,7 @@ fn scan_changed_file(
     root: &Path,
     selection: &crate::family_policy::runtime::Selection,
     relative: &Path,
+    oversized: &mut BTreeSet<String>,
 ) -> Result<Option<SourceFile>> {
     for ancestor in relative
         .ancestors()
@@ -793,32 +894,40 @@ fn scan_changed_file(
         if selection.classify(ancestor, true) == pipeline::Decision::Drop {
             return Ok(None);
         }
-        match std::fs::symlink_metadata(root.join(ancestor)) {
-            Ok(metadata) if metadata.file_type().is_dir() => {}
-            Ok(_) => return Ok(None),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        }
     }
     let decision = selection.classify(relative, false);
     if decision == pipeline::Decision::Drop {
         return Ok(None);
     }
-    let path = root.join(relative);
-    let metadata = match std::fs::symlink_metadata(&path) {
+    let Some(path) = symlinks::internal_path(root, relative)? else {
+        return Ok(None);
+    };
+    let metadata = match std::fs::metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.file_type().is_file() || metadata.len() > 10 * 1024 * 1024 {
+    if !metadata.file_type().is_file() {
         return Ok(None);
     }
-    let bytes = match std::fs::read(&path) {
+    let limits = selection.limits();
+    let bytes = match pipeline::read_within_limit(&path, limits.selected_bytes) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if bytes.len() > 10 * 1024 * 1024 || bytes.contains(&0) {
+    let Some(bytes) = bytes else {
+        oversized.insert(
+            relative
+                .to_str()
+                .context("oversized path is not UTF-8")?
+                .to_owned(),
+        );
+        tracing::warn!(checkout=%root.display(), path=%relative.display(), limit=limits.selected_bytes,
+            "selected file exceeds family byte limit; raise the limit, exclude the path, or reduce the file");
+        return Ok(None);
+    };
+    if bytes.contains(&0) {
         return Ok(None);
     }
     let Ok(source) = String::from_utf8(bytes) else {
@@ -830,7 +939,7 @@ fn scan_changed_file(
             .context("indexed file path is not UTF-8")?
             .to_owned(),
         hash: content_sha256(&source),
-        source_size: source.len(),
+        structured: source.len() as u64 <= limits.structural_bytes,
         source: Some(source),
         tier: if decision == pipeline::Decision::Tier2 {
             Tier::Tier2
@@ -938,7 +1047,7 @@ async fn reconcile_checkout_pass(
     ensure!(!family.get::<_, bool>(0), "family is paused");
     let storage_generation: String = family.get(1);
     let row=tx.query_one(&format!("SELECT registration_state,paused,indexed_at IS NOT NULL,publication_generation,root,
-        indexed_git_head,cardinality(unreadable_paths)>0 FROM {s}.checkouts WHERE id=$1"),&[&target.checkout]).await?;
+        indexed_git_head,cardinality(unreadable_paths)>0,scans_aliases,oversized_paths FROM {s}.checkouts WHERE id=$1"),&[&target.checkout]).await?;
     ensure!(
         row.get::<_, String>(0) == "active" && !row.get::<_, bool>(1),
         "checkout is inactive or paused"
@@ -962,6 +1071,7 @@ async fn reconcile_checkout_pass(
     let candidates = if initialized
         && row.get::<_, Option<String>>(5).as_deref() == Some(stamp.as_str())
         && !row.get::<_, bool>(6)
+        && !row.get::<_, bool>(7)
     {
         changed_paths(target, git, events, &previous)
     } else {
@@ -986,14 +1096,17 @@ async fn reconcile_checkout_pass(
                 path,
                 hash: row.get(2),
                 tier: Tier::from_i16(row.get(3)).context("invalid stored file tier")?,
-                source_size: usize::try_from(length.unwrap()).context("invalid stored file size")?,
+                structured: (length.unwrap() as u64) <= selection.limits().structural_bytes,
                 source: None,
             });
         }
     }
     tx.commit().await?;
     let observed = if let Some(paths) = candidates.filter(|_| inherited.len() == previous.len()) {
-        let mut unreadable = BTreeSet::new();
+        let mut observations = Scan {
+            oversized: row.get::<_, Vec<String>>(8).into_iter().collect(),
+            ..Scan::default()
+        };
         let mut observed = Vec::with_capacity(paths.len());
         let ignored = crate::git_ignore::check(&target.root, &paths).await?;
         for (path, ignored) in paths.into_iter().zip(ignored) {
@@ -1003,9 +1116,10 @@ async fn reconcile_checkout_pass(
                 .to_owned();
             let file =
                 if selection.classify_with_git(&path, false, ignored) == pipeline::Decision::Drop {
+                    observations.oversized.remove(&key);
                     None
                 } else {
-                    observe_file(&target.root, &selection, &path, &mut unreadable)?
+                    observe_file(&target.root, &selection, &path, &mut observations)?
                 };
             inherited.remove(&key);
             if let Some(value) = &file {
@@ -1014,10 +1128,8 @@ async fn reconcile_checkout_pass(
             observed.push((path, file));
         }
         fast_changes = Some(observed);
-        Scan {
-            files: inherited.into_values().collect(),
-            unreadable,
-        }
+        observations.files = inherited.into_values().collect();
+        observations
     } else if initial_linked {
         initial::read(&target.root, &selection).await?
     } else {
@@ -1039,6 +1151,7 @@ async fn reconcile_checkout_pass(
                 &previous,
                 &desired,
                 fast_changes.is_some() && !refresh_graph,
+                selection.limits().structural_bytes,
             )
             .await?,
         )
@@ -1047,8 +1160,9 @@ async fn reconcile_checkout_pass(
     };
     let graphed = started.elapsed();
     let tx = client.transaction().await?;
+    pin_registered_family(&tx, target.family).await?;
     let current = tx.query_one(
-        &format!("SELECT publication_generation,root,registration_state,paused,unreadable_paths FROM {s}.checkouts WHERE id=$1 FOR UPDATE"),
+        &format!("SELECT publication_generation,root,registration_state,paused,unreadable_paths,oversized_paths FROM {s}.checkouts WHERE id=$1 FOR UPDATE"),
         &[&target.checkout],
     ).await?;
     ensure!(
@@ -1066,31 +1180,41 @@ async fn reconcile_checkout_pass(
         || !current
             .get::<_, Vec<String>>(4)
             .iter()
-            .eq(observed.unreadable.iter());
+            .eq(observed.unreadable.iter())
+        || !current
+            .get::<_, Vec<String>>(5)
+            .iter()
+            .eq(observed.oversized.iter());
     // Revalidate the checkout before taking the policy row lock.
     // Prepared file versions survive a stale observation or interrupted commit.
     if let Some(changes) = fast_changes.as_ref().filter(|_| view_changed) {
         let paths: Vec<_> = changes.iter().map(|(path, _)| path.clone()).collect();
         let ignored = crate::git_ignore::check(&target.root, &paths).await?;
-        let mut unreadable = BTreeSet::new();
+        let mut checked = Scan::default();
         for ((path, before), ignored) in changes.iter().zip(ignored) {
             let after =
                 if selection.classify_with_git(path, false, ignored) == pipeline::Decision::Drop {
                     None
                 } else {
-                    observe_file(&target.root, &selection, path, &mut unreadable)?
+                    observe_file(&target.root, &selection, path, &mut checked)?
                 };
             ensure!(
                 match (before, &after) {
                     (None, None) => true,
-                    (Some(a), Some(b)) => a.source == b.source && a.tier == b.tier,
+                    (Some(a), Some(b)) =>
+                        a.source == b.source && a.tier == b.tier && a.structured == b.structured,
                     _ => false,
                 },
                 "files changed during indexing; retaining previous index"
             );
+            let key = path.to_str().context("indexed file path is not UTF-8")?;
+            ensure!(
+                checked.oversized.contains(key) == observed.oversized.contains(key),
+                "size limits changed during indexing"
+            );
         }
         ensure!(
-            unreadable == observed.unreadable,
+            checked.unreadable == observed.unreadable,
             "unreadable paths changed during indexing"
         );
     } else if initial_linked {
@@ -1150,11 +1274,12 @@ async fn reconcile_checkout_pass(
     )
     .await?;
     let unreadable: Vec<_> = observed.unreadable.iter().collect();
+    let oversized: Vec<_> = observed.oversized.iter().collect();
     tx.execute(&format!("UPDATE {s}.checkouts SET indexed_at=CASE WHEN $4 THEN now() ELSE indexed_at END,
         publication_generation=publication_generation+CASE WHEN $4 THEN 1 ELSE 0 END,
         indexed_git_head=$2,unreadable_paths=$3,availability='available',git_state='clear',merge_in_progress=false,
         rebase_merge_in_progress=false,rebase_apply_in_progress=false,unmerged_index=false,observed_at=now(),
-        last_seen_at=now() WHERE id=$1"),&[&target.checkout,&stamp,&unreadable,&view_changed]).await?;
+        last_seen_at=now(),scans_aliases=$5,oversized_paths=$6 WHERE id=$1"),&[&target.checkout,&stamp,&unreadable,&view_changed,&observed.scans_aliases,&oversized]).await?;
     if target.graph == target.family && (view_changed || family.get::<_, bool>(2)) {
         store::mark_indexed(tx.client(), target.family).await?;
     }
@@ -1191,6 +1316,8 @@ async fn initial_matches(
 
 fn same_scan(before: &Scan, after: &Scan) -> bool {
     before.unreadable == after.unreadable
+        && before.oversized == after.oversized
+        && before.scans_aliases == after.scans_aliases
         && before.files.len() == after.files.len()
         && before
             .files
@@ -1200,6 +1327,7 @@ fn same_scan(before: &Scan, after: &Scan) -> bool {
                 before.path == after.path
                     && before.source == after.source
                     && before.tier == after.tier
+                    && before.structured == after.structured
             })
 }
 
@@ -1267,6 +1395,7 @@ async fn prepare_graph(
     previous: &BTreeMap<String, Uuid>,
     desired: &BTreeMap<String, Uuid>,
     allow_patch: bool,
+    structural_limit: u64,
 ) -> Result<(serde_json::Value, serde_json::Value)> {
     let started = std::time::Instant::now();
     let s = schema(target.family);
@@ -1326,7 +1455,7 @@ async fn prepare_graph(
                 break;
             };
             let size: i64 = row.get(0);
-            if size > 1024 * 1024 {
+            if size as u64 > structural_limit {
                 continue;
             }
             let Some(symbols) = row.get::<_, Option<serde_json::Value>>(1) else {
@@ -1372,7 +1501,7 @@ async fn prepare_graph(
         let Some(lang) = parser::detect_language(&file.path) else {
             continue;
         };
-        if file.source_size > 1024 * 1024 {
+        if !file.structured {
             continue;
         }
         let version = desired[&file.path];
@@ -1545,15 +1674,46 @@ pub async fn query_related(
     relation: StructuralRelation,
     incoming: bool,
 ) -> Result<Vec<Symbol>> {
+    Ok(
+        query_relationships(client, target, symbol_name, relation, incoming)
+            .await?
+            .iter()
+            .map(|edge| edge.related(incoming).clone())
+            .collect(),
+    )
+}
+
+pub async fn query_relationships(
+    client: &mut Client,
+    target: &Target,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<Vec<StructuralMatch>> {
+    Ok(
+        query_relationships_report(client, target, symbol_name, relation, incoming)
+            .await?
+            .0,
+    )
+}
+
+pub async fn query_relationships_report(
+    client: &mut Client,
+    target: &Target,
+    symbol_name: &str,
+    relation: StructuralRelation,
+    incoming: bool,
+) -> Result<(Vec<StructuralMatch>, CheckoutCoverage)> {
     ensure_checkout_schema(client, target.family).await?;
     loop {
         let guard = crate::maintenance::read(client, target.family).await?;
         let expected = search::visibility_epoch(&guard, target).await?;
+        let coverage = checkout_coverage(&guard, target).await?;
         let results =
             query_related_snapshot(&guard, target, symbol_name, relation.clone(), incoming).await?;
         guard.commit().await?;
         if search::visibility_epoch(client, target).await? == expected {
-            return Ok(results);
+            return Ok((results, coverage));
         }
     }
 }
@@ -1564,7 +1724,7 @@ async fn query_related_snapshot(
     symbol_name: &str,
     relation: StructuralRelation,
     incoming: bool,
-) -> Result<Vec<Symbol>> {
+) -> Result<Vec<StructuralMatch>> {
     let hidden: BTreeSet<String> = search::hidden_paths(tx, target)
         .await?
         .into_keys()
@@ -1596,27 +1756,29 @@ async fn query_related_snapshot(
                     .into_iter()
                     .map(|symbol| (symbol.chunk_id, symbol))
                     .collect();
-                return Ok(edges
+                let mut candidates: Vec<_> = edges
                     .into_iter()
                     .filter(|edge| edge.relation == relation)
                     .filter_map(|edge| {
-                        let (origin, related) = if incoming {
-                            (edge.to, edge.from)
-                        } else {
-                            (edge.from, edge.to)
-                        };
-                        let origin = by_id.get(&origin)?;
-                        let related = by_id.get(&related)?;
+                        let source = by_id.get(&edge.from)?;
+                        let target = by_id.get(&edge.to)?;
+                        let origin = if incoming { target } else { source };
                         (origin.name == symbol_name
-                            && !hidden.contains(&origin.file_path)
-                            && !hidden.contains(&related.file_path))
-                        .then(|| related.clone())
+                            && !hidden.contains(&source.file_path)
+                            && !hidden.contains(&target.file_path))
+                        .then(|| StructuralMatch {
+                            source: source.clone(),
+                            target: target.clone(),
+                            relation: edge.relation,
+                        })
                     })
-                    .collect());
+                    .collect();
+                graph::sort_relationships(&mut candidates, incoming);
+                return Ok(candidates);
             }
         }
     }
-    graph::query_related_unlocked(
+    graph::query_relationships_unlocked(
         client,
         target.graph,
         symbol_name,

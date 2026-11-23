@@ -4,6 +4,13 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub fn usable_vector(vector: &[f32]) -> bool {
+    vector.iter().all(|value| value.is_finite()) && vector.iter().any(|value| *value != 0.0)
+}
 
 /// Boxed, `Send` future returned by `EmbeddingBackend::embed`.
 pub type EmbedFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + 'a>>;
@@ -41,6 +48,7 @@ impl EmbeddingBackend for VoyageBackend {
             let resp: serde_json::Value = self
                 .client
                 .post("https://api.voyageai.com/v1/embeddings")
+                .timeout(PROVIDER_REQUEST_TIMEOUT)
                 .bearer_auth(&self.api_key)
                 .json(&body)
                 .send()
@@ -81,6 +89,7 @@ impl EmbeddingBackend for OpenAIBackend {
             let resp: serde_json::Value = self
                 .client
                 .post("https://api.openai.com/v1/embeddings")
+                .timeout(PROVIDER_REQUEST_TIMEOUT)
                 .bearer_auth(&self.api_key)
                 .json(&body)
                 .send()
@@ -217,12 +226,40 @@ fn parse_embeddings(resp: &serde_json::Value) -> Result<Vec<Vec<f32>>> {
         .map(|item| {
             item["embedding"]
                 .as_array()
-                .unwrap_or(&vec![])
+                .ok_or_else(|| anyhow::anyhow!("provider response has no embedding array"))?
                 .iter()
-                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                .collect()
+                .map(|coordinate| {
+                    let value = coordinate
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("embedding coordinate is not numeric"))?
+                        as f32;
+                    anyhow::ensure!(
+                        value.is_finite(),
+                        "embedding coordinate does not fit binary32"
+                    );
+                    Ok(value)
+                })
+                .collect::<Result<Vec<f32>>>()
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
+    if data.iter().any(|item| item.get("index").is_some()) {
+        let mut ordered = vec![None; embeddings.len()];
+        for (item, vector) in data.iter().zip(embeddings) {
+            let index = item["index"]
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .and_then(|index| ordered.get_mut(index))
+                .ok_or_else(|| anyhow::anyhow!("provider response has an invalid index"))?;
+            anyhow::ensure!(
+                index.replace(vector).is_none(),
+                "provider returned a duplicate index"
+            );
+        }
+        return ordered
+            .into_iter()
+            .map(|value| value.ok_or_else(|| anyhow::anyhow!("provider omitted an embedding")))
+            .collect();
+    }
     Ok(embeddings)
 }
 
@@ -231,6 +268,30 @@ fn parse_embeddings(resp: &serde_json::Value) -> Result<Vec<Vec<f32>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_results_preserve_input_order_and_reject_invalid_coordinates() {
+        let reversed = serde_json::json!({"data": [
+            {"index": 1, "embedding": [2.0]},
+            {"index": 0, "embedding": [1.0]}
+        ]});
+        assert_eq!(
+            parse_embeddings(&reversed).unwrap(),
+            vec![vec![1.0], vec![2.0]]
+        );
+        for invalid in [
+            serde_json::json!({"data": [{"embedding": ["1"]}]}),
+            serde_json::json!({"data": [{"embedding": [1e100]}]}),
+            serde_json::json!({"data": [
+                {"index": 0, "embedding": [1.0]},
+                {"index": 0, "embedding": [2.0]}
+            ]}),
+        ] {
+            assert!(parse_embeddings(&invalid).is_err());
+        }
+        assert!(!usable_vector(&[0.0, -0.0]));
+        assert!(!usable_vector(&[1.0, f32::NAN]));
+    }
 
     // Minimal stub used by tests to validate embedding dimension handling.
     struct TestEmbeddingBackend {

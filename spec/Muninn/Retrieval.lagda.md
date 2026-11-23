@@ -1,3 +1,18 @@
+# What a text or semantic search result must establish
+
+The selected published checkout and its current policy determine which files
+are eligible. Text matches must refer to the postings for those files.
+Semantic results must refer to stored vectors associated with their content.
+Text readiness and the presence of vectors are separate observations.
+
+Exact retrieval requires a complete eligible universe. Approximate
+retrieval supplies a candidate guarantee with a different strength. The
+model ties the returned page, numerical values and coverage to the selected
+mode. The adapter supplies actual Postgres postings and vector decoding.
+
+[Retrieval requirements](../RETRIEVAL.md) · [Worktree query adapter](../../crates/core/src/worktrees/search.rs) · [Persistence tests](../../crates/core/tests/family_persistence/worktrees.rs)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Actual text/vector matches, explicit coverage and exact/approximate outcomes.
 module Muninn.Retrieval where
@@ -117,3 +132,4 @@ module Family (family checkout pointer : ℕ) (world : O.World)
       exact ≡ true → length (Response.results response) < limit →
       ∀ candidate → candidate ∈ Universe.items universe → Selection.Present candidate (Response.results response)
     exactKeepsEveryMatchWhenPageHasRoom universe response exactMode = Selection.Top.fills (Response.exactTop response exactMode)
+```

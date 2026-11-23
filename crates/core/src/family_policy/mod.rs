@@ -6,5 +6,7 @@ pub mod runtime;
 pub mod start;
 mod store;
 mod types;
-pub use store::{apply, apply_path, initialize, inspect, validate_candidate};
+pub use store::{
+    apply, apply_path, convert_directory, initialize, inspect, recreate_profile, validate_candidate,
+};
 pub use types::*;

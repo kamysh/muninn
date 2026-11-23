@@ -190,6 +190,23 @@ pub struct IndexConfig {
     /// in search and embedded lazily, rather than dropped. Same layered-fold
     /// resolution as `exclude`. Spec: Muninn.Config.vendor.
     pub vendor: Vec<String>,
+    pub limits: FileLimits,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FileLimits {
+    pub selected_bytes: u64,
+    pub structural_bytes: u64,
+}
+
+impl Default for FileLimits {
+    fn default() -> Self {
+        Self {
+            selected_bytes: 10 * 1024 * 1024,
+            structural_bytes: 1024 * 1024,
+        }
+    }
 }
 
 // ── MCP config ───────────────────────────────────────────────────────────────

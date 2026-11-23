@@ -6,7 +6,7 @@
 //! are declared in spec/RECORD-CORRESPONDENCE.json and checked mechanically.
 
 use anyhow::{bail, Context, Result};
-use tokio_postgres::{Client, GenericClient};
+use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 fn qualified(schema: &str, table: &str) -> String {
@@ -187,7 +187,7 @@ pub async fn insert_continuation(
 
 /// Durable receipt: accepted active work for one operation ID.
 pub async fn accept_receipt(
-    client: &Client,
+    client: &impl GenericClient,
     schema: &str,
     operation_id: &str,
     input: &serde_json::Value,
@@ -221,6 +221,32 @@ pub async fn accept_receipt(
     Ok(true)
 }
 
+/// Reserve the installation-wide ID in the transaction that accepts the search.
+pub async fn claim_mcp_request(tx: &Transaction<'_>, id: &str, family: Uuid) -> Result<bool> {
+    crate::worktrees::pin_registered_family(tx, family).await?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO mcp_request_owners (operation_id,family_id) VALUES ($1,$2)
+             ON CONFLICT (operation_id) DO NOTHING",
+            &[&id, &family],
+        )
+        .await?;
+    Ok(inserted == 1)
+}
+
+pub async fn mcp_request_owner(
+    client: &impl GenericClient,
+    id: &str,
+) -> Result<Option<Option<Uuid>>> {
+    let owner = client
+        .query_opt(
+            "SELECT family_id FROM mcp_request_owners WHERE operation_id=$1",
+            &[&id],
+        )
+        .await?;
+    Ok(owner.map(|row| row.get(0)))
+}
+
 /// Receipt checkpoint update: the business transaction seals its progress.
 pub async fn update_receipt_checkpoint(
     client: &Client,
@@ -243,7 +269,7 @@ pub async fn update_receipt_checkpoint(
 
 /// Finished receipt: the saved result replaces the active work.
 pub async fn finish_receipt(
-    client: &Client,
+    client: &impl GenericClient,
     schema: &str,
     operation_id: &str,
     result: &serde_json::Value,
@@ -268,10 +294,27 @@ pub async fn read_receipt(
     schema: &str,
     operation_id: &str,
 ) -> Result<Option<Receipt>> {
+    load_receipt(client, schema, operation_id, "").await
+}
+
+pub async fn lock_receipt(
+    tx: &Transaction<'_>,
+    schema: &str,
+    operation_id: &str,
+) -> Result<Option<Receipt>> {
+    load_receipt(tx, schema, operation_id, " FOR UPDATE").await
+}
+
+async fn load_receipt(
+    client: &impl GenericClient,
+    schema: &str,
+    operation_id: &str,
+    lock: &str,
+) -> Result<Option<Receipt>> {
     let row = client
         .query_opt(
             &format!(
-                "SELECT state, input, work, result FROM {} WHERE operation_id = $1",
+                "SELECT state, input, work, result FROM {} WHERE operation_id = $1{lock}",
                 qualified(schema, "receipts")
             ),
             &[&operation_id],

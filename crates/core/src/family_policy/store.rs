@@ -337,3 +337,173 @@ async fn apply_locked(
         reconciliation_needed: true,
     })
 }
+
+/// Explicit recreation preserves the registration, policy history and notes.
+/// The current profile and the empty derived index become visible together.
+pub async fn recreate_profile(
+    client: &mut Client,
+    id: Uuid,
+    request: &RecreateProfile,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(request.api_version == 1, "unsupported API version");
+    anyhow::ensure!(
+        id == request.expected_family_id,
+        "repository family has changed"
+    );
+    crate::db::run_repo_migrations(client, &crate::store::repo_schema(id)).await?;
+    let tx = client.transaction().await?;
+    lock(&tx).await?;
+    crate::worktrees::lock(&tx, id).await?;
+    tx.query_one(
+        "SELECT id FROM public.repos WHERE id=$1 AND retired_at IS NULL FOR UPDATE",
+        &[&id],
+    )
+    .await?;
+    let family = family(&tx, id).await?;
+    let view = read(&tx, &family).await?.ok_or_else(invalid_storage)?;
+    if view.policy.embeddings.backend == request.backend
+        && view.policy.embeddings.model == request.model
+    {
+        return Ok(json!({"recreated": false, "family_id": id, "revision": view.revision}));
+    }
+    anyhow::ensure!(
+        view.revision == request.expected_revision,
+        "policy revision has changed"
+    );
+    anyhow::ensure!(
+        view.revision < MAX_REVISION,
+        "policy revision cannot advance"
+    );
+    let mut policy = view.policy;
+    policy.embeddings.backend = request.backend;
+    policy.embeddings.model = request.model.clone();
+    policy.validate()?;
+    let revision = (view.revision + 1) as i64;
+    let dimension = request.backend.dimension() as i32;
+    let policy = serde_json::to_value(&policy)?;
+    let s = schema(id);
+
+    for row in tx
+        .query(
+            &format!("SELECT id FROM {s}.checkouts WHERE id <> $1"),
+            &[&id],
+        )
+        .await?
+    {
+        crate::graph::drop_graph(tx.client(), row.get(0)).await?;
+    }
+    crate::graph::drop_graph(tx.client(), id).await?;
+    crate::store::ensure_graph(tx.client(), id).await?;
+    tx.batch_execute(&format!(
+        "DELETE FROM {s}.checkout_structural_snapshots;
+         DELETE FROM {s}.checkout_file_versions;
+         DELETE FROM {s}.checkout_prepared_files;
+         DELETE FROM {s}.file_versions;
+         DELETE FROM {s}.chunks;
+         UPDATE {s}.checkouts SET indexed_at=NULL, indexed_git_head=NULL,
+            publication_generation=publication_generation+1, oversized_paths='{{}}', unreadable_paths='{{}}';
+         ALTER TABLE {s}.chunks ALTER COLUMN embedding TYPE public.vector({dimension});"
+    )).await?;
+    tx.execute(
+        "UPDATE public.knowledge SET embedding=NULL WHERE family_id=$1",
+        &[&id],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE public.repos SET embedding_dim=$2,indexed_at=NULL WHERE id=$1",
+        &[&id, &dimension],
+    )
+    .await?;
+    tx.execute(
+        &format!("INSERT INTO {s}.policy_versions(revision,format_version,defaults_revision,policy) VALUES($1,1,$2,$3)"),
+        &[&revision, &view.defaults_revision, &policy],
+    ).await?;
+    tx.execute(
+        &format!("UPDATE {s}.family_policy SET current_revision=$1 WHERE singleton"),
+        &[&revision],
+    )
+    .await?;
+    wake(&tx, id).await?;
+    tx.commit().await?;
+    Ok(json!({"recreated": true, "family_id": id, "revision": revision}))
+}
+
+/// Convert the registered directory in place when it becomes a primary Git
+/// checkout. The existing index remains available until its Git view publishes.
+pub async fn convert_directory(
+    client: &mut Client,
+    id: Uuid,
+    path: &std::path::Path,
+    request: &super::start::Request,
+) -> anyhow::Result<Value> {
+    use crate::family_store::{CheckoutIdentity, FamilyKind};
+    anyhow::ensure!(request.api_version == 1, "unsupported API version");
+    anyhow::ensure!(
+        id == request.expected_family_id,
+        "repository family has changed"
+    );
+    let observed = CheckoutIdentity::discover(path).await?;
+    anyhow::ensure!(
+        observed.family.kind == FamilyKind::Git
+            && observed.git_dir.as_ref() == Some(&observed.family.key),
+        "conversion requires the primary Git checkout"
+    );
+    let tx = client.transaction().await?;
+    lock(&tx).await?;
+    crate::worktrees::lock(&tx, id).await?;
+    tx.query_one(
+        "SELECT id FROM public.repos WHERE id=$1 AND retired_at IS NULL FOR UPDATE",
+        &[&id],
+    )
+    .await?;
+    observed.revalidate().await?;
+    let family = family(&tx, id).await?;
+    let saved = family.identity.as_ref().ok_or_else(invalid_storage)?;
+    let view = read(&tx, &family).await?.ok_or_else(invalid_storage)?;
+    if saved == &observed.family {
+        return Ok(json!({"converted": false, "family_id": id, "revision": view.revision}));
+    }
+    anyhow::ensure!(
+        saved.kind == FamilyKind::Directory && saved.key == observed.root,
+        "selected Git root does not match the registered directory"
+    );
+    anyhow::ensure!(
+        view.revision == request.expected_revision,
+        "policy revision has changed"
+    );
+    anyhow::ensure!(
+        family_store::lookup_family(&tx, &observed.family)
+            .await?
+            .is_none(),
+        "the Git repository belongs to another registered family"
+    );
+    let s = schema(id);
+    let checkout = tx
+        .query_one(
+            &format!(
+                "UPDATE {s}.checkouts SET git_dir=$2, git_state='unknown',
+                    merge_in_progress=NULL,rebase_merge_in_progress=NULL,
+                    rebase_apply_in_progress=NULL,unmerged_index=NULL
+                 WHERE root=$1 AND git_dir IS NULL AND registration_state='active' RETURNING id"
+            ),
+            &[&observed.root.bytes(), &observed.family.key.bytes()],
+        )
+        .await?
+        .get::<_, Uuid>(0);
+    tx.execute(
+        &format!("INSERT INTO {s}.worktree_base(singleton,checkout) VALUES (true,$1)"),
+        &[&checkout],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE public.repos SET family_kind='git',family_key=$2,indexed_at=NULL WHERE id=$1",
+        &[&id, &observed.family.key.bytes()],
+    )
+    .await?;
+    if view.indexing_enabled {
+        crate::maintenance::request_family(&tx, id).await?;
+    }
+    wake(&tx, id).await?;
+    tx.commit().await?;
+    Ok(json!({"converted": true, "family_id": id, "revision": view.revision}))
+}

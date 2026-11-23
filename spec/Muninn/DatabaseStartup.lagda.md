@@ -1,3 +1,18 @@
+# How requests can recover after a database outage
+
+The model retains connection configuration while the database is
+unavailable. Work can resume after the connection, public schema, family
+schema and graph readiness needed by the operation are established.
+Interrupted transactional work is retried from its valid starting point.
+
+The model's transitions show permitted recovery steps. Operational
+progress depends on reconnection, scheduling and the durability of the
+saved work. In particular, reconnecting a process to PostgreSQL and
+resuming the same active MCP request are distinct obligations.
+
+[Database adapter](../../crates/core/src/db.rs) · [Watcher reconnect logic](../../crates/indexer/src/main.rs) · [Disposable reconnect scenario](../../muninn-setup/test-reconnect.py)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Database-dependent work waits for a usable connection and starts again
 -- after unfinished transactional preparation has been rolled back.
@@ -138,3 +153,4 @@ module Transactions (Key Value : Set) (equal : (a b : Key) → Dec (a ≡ b)) wh
   retryMigration schemaKey schemaValue ledgerKey ledgerValue original interruptedResult interrupted =
     cong (DB.execute (migration schemaKey schemaValue ledgerKey ledgerValue))
       (DB.abortKeepsStore (DB.put schemaKey schemaValue (DB.put ledgerKey ledgerValue (DB.abort interruptedResult))) original interruptedResult interrupted)
+```

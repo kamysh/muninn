@@ -11,19 +11,20 @@ use std::sync::Arc;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// Files larger than this are skipped during indexing (see `index_file`).
-const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+use crate::config::FileLimits;
 
-/// Files larger than this still get **text-indexed** (chunked + embedded) but
-/// the symbol-extraction + structural-edge passes (`parse_file`,
-/// `extract_edges`, the recursive walks in `parser.rs` like
-/// `collect_callees_rec`) are skipped. Those passes are O(AST-node-count) and
-/// bundled megafiles like TypeScript's `typescript.js` (~9 MB / 190 k lines)
-/// blow that up to millions of nodes — minutes per file. Above this threshold
-/// the file remains searchable via full-text + semantic vectors; only
-/// structural search (callers / callees / imports / defines) is unavailable
-/// for that file. See issue #6.
-const MAX_PARSER_BYTES: u64 = 1024 * 1024; // 1 MiB
+pub(crate) fn read_within_limit(path: &Path, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
+}
 
 /// Per-file watchdog for `index_repo`'s inner loop. If a single file's full
 /// pipeline (parse + edge extract + chunking + embed + DB writes) takes
@@ -49,15 +50,20 @@ pub async fn index_file(
     tier: Tier,
 ) -> Result<()> {
     let tx = crate::maintenance::ordinary_write(client, repo_id).await?;
+    let limits = crate::family_policy::runtime::policy(&tx, repo_id)
+        .await?
+        .map_or_else(FileLimits::default, |view| view.policy.limits);
     index_file_unlocked(
         tx.client(),
         repo_id,
+        path,
         path,
         embedder,
         max_chars,
         embed_batch_size,
         expected_dim,
         tier,
+        limits,
     )
     .await?;
     tx.commit().await?;
@@ -69,28 +75,31 @@ async fn index_file_unlocked(
     client: &Client,
     repo_id: Uuid,
     path: &Path,
+    physical: &Path,
     embedder: &dyn EmbeddingBackend,
     max_chars: usize,
     embed_batch_size: usize,
     expected_dim: usize,
     tier: Tier,
+    limits: FileLimits,
 ) -> Result<()> {
     let file_path = path.to_string_lossy().to_string();
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > MAX_FILE_BYTES {
-            return Ok(());
-        }
+    let bytes = read_within_limit(physical, limits.selected_bytes)?;
+    if bytes.is_none() {
+        tracing::warn!(path=%path.display(), limit=limits.selected_bytes,
+            "selected file exceeds family byte limit; raise the limit, exclude the path, or reduce the file");
     }
-    let bytes = std::fs::read(path)?;
-    if bytes.contains(&0u8) {
+    let Some(source) = bytes
+        .filter(|bytes| !bytes.contains(&0))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        delete_file_chunks(client, repo_id, &file_path).await?;
+        graph::delete_file_symbols(client, repo_id, &file_path).await?;
         return Ok(());
-    }
-    let source = match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return Ok(()),
     };
 
-    let language = detect_language(&file_path).filter(|_| source.len() as u64 <= MAX_PARSER_BYTES);
+    let structured = source.len() as u64 <= limits.structural_bytes;
+    let language = detect_language(&file_path).filter(|_| structured);
     let (chunks, symbols) = prepare_chunks(
         repo_id,
         file_path.clone(),
@@ -100,6 +109,7 @@ async fn index_file_unlocked(
         embed_batch_size,
         expected_dim,
         tier,
+        structured,
     )
     .await?;
 
@@ -165,8 +175,10 @@ pub(crate) async fn prepare_chunks(
     embed_batch_size: usize,
     expected_dim: usize,
     tier: Tier,
+    structured: bool,
 ) -> Result<(Vec<crate::types::Chunk>, Vec<crate::parser::ParsedSymbol>)> {
-    let (mut chunks, symbols) = prepare_text_chunks(repo_id, &file_path, &source, max_chars, tier);
+    let (mut chunks, symbols) =
+        prepare_text_chunks(repo_id, &file_path, &source, max_chars, tier, structured);
     if chunks.is_empty() {
         return Ok((chunks, symbols));
     }
@@ -180,8 +192,14 @@ pub(crate) async fn prepare_chunks(
             for chunk_batch in chunks.chunks_mut(batch_size) {
                 let texts: Vec<String> = chunk_batch.iter().map(|c| c.content.clone()).collect();
                 let embeddings = embedder.embed(&texts).await?;
+                anyhow::ensure!(
+                    embeddings.len() == texts.len(),
+                    "provider returned the wrong number of embeddings"
+                );
                 for (c, emb) in chunk_batch.iter_mut().zip(embeddings) {
-                    if emb.is_empty() {
+                    if emb.is_empty()
+                        || (emb.len() == expected_dim && !crate::embeddings::usable_vector(&emb))
+                    {
                         tracing::warn!(
                             "embedder returned empty vector for chunk in {}; storing without embedding",
                             file_path
@@ -217,19 +235,9 @@ pub(crate) fn prepare_text_chunks(
     source: &str,
     max_chars: usize,
     tier: Tier,
+    structured: bool,
 ) -> (Vec<crate::types::Chunk>, Vec<crate::parser::ParsedSymbol>) {
-    let detected_language = detect_language(file_path);
-    let language = if detected_language.is_some() && (source.len() as u64) > MAX_PARSER_BYTES {
-        tracing::info!(
-            file = %file_path,
-            size_bytes = source.len(),
-            threshold_bytes = MAX_PARSER_BYTES,
-            "file exceeds MAX_PARSER_BYTES — text-indexed only (no symbol graph)"
-        );
-        None
-    } else {
-        detected_language
-    };
+    let language = detect_language(file_path).filter(|_| structured);
     let symbols = match &language {
         Some(lang) => parse_file(source, *lang).unwrap_or_default(),
         None => vec![],
@@ -265,17 +273,19 @@ async fn backfill_one_file(
     client: &Client,
     repo_id: Uuid,
     file: &std::path::Path,
+    physical: &Path,
     known_ids: &std::collections::HashMap<String, Uuid>,
     known_names: &std::collections::HashSet<String>,
+    structural_limit: u64,
 ) -> Result<()> {
     let file_path = file.to_string_lossy().to_string();
     let Some(lang) = detect_language(&file_path) else {
         return Ok(());
     };
-    let Ok(bytes) = std::fs::read(file) else {
+    let Ok(Some(bytes)) = read_within_limit(physical, structural_limit) else {
         return Ok(());
     };
-    if bytes.len() as u64 > MAX_PARSER_BYTES || bytes.contains(&0u8) {
+    if bytes.contains(&0) {
         return Ok(());
     }
     let Ok(source) = String::from_utf8(bytes) else {
@@ -339,8 +349,9 @@ async fn backfill_one_file(
 async fn backfill_structural_edges(
     client: &Client,
     repo_id: Uuid,
-    files: &[std::path::PathBuf],
+    files: &[(std::path::PathBuf, std::path::PathBuf)],
     on_progress: &impl Fn(usize, usize, &Path),
+    structural_limit: u64,
 ) -> Result<()> {
     let known_ids = graph::all_symbol_chunk_ids(client, repo_id).await?;
     if known_ids.is_empty() {
@@ -349,8 +360,16 @@ async fn backfill_structural_edges(
     let known_names: std::collections::HashSet<String> = known_ids.keys().cloned().collect();
 
     let total = files.len();
-    for (i, file) in files.iter().enumerate() {
-        let work = backfill_one_file(client, repo_id, file, &known_ids, &known_names);
+    for (i, (file, physical)) in files.iter().enumerate() {
+        let work = backfill_one_file(
+            client,
+            repo_id,
+            file,
+            physical,
+            &known_ids,
+            &known_names,
+            structural_limit,
+        );
         match tokio::time::timeout(
             std::time::Duration::from_secs(FILE_INDEX_TIMEOUT_SECS),
             work,
@@ -561,25 +580,50 @@ async fn index_directory(
     on_progress: impl Fn(usize, usize, &Path),
 ) -> Result<(BatchOutcome, Vec<SkipRecord>)> {
     let walker = selection.walker(repo_path);
-    let mut files: Vec<std::path::PathBuf> = vec![];
+    let limits = selection.limits();
+    let mut files = Vec::new();
+    let mut skips = Vec::new();
     for entry in walker {
         let entry = entry?;
-        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            files.push(entry.path().to_owned());
+        if entry.file_type().is_some_and(|t| t.is_symlink()) {
+            crate::worktrees::symlinks::visit_files(
+                repo_path,
+                entry.path().strip_prefix(repo_path)?,
+                |path, is_dir| selection.classify(path, is_dir) != Decision::Drop,
+                |path, physical| files.push((repo_path.join(path), physical)),
+                |path, error| {
+                    skips.push(SkipRecord {
+                        path: repo_path.join(path),
+                        reason: error.to_string(),
+                    })
+                },
+            );
+        } else if entry.file_type().is_some_and(|t| t.is_file()) {
+            let path = entry.path().to_owned();
+            files.push((path.clone(), path));
         }
     }
 
-    let keep: Vec<String> = files
+    let mut keep: Vec<String> = files
         .iter()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|(path, _)| path.to_string_lossy().into_owned())
         .collect();
+    if !skips.is_empty() {
+        for old in crate::store::file_paths_not_in(client, repo_id, &keep).await? {
+            if skips
+                .iter()
+                .any(|skip| Path::new(&old).starts_with(&skip.path))
+            {
+                keep.push(old);
+            }
+        }
+    }
 
     let total = files.len();
     let mut done = 0usize;
     let mut any_succeeded = false;
-    let mut skips: Vec<SkipRecord> = Vec::new();
 
-    for file in &files {
+    for (file, physical) in &files {
         // Survivors of the exclude-pruned walk: Tier 2 if the vendor override
         // matches, else Tier 1. Spec: Muninn.Config.classify.
         let rel = file.strip_prefix(repo_path).unwrap_or(file);
@@ -592,11 +636,13 @@ async fn index_directory(
             client,
             repo_id,
             file,
+            physical,
             embedder.as_ref(),
             1500,
             embed_batch_size,
             expected_dim,
             tier,
+            limits,
         );
         match tokio::time::timeout(
             std::time::Duration::from_secs(FILE_INDEX_TIMEOUT_SECS),
@@ -642,7 +688,14 @@ async fn index_directory(
         }
         crate::store::prune_chunks_not_in(client, repo_id, &keep).await?;
         if any_succeeded {
-            backfill_structural_edges(client, repo_id, &files, &on_progress).await?;
+            backfill_structural_edges(
+                client,
+                repo_id,
+                &files,
+                &on_progress,
+                limits.structural_bytes,
+            )
+            .await?;
         }
 
         crate::store::mark_indexed(client, repo_id).await?;
@@ -685,31 +738,19 @@ pub async fn backfill_once(
     }
     let texts: Vec<String> = groups.iter().map(|(_, c)| c.clone()).collect();
     let embeddings = embedder.embed(&texts).await?;
+    anyhow::ensure!(
+        embeddings.len() == groups.len(),
+        "provider returned the wrong number of embeddings"
+    );
     let mut valid = Vec::with_capacity(groups.len());
     for ((hash, content), emb) in groups.into_iter().zip(embeddings) {
-        if emb.is_empty() {
-            tracing::warn!(
-                "backfill: embedder returned empty vector for a Tier-2 content in repo {}; \
-                 leaving those chunks pending",
-                repo_id
-            );
-            continue;
-        }
-        if emb.len() != expected_dim {
-            // Dim mismatch is a hard misconfiguration; skip rather than corrupt
-            // the VECTOR(n) column. Spec: ValidStoredEmbedding.
-            tracing::error!(
-                "backfill: embedding dim {} != expected {} in repo {}; skipping",
-                emb.len(),
-                expected_dim,
-                repo_id
-            );
-            continue;
-        }
-        valid.push((hash, content, emb));
-    }
-    if valid.is_empty() {
-        return Ok(0);
+        anyhow::ensure!(
+            emb.is_empty() || emb.len() == expected_dim,
+            "backfill embedding dimension {} != {expected_dim} in family {repo_id}",
+            emb.len()
+        );
+        let vector = crate::embeddings::usable_vector(&emb).then_some(emb);
+        valid.push((hash, content, vector));
     }
     Ok(crate::store::set_embeddings_for_contents(client, repo_id, valid).await? as usize)
 }

@@ -1,4 +1,6 @@
-use crate::config::{EmbeddingBackend, GlobalConfig, EXCLUDE_DEFAULTS, VENDOR_DEFAULTS};
+use crate::config::{
+    EmbeddingBackend, FileLimits, GlobalConfig, EXCLUDE_DEFAULTS, VENDOR_DEFAULTS,
+};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,6 +16,7 @@ pub fn policy_from_global(name: String, global: &GlobalConfig) -> Result<Policy>
     };
     let policy = Policy {
         name,
+        limits: global.index.limits,
         index: Rules {
             exclude: Vec::new(),
             vendor: Vec::new(),
@@ -149,10 +152,23 @@ pub struct Embeddings {
     pub model: Option<String>,
     pub batch_size: u32,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecreateProfile {
+    pub api_version: u32,
+    pub expected_family_id: Uuid,
+    pub expected_revision: u64,
+    pub backend: Backend,
+    #[serde(deserialize_with = "Option::<String>::deserialize")]
+    pub model: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub name: String,
+    #[serde(default)]
+    pub limits: FileLimits,
     pub index: Rules,
     pub watcher: Watcher,
     pub embeddings: Embeddings,
@@ -199,6 +215,7 @@ impl Policy {
     pub fn shipped(name: String) -> Self {
         Self {
             name,
+            limits: FileLimits::default(),
             index: Rules {
                 exclude: vec![],
                 vendor: vec![],
@@ -212,6 +229,12 @@ impl Policy {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if self.limits.selected_bytes > MAX_REVISION
+            || self.limits.structural_bytes > self.limits.selected_bytes
+        {
+            return Err(PolicyError::invalid("limits", None,
+                "structural_bytes must be at most selected_bytes, and both must fit the exact JSON integer range"));
+        }
         if self.name.trim().is_empty() || self.name.contains('\0') {
             return Err(PolicyError::invalid(
                 "name",
@@ -271,7 +294,7 @@ impl Policy {
             || self.embeddings.model != other.embeddings.model
         {
             Impact::EmbeddingProfile
-        } else if self.index != other.index {
+        } else if self.index != other.index || self.limits != other.limits {
             Impact::Selection
         } else if self.watcher != other.watcher
             || self.embeddings.batch_size != other.embeddings.batch_size
@@ -316,6 +339,7 @@ pub(crate) fn compile_axis(root: &Path, patterns: &[String], field: &str) -> Res
 pub struct CompiledRules {
     exclude: Gitignore,
     vendor: Gitignore,
+    pub limits: FileLimits,
 }
 impl CompiledRules {
     pub fn new(root: &Path, policy: &Policy, defaults: &Defaults) -> Result<Self> {
@@ -323,6 +347,7 @@ impl CompiledRules {
         defaults.validate()?;
         let effective = policy.effective(defaults);
         Ok(Self {
+            limits: effective.limits,
             exclude: compile_axis(root, &effective.index.exclude, "index.exclude")?,
             vendor: compile_axis(root, &effective.index.vendor, "index.vendor")?,
         })

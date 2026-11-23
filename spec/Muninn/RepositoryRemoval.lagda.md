@@ -1,3 +1,19 @@
+# What happens when a repository is unregistered or forgotten
+
+The modeled operation selects a repository family and distinguishes retiring
+its registration from deleting its owned records. Work sharing a family
+and receipts containing family details affect when removal can complete.
+
+[Registration](Registration.lagda.md) explains identity and authorization.
+The [administration adapter](../../crates/mcp/src/admin.rs) clears the code index
+on unregister and preserves authored notes and policy history. Forget also
+removes information explicitly owned by the family. Both compact its MCP
+receipts to operation IDs. The [MCP operation catalog](../OPERATION-CATALOG.md)
+records which lifecycle endpoints are present and which still require an
+adapter. Proof obligations for all owned records must be checked against
+the concrete tables involved in removal.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Remove or forget an existing family using the shared transaction semantics.
 module Muninn.RepositoryRemoval where
@@ -473,3 +489,4 @@ module Family (family : ℕ) (familyId : Worktree.FamilyId) (scope : Store.Scope
   fullForgetShared slot world records isReady isForget key receiptOwner id meaning names result target found owned
     rewrite fullForgetCompletes slot world records isReady isForget =
       noSharedResult world key receiptOwner id meaning names result target found owned
+```

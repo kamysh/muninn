@@ -1,3 +1,19 @@
+# How policy selects and classifies files
+
+Start with Git's answer for the path. Evaluate the saved exclusion rules in
+order, with the last matching entry taking effect. A path included by the
+exclusion decision can then be classified as ordinary or vendor content.
+Vendor rules cannot re-include a Git-ignored path. If a parent directory is
+excluded, a rule for a descendant alone cannot make the file reachable.
+
+`Rule` connects a saved entry to its compiled matcher. A family supplies
+the compiled rules associated with its effective policy. The uniqueness laws
+compare results for the same observed path and rule sequence. The adapter
+supplies the Git observation and actual matcher correspondence.
+
+[Policy compilation](../../crates/core/src/family_policy/types.rs) · [Runtime selection](../../crates/core/src/family_policy/runtime.rs) · [Ordered rule requirements](../ORDERED-SELECTION.md)
+
+```agda
 {-# OPTIONS --safe #-}
 -- Ordered resolution derives actual matches from certified compiled rules.
 module Muninn.OrderedSelection where
@@ -177,3 +193,4 @@ keptWithGit empty word directory true ()
 keptWithGit (cons rule rest) word directory true kept with S.pathMatches? rule word directory
 ... | no absent = keptWithGit rest word directory true kept
 ... | yes matched = kept
+```

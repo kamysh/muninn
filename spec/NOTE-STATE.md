@@ -23,6 +23,11 @@ pagination algorithms are outside this state model.
 `RepositoryWorld` represents the locator mapping, note state and an opaque
 remainder. It does not prove that every real database record is represented or
 that a locator resolves correctly in Rust. The final closed dispatcher and the
-storage/runtime correspondence remain #18 and #51–#52. The current Rust note
-implementation uses exact repository-path keys and the global embedding profile;
-it does not yet provide the family/worktree behavior modeled here.
+storage/runtime correspondence remain #18 and #51–#52. The Rust adapter
+uses family identities and optional Git checkout identities for new notes.
+Existing literal keys are retained. Within a registered family, readers can
+also see legacy notes at the primary checkout's key and their own checkout's
+key. The adapter selects the registered family's embedding backend. MCP note
+changes supplied with an `operation_id` commit the change and its receipt in
+one transaction. Explicit profile recreation clears the derived note vectors
+for that family and preserves the note text. Text lookup can still retrieve it.

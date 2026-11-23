@@ -152,6 +152,23 @@ pub struct StructuralEdge {
     pub relation: StructuralRelation,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuralMatch {
+    pub source: Symbol,
+    pub target: Symbol,
+    pub relation: StructuralRelation,
+}
+
+impl StructuralMatch {
+    pub fn related(&self, incoming: bool) -> &Symbol {
+        if incoming {
+            &self.source
+        } else {
+            &self.target
+        }
+    }
+}
+
 /// Who holds the indexing lock during an `Indexing` transition.
 /// Spec: Muninn.AdvisoryLock.HolderKind (the *task* identity used by
 /// Muninn.IndexFsm.Indexing — NOT a property of the advisory lock itself, which

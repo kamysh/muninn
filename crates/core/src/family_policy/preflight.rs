@@ -187,7 +187,8 @@ pub fn scan(root: &Path, policy: &Policy, defaults: &Defaults, budget: Budget) -
         capabilities: serde_json::json!({
             "metadata_only":true, "content_validity":"not_checked", "git_ignores":false,
             "follows_symlinks":false, "atomic_filesystem_snapshot":false,
-            "current_indexer_max_file_bytes":10*MIB, "structural_parse_limit_bytes":MIB,
+            "current_indexer_max_file_bytes":rules.limits.selected_bytes,
+            "structural_parse_limit_bytes":rules.limits.structural_bytes,
             "sample_limit":SAMPLE_LIMIT, "hard_wall_clock_limit":false
         }),
     };

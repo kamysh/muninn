@@ -24,11 +24,16 @@ pub struct SearchParams {
     /// Current working directory (supplied by Claude Code). Used to resolve `repo` when absent.
     pub cwd: Option<String>,
     pub limit: Option<i64>,
+    pub exact: Option<bool>,
 }
 
 #[derive(Serialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResultItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<worktrees::SemanticCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<worktrees::CheckoutCoverage>,
 }
 
 #[derive(Serialize)]
@@ -36,7 +41,7 @@ pub struct SearchResultItem {
     pub file_path: String,
     pub start_line: u32,
     pub end_line: u32,
-    pub score: f32,
+    pub score: f64,
     pub content: String,
 }
 
@@ -46,7 +51,7 @@ impl From<muninn_core::types::SearchResult> for SearchResultItem {
             file_path: r.chunk.file_path,
             start_line: r.chunk.range.start,
             end_line: r.chunk.range.end,
-            score: r.score,
+            score: f64::from(r.score),
             content: r.chunk.content,
         }
     }
@@ -67,11 +72,18 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
             vector.len() == family.embedding_dim as usize,
             "query embedding dimension mismatch"
         );
-        let results =
-            worktrees::hybrid_search(&mut search_client, &target, &vector, &params.query, limit)
-                .await?;
+        let (results, view) = worktrees::hybrid_search_report(
+            &mut search_client,
+            &target,
+            &vector,
+            &params.query,
+            limit,
+        )
+        .await?;
         return Ok(SearchResponse {
             results: results.into_iter().map(Into::into).collect(),
+            coverage: None,
+            view: Some(view),
         });
     }
     let repo = resolve_repo(&ctx.client, &params).await?;
@@ -92,6 +104,8 @@ pub async fn search_hybrid(ctx: &SearchContext, params: SearchParams) -> Result<
 
     Ok(SearchResponse {
         results: merged.into_iter().map(Into::into).collect(),
+        coverage: None,
+        view: None,
     })
 }
 
@@ -100,10 +114,13 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
     let mut search_client =
         db::connect_with_app_name(&ctx.config.database, "muninn-mcp-search").await?;
     if let Some(target) = resolve_worktree(ctx, &params).await? {
-        let results =
-            worktrees::fulltext_search(&mut search_client, &target, &params.query, limit).await?;
+        let (results, view) =
+            worktrees::fulltext_search_report(&mut search_client, &target, &params.query, limit)
+                .await?;
         return Ok(SearchResponse {
             results: results.into_iter().map(Into::into).collect(),
+            coverage: None,
+            view: Some(view),
         });
     }
     let repo = resolve_repo(&ctx.client, &params).await?;
@@ -111,6 +128,8 @@ pub async fn search_fulltext(ctx: &SearchContext, params: SearchParams) -> Resul
         search::fulltext_search(&mut search_client, &params.query, repo.id, limit).await?;
     Ok(SearchResponse {
         results: results.into_iter().map(Into::into).collect(),
+        coverage: None,
+        view: None,
     })
 }
 
@@ -129,10 +148,24 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
             vector.len() == family.embedding_dim as usize,
             "query embedding dimension mismatch"
         );
-        let results =
-            worktrees::semantic_search(&mut search_client, &target, &vector, limit).await?;
+        let (results, coverage, view) = worktrees::semantic_search_report(
+            &mut search_client,
+            &target,
+            &vector,
+            limit,
+            params.exact.unwrap_or(false),
+        )
+        .await?;
         return Ok(SearchResponse {
-            results: results.into_iter().map(Into::into).collect(),
+            results: results
+                .into_iter()
+                .map(|(result, score)| SearchResultItem {
+                    score,
+                    ..result.into()
+                })
+                .collect(),
+            coverage: Some(coverage),
+            view: Some(view),
         });
     }
     let repo = resolve_repo(&ctx.client, &params).await?;
@@ -142,9 +175,24 @@ pub async fn search_semantic(ctx: &SearchContext, params: SearchParams) -> Resul
     let query_vec = embedding.into_iter().next().unwrap_or_default();
     validate_query_dim(&query_vec, &repo)?;
 
-    let results = search::semantic_search(&mut search_client, &query_vec, repo.id, limit).await?;
+    let (results, coverage) = worktrees::directory_semantic_search_report(
+        &mut search_client,
+        repo.id,
+        &query_vec,
+        limit,
+        params.exact.unwrap_or(false),
+    )
+    .await?;
     Ok(SearchResponse {
-        results: results.into_iter().map(Into::into).collect(),
+        results: results
+            .into_iter()
+            .map(|(result, score)| SearchResultItem {
+                score,
+                ..result.into()
+            })
+            .collect(),
+        coverage: Some(coverage),
+        view: None,
     })
 }
 
@@ -179,9 +227,10 @@ pub async fn search_structural(
         repo: params.repo,
         cwd: params.cwd,
         limit: None,
+        exact: None,
     };
-    if let Some(target) = resolve_worktree(ctx, &search_params).await? {
-        let symbols = worktrees::query_related(
+    let (candidates, view) = if let Some(target) = resolve_worktree(ctx, &search_params).await? {
+        let (candidates, coverage) = worktrees::query_relationships_report(
             &mut search_client,
             &target,
             &params.symbol,
@@ -189,18 +238,32 @@ pub async fn search_structural(
             incoming,
         )
         .await?;
-        return Ok(serde_json::json!({"symbols":symbols}));
+        (candidates, Some(coverage))
+    } else {
+        let repo = resolve_repo(&ctx.client, &search_params).await?;
+        let candidates = graph::query_relationships(
+            &mut search_client,
+            repo.id,
+            &params.symbol,
+            relation,
+            incoming,
+        )
+        .await?;
+        (candidates, None)
+    };
+    let symbols: Vec<_> = candidates
+        .iter()
+        .map(|edge| edge.related(incoming))
+        .collect();
+    let mut response = serde_json::json!({
+        "symbols": symbols,
+        "candidates": candidates,
+        "guidance": "These are name-based candidates. Use source paths and positions to distinguish matching definitions."
+    });
+    if let Some(coverage) = view {
+        response["view"] = serde_json::to_value(coverage)?;
     }
-    let repo = resolve_repo(&ctx.client, &search_params).await?;
-    let symbols = graph::query_related(
-        &mut search_client,
-        repo.id,
-        &params.symbol,
-        relation,
-        incoming,
-    )
-    .await?;
-    Ok(serde_json::json!({ "symbols": symbols }))
+    Ok(response)
 }
 
 async fn resolve_worktree(
@@ -284,7 +347,7 @@ async fn family_embedder(ctx: &SearchContext, id: Uuid) -> Result<Arc<dyn Embedd
     }
 }
 
-async fn resolve_repo(client: &Client, params: &SearchParams) -> Result<Repo> {
+pub(super) async fn resolve_repo(client: &Client, params: &SearchParams) -> Result<Repo> {
     if let Some(path) = params.repo.as_ref().or(params.cwd.as_ref()) {
         let path = std::fs::canonicalize(path)?;
         for root in path.ancestors() {
@@ -320,7 +383,14 @@ fn validate_query_dim(query_vec: &[f32], repo: &Repo) -> Result<()> {
 
 // ─── Knowledge tools ─────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteScope {
+    Family,
+    Checkout,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct RecordKnowledgeParams {
     pub repo: String,
     pub title: String,
@@ -331,9 +401,11 @@ pub struct RecordKnowledgeParams {
     pub related_files: Vec<String>,
     /// If provided, update the existing item with this id instead of inserting.
     pub id: Option<String>,
+    pub scope: Option<NoteScope>,
+    pub operation_id: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct KnowledgeItemResponse {
     pub id: String,
     pub repo: String,
@@ -373,6 +445,7 @@ pub struct KnowledgeResultItem {
 #[derive(Serialize)]
 pub struct KnowledgeSearchResponse {
     pub results: Vec<KnowledgeResultItem>,
+    pub semantic_available: bool,
 }
 
 #[derive(Deserialize)]
@@ -382,31 +455,99 @@ pub struct SearchKnowledgeParams {
     pub limit: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct DeleteKnowledgeParams {
     pub id: String,
+    pub repo: Option<String>,
+    pub operation_id: Option<String>,
 }
 
 pub async fn record_knowledge(
     ctx: &SearchContext,
-    params: RecordKnowledgeParams,
+    mut params: RecordKnowledgeParams,
 ) -> Result<KnowledgeItemResponse> {
+    if let Some(id) = params.operation_id.take() {
+        let result =
+            crate::requests::start(ctx, "record_knowledge", &id, serde_json::to_value(params)?)
+                .await?;
+        anyhow::ensure!(result["cancelled"] != true, "note request was cancelled");
+        return Ok(serde_json::from_value(result)?);
+    }
+    let prepared = prepare_note(ctx, params).await?;
+    write_note(ctx.client.as_ref(), prepared).await
+}
+
+pub(super) struct PreparedNote {
+    params: RecordKnowledgeParams,
+    id: Option<Uuid>,
+    pub(super) location: knowledge::NoteLocation,
+    embedding: Option<Vec<f32>>,
+    expected_dim: usize,
+}
+
+pub(super) async fn prepare_note(
+    ctx: &SearchContext,
+    params: RecordKnowledgeParams,
+) -> Result<PreparedNote> {
     let id = params.id.as_deref().map(Uuid::parse_str).transpose()?;
+    anyhow::ensure!(
+        id.is_none() || params.scope.is_none(),
+        "note scope is set at creation"
+    );
+    let location = if matches!(params.scope, Some(NoteScope::Checkout)) {
+        let mut client =
+            db::connect_with_app_name(&ctx.config.database, "muninn-mcp-note-checkout").await?;
+        knowledge::NoteLocation::resolve_for_checkout_note(&mut client, &params.repo).await?
+    } else {
+        knowledge::NoteLocation::resolve(&ctx.client, &params.repo).await?
+    };
+    let embedder = match location.family_id {
+        Some(family) => family_embedder(ctx, family).await?,
+        None => Arc::clone(&ctx.embedder),
+    };
 
+    let expected_dim = location.embedding_dim.unwrap_or(ctx.embedding_dim);
     let text = format!("{}\n{}", params.title, params.body);
-    let embedding = ctx.embedder.embed(&[text]).await?;
-    let emb = embedding.into_iter().next().unwrap_or_default();
-
-    let item = knowledge::upsert(
-        &ctx.client,
+    let embedding = match embedder.embed(&[text]).await {
+        Ok(embeddings) => embeddings.into_iter().next().filter(|vector| {
+            vector.len() == expected_dim && muninn_core::embeddings::usable_vector(vector)
+        }),
+        Err(error) => {
+            tracing::warn!(%error, "saving note text while the vector provider is unavailable");
+            None
+        }
+    };
+    Ok(PreparedNote {
+        params,
         id,
-        &params.repo,
+        location,
+        embedding,
+        expected_dim,
+    })
+}
+
+pub(super) async fn write_note(
+    client: &impl tokio_postgres::GenericClient,
+    note: PreparedNote,
+) -> Result<KnowledgeItemResponse> {
+    let PreparedNote {
+        params,
+        id,
+        location,
+        embedding,
+        expected_dim,
+    } = note;
+    let item = knowledge::upsert_scoped(
+        client,
+        &location,
+        matches!(params.scope, Some(NoteScope::Checkout)),
+        id,
         &params.title,
         &params.body,
         &params.tags,
         &params.related_files,
-        Some(&emb),
-        ctx.embedding_dim,
+        embedding.as_deref(),
+        expected_dim,
     )
     .await?;
 
@@ -418,17 +559,43 @@ pub async fn search_knowledge(
     params: SearchKnowledgeParams,
 ) -> Result<KnowledgeSearchResponse> {
     let limit = normalize_limit(params.limit)?;
+    let location = knowledge::NoteLocation::resolve(&ctx.client, &params.repo).await?;
+    let dimension = location.embedding_dim.unwrap_or(ctx.embedding_dim);
+    let vector = if knowledge::has_vectors(&ctx.client, &location, dimension).await? {
+        let embedder = match location.family_id {
+            Some(family) => family_embedder(ctx, family).await?,
+            None => Arc::clone(&ctx.embedder),
+        };
+        match embedder.embed(std::slice::from_ref(&params.query)).await {
+            Ok(embeddings) => embeddings.into_iter().next().filter(|vector| {
+                vector.len() == dimension && muninn_core::embeddings::usable_vector(vector)
+            }),
+            Err(error) => {
+                tracing::warn!(%error, "notes remain searchable by text while the vector provider is unavailable");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    let embedding = ctx
-        .embedder
-        .embed(std::slice::from_ref(&params.query))
+    let mut reader =
+        db::connect_with_app_name(&ctx.config.database, "muninn-mcp-note-search").await?;
+    let snapshot = reader
+        .build_transaction()
+        .read_only(true)
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .start()
         .await?;
-    let emb = embedding.into_iter().next().unwrap_or_default();
-
-    let results =
-        knowledge::search_hybrid(&ctx.client, &params.repo, &params.query, &emb, limit).await?;
+    let results = if let Some(vector) = &vector {
+        knowledge::search_hybrid(snapshot.client(), &location, &params.query, vector, limit).await?
+    } else {
+        knowledge::search_fulltext(snapshot.client(), &location, &params.query, limit).await?
+    };
+    snapshot.commit().await?;
 
     Ok(KnowledgeSearchResponse {
+        semantic_available: vector.is_some(),
         results: results
             .into_iter()
             .map(|r| KnowledgeResultItem {
@@ -445,15 +612,25 @@ pub async fn search_knowledge(
 
 pub async fn delete_knowledge(
     ctx: &SearchContext,
-    params: DeleteKnowledgeParams,
+    mut params: DeleteKnowledgeParams,
 ) -> Result<serde_json::Value> {
+    if let Some(id) = params.operation_id.take() {
+        return crate::requests::start(ctx, "delete_knowledge", &id, serde_json::to_value(params)?)
+            .await;
+    }
     let id = Uuid::parse_str(&params.id)?;
-    let deleted = knowledge::delete(&ctx.client, id).await?;
+    let deleted = if let Some(repo) = params.repo {
+        let location = knowledge::NoteLocation::resolve(&ctx.client, &repo).await?;
+        knowledge::delete_scoped(ctx.client.as_ref(), &location, id).await?
+    } else {
+        knowledge::delete(&ctx.client, id).await?
+    };
     Ok(serde_json::json!({ "deleted": deleted }))
 }
 
 pub async fn list_knowledge(ctx: &SearchContext, repo_path: &str) -> Result<serde_json::Value> {
-    let items = knowledge::list(&ctx.client, repo_path).await?;
+    let location = knowledge::NoteLocation::resolve(&ctx.client, repo_path).await?;
+    let items = knowledge::list_scoped(&ctx.client, &location).await?;
     let response: Vec<KnowledgeItemResponse> = items.into_iter().map(Into::into).collect();
     Ok(serde_json::to_value(response)?)
 }
