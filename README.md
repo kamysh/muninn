@@ -111,7 +111,7 @@ Local indexing alone does not make a cloud agent session offline.
 
 ## Start here
 
-This source tree builds **Muninn 1.4.0**. Use three matching binaries when
+This source tree builds **Muninn 1.4.1**. Use three matching binaries when
 installing or upgrading. [Build instructions](docs/development.md#building-and-testing) ·
 [Upgrade guide](docs/upgrading.md)
 

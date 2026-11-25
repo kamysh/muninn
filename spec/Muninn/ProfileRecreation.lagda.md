@@ -38,6 +38,17 @@ ordinaryPolicyKeepsModel : ∀ before after → Policy.AdmissiblePolicyChange be
 ordinaryPolicyKeepsModel before after permission =
   Policy.AdmissiblePolicyChange.sameBackend permission , Policy.AdmissiblePolicyChange.sameModel permission
 
+```
+
+## Replace derived data when the profile changes
+
+A new backend or model changes the meaning of stored vectors. Changing it
+preserves the family identity, settings outside the selected profile, and
+authored notes. The old code index and derived vectors are cleared for that
+family. A subsequent search can still use note text while new vectors are
+unavailable.
+
+```agda
 module Model (Identity Settings Index : Set)
   (sameFamily : (a b : W.FamilyId) → Dec (a ≡ b))
   (sameNote : (a b : KnowledgeId) → Dec (a ≡ b))
@@ -81,6 +92,16 @@ module Model (Identity Settings Index : Set)
   ...   | yes refl = observed
   ...   | no different = Notes.recreateSetsProfile family profile (World.knowledge before)
 
+```
+
+## Make a repeat safe after rebuilding
+
+If the selected profile is already current, recreating it leaves the world
+intact. A request whose first reply was lost can therefore be repeated after
+new indexing has started without deleting that new work. The atomic result
+also keeps other families' derived data outside the replacement.
+
+```agda
   alreadyCurrent : ∀ family profile before →
     Knowledge.World.profile (World.knowledge before) family ≡ just profile →
     recreate family profile before ≡ before

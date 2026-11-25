@@ -50,6 +50,16 @@ applyObserved observed use refl = refl
 -- The Git and ordered rule-match observations belong to one visible path.
 -- Their correspondence to Git and the actual compiled rules is an adapter
 -- obligation. Explicit rules override the Git default, last match wins.
+```
+
+## Apply visibility rules to the path the user sees
+
+Two paths that resolve to one file can differ in their Git ignore status
+or match different Muninn rules. Each alias therefore has independent
+selection evidence. A rule aimed at one display path need not exclude a
+different path to the same underlying file.
+
+```agda
 record RuleObservation : Set where
   field
     gitIgnored : Bool
@@ -155,6 +165,17 @@ module Checkout (root : Link.Path) (snapshot : Link.Snapshot root)
 
   -- Completeness is an outcome over filesystem paths, rather than an
   -- implementation-specific directory traversal order.
+```
+
+## Preserve both path identity and physical identity
+
+A complete scan must account for each included, reachable file. The
+outcome refers to valid paths in the observed filesystem rather than the
+order in which a directory walk happens to encounter them. Two included
+aliases can both appear in results under their own names and still carry
+the same physical object identity.
+
+```agda
   record CompleteScan : Set where
     field
       paths : List Link.Path

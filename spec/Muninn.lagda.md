@@ -1,3 +1,15 @@
+# How the Muninn specification fits together
+
+Checking this file checks the imported model. The imports bring together
+contracts for repository identity, policy, file selection, indexing, search,
+and recovery. The [reading guide](../SPEC-READING-GUIDE.md) starts from an
+operation and points to its model, implementation, and verification.
+
+A successful check establishes the stated Agda laws under their premises. The
+runtime still has to supply evidence about Git, PostgreSQL, and the actual
+request. See [the implementation boundary](README.md).
+
+```agda
 {-# OPTIONS --safe #-}
 -- spec/Muninn.agda
 -- Formal specification for the Muninn indexed code search MCP server.
@@ -114,6 +126,23 @@ import Muninn.CleanupCompletion
 import Muninn.CleanupProgress
 import Muninn.CleanupEffects
 import Muninn.ExclusionClassifier
+```
+
+## Which publication rules apply
+
+The older design advanced a shared base and adjusted sibling overlays to keep
+their visible files stable. Muninn 1.4.0 switched to an independently published
+view for each checkout, with compatible immutable records shared underneath.
+That choice lets one checkout publish without rewriting any sibling view.
+
+The aggregate checks both models because some proofs still use the earlier
+representation. For ordinary worktree admission, publication, and reads, use
+[checkout publication](Muninn/CheckoutPublication.lagda.md). The
+[moving-base model](Muninn/ContentPublication.lagda.md) and
+[serialized maintenance model](Muninn/SerializedMaintenance.lagda.md)
+describe the older obligations and explain which guarantees carry forward.
+
+```agda
 import Muninn.ContentPublication
 import Muninn.CheckoutPublication
 import Muninn.ContentViews
@@ -145,3 +174,4 @@ open import Muninn.Registration public
 open import Muninn.Cli          public
 open import Muninn.Knowledge    public
 open import Muninn.Concurrency  public
+```

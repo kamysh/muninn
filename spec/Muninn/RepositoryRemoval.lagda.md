@@ -141,6 +141,17 @@ module Family (family : ℕ) (familyId : Worktree.FamilyId) (scope : Store.Scope
   ready : O.World → Bool
   ready world = accepted world ∧ (consistentTarget world ∧ (not (Visibility.familyRegistered selection world) ∧ not (blocked world)))
 
+```
+
+## Fence new work while existing holders finish
+
+Removal first authenticates the family from the saved request. It then makes
+the target unavailable for new work and keeps that request active while
+existing readers or other holders finish. Concurrent requests for the same
+family share cleanup. A request to forget a family carries the wider
+intent explicitly.
+
+```agda
   data Reply : Set where
     waiting completed : Reply
     clarify usedId : Reply
@@ -352,6 +363,19 @@ module Family (family : ℕ) (familyId : Worktree.FamilyId) (scope : Store.Scope
   ...   | false = clarify
   previous world | _ = clarify
 
+```
+
+## Apply exactly the accepted removal scope
+
+Unregister clears derived code and preserves authored notes and policy
+history. Forget also removes family-owned data in the wider scope. The
+model requires unrelated families to keep their data. A retry continues the
+saved operation through fencing, waiting, and completion. At the database
+transaction boundary, observers get either the old state or the full
+cleanup, with its receipt reduced where appropriate. The model treats
+history cleanup outside the database as a separate, repeatable action.
+
+```agda
   -- A normal retry advances automatically: first fence, then wait for earlier
   -- users, then complete in one transaction. No timeout abandons the request.
   step : ℕ → DB.Transaction Reply

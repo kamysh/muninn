@@ -1,3 +1,12 @@
+# The earlier moving-base publication design
+
+This module preserves the issue #30 model in which a family had a mutable base
+and checkouts represented their differences from it. It explains the guarantees
+the older design needed to preserve. [Checkout publication](CheckoutPublication.lagda.md)
+governs ordinary 1.4.0 publication. The [issue #30 contract](../CONTENT-PUBLICATION.md)
+describes the earlier representation.
+
+```agda
 {-# OPTIONS --safe #-}
 -- Fixed publication intent over owned rows. Storage must realize this intent;
 -- neither a handler nor a storage adapter can choose a weaker success predicate.
@@ -52,6 +61,18 @@ maybeEqual (just first) (just second) with entryEqual first second
 
 -- One model for base publication and non-base publication. Desired is the
 -- completed selected checkout map, independent of the rows used to store it.
+```
+
+## Recompute overlays when the base changes
+
+In this design a base update would affect every inherited path. The plan first
+defines the intended view for each checkout independently. The selected
+checkout takes the filtered desired manifest. Every other checkout keeps its
+prior visible view. It then computes the smallest overlay that realizes each
+of those views against the next base. This prevents a base update from
+resurrecting a path hidden by a sibling deletion or exclusion.
+
+```agda
 module Plan (selection : E.Rule) (before : O.World) (selected : ℕ)
   (advanceBase : Bool) (desired : Files.Manifest) where
   module C = Content.Family selection
@@ -141,6 +162,16 @@ policyBody : ∀ body expected → policyVersion body ≡ just expected → body
 policyBody (O.currentPolicy actual) expected same with just-injective same
 ... | refl = refl
 
+```
+
+## Recheck the policy before committing
+
+Indexing may prepare data under one policy while the user saves another.
+The transaction checks that it still sees the expected policy pointer for
+the right owner. A stale pointer produces a continuation with the world
+intact, so the caller can replan against the new policy.
+
+```agda
 module PolicyGuard (owner : O.Owner) (pointer expected : ℕ) where
   At : O.World → Set
   At world = Classify.At world pointer (λ value → O.owner value ≡ owner × policyVersion (O.body value) ≡ just expected)
@@ -193,6 +224,23 @@ module PolicyGuard (owner : O.Owner) (pointer expected : ℕ) where
 -- Storage layout is deliberately absent. The adapter supplies a shared DB
 -- transaction and PROOFS of these fixed logical outcomes, never another goal.
 -- This is a refinement boundary; Rust correspondence is checked separately.
+```
+
+## Commit the visible change and its receipt together
+
+The outcome includes the selected structural snapshot and the stored
+selector. Sibling selectors and unrelated family records stay intact.
+Unchanged bindings keep their original Git evidence. Any fresh evidence
+must refer to the selected checkout and observation generation. The plan
+also records work for a later reclamation pass, which checks whether the
+detached records are still needed.
+
+The proof checks the world after the receipt update as well as the index
+change. A retry can therefore resume the saved progress after a lost reply.
+At the transaction boundary, interruption leaves either the old world or
+the complete publication with its recorded progress.
+
+```agda
 module Family (family policyPointer : ℕ) where
   module Stored = Policy.Family family policyPointer
   owner = O.family family
@@ -330,3 +378,4 @@ module Family (family policyPointer : ℕ) where
           (trans (cong (λ world → proj₂ (DB.execute request world)) same) (cong proj₂ commits))
         ... | inj₂ same = trans (sym (cong proj₂ (completedAtomic observed reply final completed)))
           (trans (cong (λ world → proj₂ (DB.execute request world)) same) (cong proj₂ retry))
+```

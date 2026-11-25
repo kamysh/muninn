@@ -1,3 +1,15 @@
+# Why the earlier maintenance model paused admission
+
+Issue #203 used a family-wide admission gate while selection changed. It
+drained readers before publication and reopened only after cleanup had
+caught up. The model remains useful for understanding that design.
+[Checkout publication](CheckoutPublication.lagda.md) gives the current rule
+for ordinary 1.4.0 work. Readers use a committed view with current selection
+applied while indexing and cleanup continue.
+
+See the [issue #203 contract](../ISSUE-203-SERIALIZED-MAINTENANCE.md).
+
+```agda
 {-# OPTIONS --safe #-}
 -- Observable maintenance laws; no SQL, Git, lock or graph implementation.
 -- Historical issue #203 admission model. CheckoutPublication governs 1.4.0.
@@ -16,6 +28,17 @@ open import Data.String using (String)
 
 -- One gate per family. Counts denote active database operations, not saved
 -- cursors. A request stops admission before waiting for existing users.
+```
+
+## Stop admitting new readers while existing readers drain
+
+The gate counts admitted readers. A maintenance request changes serving to
+draining, which prevents new readers from adding to the count. The exclusive
+phase can be acquired only after the last admitted reader leaves. When
+recovery still sees pending maintenance, the same old admission rule
+continues to refuse new work.
+
+```agda
 data Gate : Set where
   serving draining : ℕ → Gate
   exclusive : Gate
@@ -55,6 +78,17 @@ pendingRecoveryRefusesAdmission next ()
 
 -- Abstract resolved views, independent of base/delta physical representation.
 -- Natural numbers stand for checkout, path and immutable version identities.
+```
+
+## Filter visible paths and keep still-shared versions
+
+The new selection removes excluded paths from the selected view and preserves
+allowed paths. Publishing that view replaces only the target's mapping.
+Reclamation checks whether any retained view still refers to a version.
+Dropping a path from one view cannot justify deleting a version another view
+still uses.
+
+```agda
 View : Set
 View = ℕ → Maybe ℕ
 
@@ -134,6 +168,16 @@ unusedVersionRemoved views referenced stored version unused with referenced vers
 ... | no _ = refl
 
 -- A publication changes only derived data; notes are outside that payload.
+```
+
+## Keep authored notes independent of code maintenance
+
+Publishing replaces derived index data while preserving the notes field.
+The modeled transaction reaches either its original state or its full
+updated state. An interrupted maintenance operation cannot expose a
+partially applied index update.
+
+```agda
 module Publication (Index Notes : Set) where
   record State : Set where
     constructor state
@@ -162,6 +206,16 @@ module Publication (Index Notes : Set) where
 
 -- Completion is checked against the latest requested generation, including
 -- events that arrived during maintenance. Generations are not timestamps.
+```
+
+## Reopen only once the accepted maintenance is complete
+
+The old gate required the applied generation to equal the requested
+generation and pending work to reach zero. A newer policy request makes an
+older completion stale. In the current ordinary worktree model these
+maintenance conditions do not control reader admission.
+
+```agda
 record Completion (requested applied pending : ℕ) : Set where
   constructor complete
   field current : applied ≡ requested
@@ -179,3 +233,4 @@ cannotReopenStale : ∀ requested applied pending → ¬ (applied ≡ requested)
   ¬ Reopen requested applied pending exclusive (serving zero)
 cannotReopenStale requested applied pending stale (reopen proof) =
   stale (Completion.current proof)
+```

@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "spec"
+AGGREGATE = SPEC / "Muninn.lagda.md"
 GUIDE = ROOT / "SPEC-READING-GUIDE.md"
 LINK = re.compile(r"\[[^\]\n]+\]\(([^()\s]+)\)")
 
@@ -39,7 +40,7 @@ def check_links(document):
 def check_topics(output):
     if GUIDE not in check_links(ROOT / "README.md"):
         raise ValueError("README does not link to the reader guide")
-    topics = sorted((SPEC / "Muninn").rglob("*.lagda.md"))
+    topics = sorted(SPEC.rglob("*.lagda.md"))
     if not topics:
         raise ValueError("no literate Agda reader topics found")
     listed = check_links(GUIDE)
@@ -49,7 +50,7 @@ def check_topics(output):
         check_links(topic)
 
     subprocess.run(
-        ["agda", "--html", "--html-highlight=auto", "--html-dir", str(output), "Muninn.agda"],
+        ["agda", "--html", "--html-highlight=auto", "--html-dir", str(output), AGGREGATE.name],
         cwd=SPEC,
         check=True,
     )

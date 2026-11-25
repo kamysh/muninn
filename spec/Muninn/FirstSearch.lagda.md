@@ -158,6 +158,16 @@ availability and scheduling of the underlying work.
 ```agda
 -- Missing context or first-start authority is communicated; an authorized
 -- checkout with no view arranges indexing rather than ending at "pending".
+```
+
+### Distinguish an unfinished index from an empty result
+
+A completed search can legitimately find no matching files. A checkout
+without a published view has yet to search its files, so the request
+remains unresolved until the view exists or the caller supplies a missing
+prerequisite. The query is still available when that prerequisite is met.
+
+```agda
 data Action : Set where
   askContext askFirstStart arrangeIndex serveView : Action
 

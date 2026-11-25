@@ -36,6 +36,15 @@ module DB = O.DB
 
 -- The enclosing connection/preparation adapter supplies these observations.
 -- Usable means access to the shared receipt store is ready, not TCP reachability.
+```
+
+## Keep the operation identity through loss of access
+
+Losing access changes what the session can do, while the request ID and the
+conversation that explains it remain available. The session can say it is
+waiting without attempting a database write to record the outage.
+
+```agda
 data Access : Set where
   waiting usable : Access
 
@@ -72,6 +81,17 @@ waitingPrompt = D.prompt
   (D.text 'I' " cannot reach the database right now, so I cannot check the saved work for this request.")
   (D.text 'I' " will reconnect automatically and continue the operation when access returns. Check the database connection if it remains unavailable.") []
 
+```
+
+## Look up the saved outcome before acting again
+
+The receipt can distinguish committed work from progress that still needs
+execution. A lost acknowledgement can look like a failed operation to the
+caller even though the write committed. Looking up the original receipt
+avoids duplicating that write. The model proves that this inspection itself
+leaves the world intact.
+
+```agda
 module Protocol
   (Environment : Set)
   (Fields : List String)

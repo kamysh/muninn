@@ -39,11 +39,32 @@ completeCreation s = record s { creationCompleted = true }
 
 -- Rechecked under the registry lock at AGE graph creation. Imported rows have
 -- no intent; completed registrations always require their existing graph.
+```
+
+## Distinguish a reserved creation from an established family
+
+A pending creation carries durable intent and can finish creating its
+missing graph. A completed or imported registration expects the graph that
+belongs to it. A missing graph in that state is a preparation problem,
+because silently creating an empty graph would conceal loss of derived data.
+
+```agda
 data MayCreateMissingGraph : CreationState → Set where
   fromPendingIntent : ∀ p → MayCreateMissingGraph (pendingCreation p)
 
 -- FamilyPolicy carries the frozen defaults and family UUID. Failures/retries
 -- retain it; completion cannot select a different initial policy.
+```
+
+## Preserve the initial policy across retries
+
+Creation stores the family identity and frozen defaults before preparation.
+A failure leaves the reservation and those settings available for retry.
+Completion uses that same initial policy. Later policy edits change the
+current revision without rewriting why or how the family was created.
+Registration also preserves the separate first-start decision.
+
+```agda
 data CreationStep : CreationState → CreationState → Set where
   retainCreation : ∀ s → CreationStep s s
   finishCreation : ∀ p → CreationStep (pendingCreation p) (completeCreation (pendingCreation p))

@@ -7,7 +7,12 @@ implementation checks.
 
 | Topic | What it covers | Runtime evidence |
 | --- | --- | --- |
+| [Specification entry point](spec/Muninn.lagda.md) | The modules checked together and which publication contract governs current worktrees | [Formal and implementation boundary](spec/README.md) |
+| [Worktree identity and views](spec/Muninn/Worktree.lagda.md) | Shared version ownership, stable checkout views, and evidence behind search results | [Worktree persistence](crates/core/tests/family_persistence/worktrees.rs) checks shared versions and sibling isolation |
+| [Artifact identity](spec/Muninn/ArtifactIdentity.lagda.md) | What must match to reuse analysis, chunks, and embeddings | [File preparation](crates/core/src/worktrees/prepared.rs) checks exact source before reuse |
 | [Worktree publication and sharing](spec/Muninn/CheckoutPublication.lagda.md) | Shared file versions, checkout-local publication, search during indexing, current exclusions, and reuse after interruption | [Database persistence scenarios](crates/core/tests/family_persistence/worktrees.rs) exercise shared versions, interruption, concurrent requests, and checkout isolation |
+| [Earlier moving-base publication](spec/Muninn/ContentPublication.lagda.md) | How the historical design preserved sibling views while advancing a shared base | [Earlier publication contract](spec/CONTENT-PUBLICATION.md) |
+| [Earlier serialized maintenance](spec/Muninn/SerializedMaintenance.lagda.md) | Why the former maintenance protocol drained readers and when it reopened admission | [Earlier maintenance contract](spec/ISSUE-203-SERIALIZED-MAINTENANCE.md) |
 | [First worktree search](spec/Muninn/FirstSearch.lagda.md) | Checkout resolution, first-start authorization, indexing on demand, coverage, and result eligibility | [The on-demand MCP test](crates/mcp/src/worktree_tests.rs) pauses a first search during a Git operation and resumes it by ID on a fresh connection |
 | [File selection](spec/Muninn/OrderedSelection.lagda.md) | Ordered rules, Git defaults, parent pruning, and vendor classification | [Policy tests](crates/core/src/family_policy/types.rs) and [selection maintenance](crates/core/tests/family_persistence/maintenance.rs) |
 | [Internal symlinks](spec/Muninn/SymlinkSelection.lagda.md) | Logical paths, ignore decisions and checkout boundaries | [Worktree search](crates/mcp/src/worktree_tests.rs) exercises file and directory aliases |
