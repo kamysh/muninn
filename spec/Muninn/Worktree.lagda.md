@@ -1,3 +1,15 @@
+# What a worktree view identifies
+
+A repository family can share immutable file and analysis records across its
+checkouts. Each checkout has its own map from relative paths to visible
+versions. This separation allows two checkouts to share unchanged work while
+reporting different content at the same path.
+
+See [checkout publication](CheckoutPublication.lagda.md) for how one view
+advances and [prepared file versions](../../crates/core/src/worktrees/prepared.rs)
+for the runtime lookup and reuse path.
+
+```agda
 {-# OPTIONS --safe #-}
 -- A family shares immutable file versions and stable baseline manifests.
 -- Each checkout selects its own view, with differences relative to a stable
@@ -19,6 +31,15 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; tran
 open import Relation.Nullary using (¬_)
 open import Data.Empty using (⊥-elim)
 
+```
+
+## Separate owners, views, and stored versions
+
+Each identifier has a distinct job. A version reference carries its family
+as well as its version ID because a shared file version belongs to the
+family. A checkout can refer to the version without becoming its owner.
+
+```agda
 record FamilyId : Set where
   field value : UUID
 record SchemaId : Set where
@@ -36,6 +57,19 @@ record VersionRef : Set where
         version : VersionId
 
 -- Exact semantic input, separate from acceleration metadata.
+```
+
+## Record what makes reuse valid
+
+Analysis depends on exact source bytes and the parser and chunking settings.
+A content hash helps find candidates. Changing that hash leaves the semantic
+input unchanged, which is why matching a hash alone cannot certify reuse.
+Chunks carry byte positions as identities and line ranges for display.
+The normalized chunk text may differ from the raw source slice. Vector reuse
+therefore checks the exact normalized bytes sent to the provider and the
+full profile used to interpret the vector.
+
+```agda
 record AnalysisMeaning : Set where
   field bytes : List (Fin 256)
         parserVersion grammarVersion extractorVersion : String
@@ -81,6 +115,19 @@ record EmbeddingArtifact : Set where
         key : EmbeddingKey
         input : List (Fin 256) -- exact normalized bytes submitted to the provider
 
+```
+
+## Give each checkout its own path map
+
+The checkout has a stable ID and a root for displaying paths. Its manifest
+stores the version and selection information at each visible path. A view
+can be described as a stable baseline plus a small set of local changes.
+An inherited path reads from that specific baseline, a deletion masks it,
+and a changed entry supplies a replacement. The proofs describe the answers
+that this representation must give. They allow the runtime to use direct
+membership references.
+
+```agda
 record Checkout : Set where
   field id : CheckoutId
         family : FamilyId
@@ -124,6 +171,16 @@ resolveView baselines view path =
                 (WorktreeView.overlay view path)
 
 -- An override must represent a real difference; unchanged entries are inherited.
+```
+
+## Record only differences from the chosen baseline
+
+A missing baseline path needs no deletion, and an unchanged path needs no
+replacement. A retained baseline is stable under updates elsewhere. The
+preservation proof takes that stability as a premise and establishes that
+every path in the view resolves the same way.
+
+```agda
 DeltaRequired : Maybe FileEntry → Override → Set
 DeltaRequired base Inherit = ⊤
 DeltaRequired base Deleted = Σ FileEntry (λ entry → base ≡ just entry)
@@ -153,6 +210,17 @@ pinnedBaselinePreservesView : ∀ before after view →
 pinnedBaselinePreservesView before after view stable path =
   cong (λ base → applyOverride base (WorktreeView.overlay view path)) (stable path)
 
+```
+
+## Explain where a result comes from
+
+A result must point to a chunk in the exact version selected at that path.
+Its displayed path is built using the selected checkout's root. A structural
+edge supplies visible versions for both endpoints. These requirements
+prevent a result backed only by a retained version in another checkout from
+appearing in this one.
+
+```agda
 Views : Set
 Views = CheckoutId → Manifest
 
@@ -187,6 +255,16 @@ record CheckoutEdge (views : Views) (checkout : Checkout) : Set where
         sourceVisible : VisibleVersion views (Checkout.id checkout) sourcePath sourceVersion
         targetVisible : VisibleVersion views (Checkout.id checkout) targetPath targetVersion
 
+```
+
+## Share only compatible work
+
+Analysis is reusable within the same family when its exact inputs match.
+Embeddings also need equal normalized input bytes and an equal profile.
+Those checks let two genuinely equivalent files reuse work while keeping a
+different source version or embedding configuration out of the result.
+
+```agda
 AnalysisCompatible : FileVersion → FileVersion → Set
 AnalysisCompatible a b =
   FileVersion.family a ≡ FileVersion.family b ×
@@ -201,3 +279,4 @@ reuseKeepsBytes : ∀ a b → AnalysisCompatible a b →
   AnalysisMeaning.bytes (analysisMeaning (FileVersion.analysisKey a)) ≡
   AnalysisMeaning.bytes (analysisMeaning (FileVersion.analysisKey b))
 reuseKeepsBytes a b same = cong AnalysisMeaning.bytes (proj₂ same)
+```

@@ -39,6 +39,17 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 module Checkout (selected : String → Set) (policy : C.FamilyPolicy) where
   caps = C.FamilyPolicy.limits policy
 
+```
+
+## Apply the byte limits after path selection
+
+The input is already known to be selected by policy. Its raw contents then
+determine whether text processing fits. Each eligible file gets its own work
+entry, so an oversized file cannot prevent other selected files from being
+scheduled. A supported language may still be too large for structural work.
+An unsupported language also produces text-only work, for a different reason.
+
+```agda
   record File : Set where
     constructor file
     field path : String
@@ -89,6 +100,17 @@ module Checkout (selected : String → Set) (policy : C.FamilyPolicy) where
   ... | L.ask blocked | ready , waiting | proof , recorded = proof , there recorded
   ... | L.run firstJob | ready , waiting | proof , recorded = proof , recorded
 
+```
+
+## Explain the choice that lets a file proceed
+
+For a file above the text limit, report the observed byte count and the
+configured limit. The user can raise the limit, exclude the file, or
+reduce or split it. Above the structural limit, text remains searchable and
+the guidance explains how to request structural analysis. A missing parser
+calls for different guidance because raising the limit cannot add a parser.
+
+```agda
   sizeQuestion : Waiting → D.Question
   sizeQuestion (source , over) = D.prerequisite
     (D.text 'F' ("ile " ++ File.path source ++ " contains " ++ show (length (File.contents source)) ++

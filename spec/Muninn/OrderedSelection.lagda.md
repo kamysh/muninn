@@ -53,6 +53,16 @@ compileComplete (cons {input} rule rules) with R.compile input |
 ... | just actual | known with compileComplete rules
 ...   | actualRest , complete rewrite complete = cons actual actualRest , refl
 
+```
+
+## Preserve rule order
+
+Every rule is compiled before it enters the fold. For a given path and
+directory flag, an unmatched rule leaves the decision alone. A matched rule
+sets the decision, and a later match can replace it. The proof of determinism
+covers the same compiled inputs, path, and initial decision.
+
+```agda
 step : Bool → Bool → Bool → Bool
 step before false negative = before
 step before true negative = not negative
@@ -131,6 +141,17 @@ unmatchedPreserves : ∀ {inputs word directory} {rules : Rules inputs} → Unma
   ∀ before → resolve before rules word directory ≡ before
 unmatchedPreserves absent before = recognized (unmatchedResolution absent before)
 
+```
+
+## Use Git as the starting point and vendor rules as classification
+
+An ignored path begins excluded. A matching explicit Muninn inclusion can
+change that decision, and a later exclusion can reverse the inclusion.
+Vendor rules only determine the tier of a path that survived the exclusion
+rules. Directory pruning also matters at the walk boundary. A rule about a
+child cannot by itself make the scanner enter a pruned parent.
+
+```agda
 record FamilyRules (policy : C.FamilyPolicy) : Set where
   field exclude : Rules (map (λ text → A.normalize (toList text)) (C.EffectiveConfig.exclude (C.familyConfig policy)))
         vendor : Rules (map (λ text → A.normalize (toList text)) (C.EffectiveConfig.vendor (C.familyConfig policy)))

@@ -33,6 +33,17 @@ record Registration : Set where
 
 module DB = Database.Store ℕ Registration _≟_
 
+```
+
+## Treat a repeated registration as a lookup
+
+Registration owns a database identity. When retrying a request that already
+committed, return the saved registration. Reusing a path or finding a
+different candidate for the same slot does not authorize an overwrite.
+After interruption, the valid outcomes are the state before the transaction
+or the complete saved registration.
+
+```agda
 data Reply : Set where
   created : Reply
   present : Registration → Reply
@@ -55,6 +66,18 @@ retryAfterCommit id desired world rewrite DB.writeVisible id desired world = ref
 
 -- Directory-to-Git conversion is explicit and retains the family identity and
 -- already registered checkouts. Compatible indexed data is not changed here.
+```
+
+## Convert explicitly once the directory becomes Git
+
+An operator can convert a registered directory after a Git observation fixes
+the repository identity. The family ID, checkout records, and compatible
+indexed work survive the change, so notes and existing references remain
+attached to the same family. Ordinary discovery requires evidence of identity
+and can ask for context when the evidence is inconclusive. A checkout move
+uses its Git administrative identity even if the display path changes.
+
+```agda
 convert : Identity.GitObservation → Registration → Registration
 convert observed (registration family checkouts indexedWork) = registration (Identity.convertBinding family observed) checkouts indexedWork
 

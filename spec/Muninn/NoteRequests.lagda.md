@@ -71,6 +71,18 @@ module For (Other OtherReply : Set)
 
   -- An automatically assigned ID must be fresh. An explicit existing ID
   -- may be changed only from a checkout where the old note is visible.
+```
+
+## Check visibility before allowing a change
+
+The request first resolves its location to a checkout in the expected
+family. A new note ID must be unused across families. Updating an existing
+note requires the old note to be visible from that checkout, and the new
+note must still be visible there. Deleting also requires a visible existing
+note. These conditions prevent a sibling checkout from overwriting or
+deleting a note restricted to another checkout.
+
+```agda
   data WriteAllowed (world : RepositoryWorld Other) (input : C.NoteInput)
     (resolved : Resolved world (C.NoteInput.target input)) (id : KnowledgeId) : Set where
     generated : C.NoteInput.id input ≡ nothing →
@@ -115,6 +127,18 @@ module For (Other OtherReply : Set)
   deleteMeaning : C.Mutation (C.FamilyTarget × KnowledgeId) → Requests.Meaning
   deleteMeaning request = Requests.userMeaning C.deleteNote request
 
+```
+
+## Commit the authored change and the receipt as one outcome
+
+The write or deletion and completion for the same operation ID are a single
+transition. If the reply is lost, the caller can use the saved receipt
+without changing the note a second time. The receipt transition preserves
+the request meaning, which keeps an ID from being reused for a different
+change. The Rust interface supplies this recovery when an operation ID is
+provided.
+
+```agda
   data Step : R.Event → R.State (RepositoryWorld Other) → R.State (RepositoryWorld Other) → Set where
     write : ∀ {before ledger request id} →
       (resolved : Resolved before (C.NoteInput.target (C.Mutation.input request))) →
@@ -239,6 +263,16 @@ module For (Other OtherReply : Set)
     with trans (sym input) expected
   ... | refl = Notes.removeOtherFamily _ _ (K.World.notes (RepositoryWorld.notes before)) other key distinct
 
+```
+
+## Keep visibility separate from ranking
+
+The result must refer to a note from the requested family and permitted
+checkout scope. Listing is accountable for visible membership. Search may
+return a subset, so a ranking choice can affect order or inclusion in a
+page without granting permission to return an out-of-scope note.
+
+```agda
   record VisibleNote (world : RepositoryWorld Other) (target : C.FamilyTarget) (id : KnowledgeId) : Set where
     field resolved : Resolved world target
           note : K.Note (C.FamilyTarget.expectedFamily target) id

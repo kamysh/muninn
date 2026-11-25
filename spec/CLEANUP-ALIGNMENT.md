@@ -59,7 +59,7 @@ The final certificate must therefore establish that it is absent.
 
 ## Boundary
 
-All new modules use `--safe` and are reachable from `Muninn.agda`. The independent
+All new modules use `--safe` and are reachable from [the aggregate](Muninn.lagda.md). The independent
 outcome, eligibility rules, workset, policy matcher and database semantics are
 unchanged. The proofs quantify over arbitrary actual traces and admissible
 initial worlds; they contain no fixtures or selected-ID cases.

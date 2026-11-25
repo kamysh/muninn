@@ -62,7 +62,7 @@ outside that parent capture to the parent's own frame.
 
 ## Verification boundary
 
-Both new modules use `--safe` and are included in `Muninn.agda`. The independent
+Both new modules use `--safe` and are included in [the aggregate](Muninn.lagda.md). The independent
 outcome, keeper semantics, eligibility rules and database effects are unchanged.
 The laws quantify over arbitrary admissible stores, identities and actual
 traces. No fixtures, postulates or new diagnostic result layers are included.

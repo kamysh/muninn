@@ -80,6 +80,17 @@ record Decoder : Set where
 
 -- The selected published structural snapshot fixes the view both endpoints
 -- and the edge must belong to.
+```
+
+## Use the selected snapshot for the edge and both endpoints
+
+A candidate must cite an actual relationship in the selected checkout's
+structural snapshot. Both endpoints carry a path and source position backed
+by the selected visible file versions. A caller lookup and a callee lookup
+interpret the direction of that same edge differently. A name match in a
+sibling checkout cannot supply a missing endpoint.
+
+```agda
 record SelectedSnapshot (owner : O.Owner) (checkout : ℕ) (world : O.World) : Set where
   constructor selectedSnapshot
   field pointer root : ℕ
@@ -228,6 +239,17 @@ module Family (family checkout pointer : ℕ) (world : O.World)
   guidance = Dialogue.prompt (Dialogue.text 'T' "hese relationships are candidates based on matching names; they are not compiler-resolved bindings.")
     (Dialogue.text 'I' "f several definitions match, use their source paths and positions to narrow the search.") []
 
+```
+
+## Preserve multiple candidates and make the order reproducible
+
+Several definitions can have the same name. The model ties the result to the
+complete matching candidate universe and a canonical order. Keeping distinct
+candidates lets the reader compare paths and positions to identify the
+relationship relevant to the task. The returned evidence describes a
+name-based candidate, with compiler resolution outside this model.
+
+```agda
   record Response (universe : Universe) : Set where
     field rows : List Candidate
           completeOrder : rows ≡ result universe

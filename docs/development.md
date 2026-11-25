@@ -267,7 +267,7 @@ abstract laws from implementation guarantees and lists current gaps. For a final
 aggregate type check, from the source root:
 
 ```sh
-nix develop --command sh -c 'cd spec && agda Muninn.agda'
+nix develop --command sh -c 'cd spec && agda Muninn.lagda.md'
 ```
 
 Type-checking proves statements of that model, not a refinement proof of the Rust,

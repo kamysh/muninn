@@ -36,6 +36,16 @@ open import Relation.Nullary using (yes; no)
 
 -- An ordinary search or publication never owns this barrier. It is reserved
 -- for replacement or removal of the storage on which checkout views depend.
+```
+
+### Restrict storage-wide pauses to storage-wide changes
+
+The family can be online or quiescing for schema replacement or destructive
+removal. Preparing files, staging vectors, and cleaning up an old view are
+ordinary operations. Treating them as reasons to quiesce would make a
+finished checkout unavailable whenever an unrelated worktree has slow work.
+
+```agda
 data StorageTransition : Set where
   replaceStorage removeStorage : StorageTransition
 
@@ -118,6 +128,18 @@ record CanPublish {baselines} (before : Family baselines) (target : W.CheckoutId
         samePolicy : Policy.revision (Family.selection before) ≡ Observation.policyRevision evidence
         gitSettled : Observation.git evidence ≡ Settled
 
+```
+
+### Reconcile the input that changed
+
+If two attempts prepare the same checkout, the one that observes an older
+slot must reconcile again before it can publish. If the policy changed in
+the meantime, it must apply those rules to the candidate view. A storage
+generation change instead calls for checking whether the references belong
+to the new storage. Carrying these decisions separately lets the application
+explain what the request is waiting for.
+
+```agda
 data PublicationDecision {baselines} (before : Family baselines) target evidence : Set where
   ready : CanPublish before target evidence → PublicationDecision before target evidence
   storageChanging : ∀ reason → Family.availability before ≡ quiescing reason →

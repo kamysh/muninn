@@ -1,9 +1,9 @@
 # Formal specification and implementation boundary
 
-`Muninn.agda` is the aggregate entry point. These modules state mathematical
+[`Muninn.lagda.md`](Muninn.lagda.md) is the aggregate entry point. These modules state mathematical
 contracts for chunks, policies, registration, checkout views and indexing. They
 are not generated Rust and do not constitute a refinement proof of the running
-application. [Development](../docs/development.md) describes the 1.4.0
+application. [Development](../docs/development.md) describes the 1.4.1
 implementation; historical proposal/status records remain under `docs/plans/`.
 
 The [reading guide](../SPEC-READING-GUIDE.md) links to the literate modules by
@@ -145,7 +145,7 @@ from universally quantified Agda laws.
 From the source root, final aggregate verification is:
 
 ```sh
-nix develop --command sh -c 'cd spec && agda Muninn.agda'
+nix develop --command sh -c 'cd spec && agda Muninn.lagda.md'
 ```
 
 Use a persistent `agda --interaction-json` process in the project environment for

@@ -53,6 +53,16 @@ module Family (family checkout pointer : ℕ) (world : O.World)
   module Hit = Source.Hit
 
   module Words = Text.Using english
+```
+
+## Require matching postings from visible chunks
+
+Full-text results are backed by a stored posting for the chunk in the
+selected view. A file retained only for a sibling checkout cannot contribute
+its text. The English query engine supplies the matching and rank evidence.
+Full-text search can return results before a chunk has a usable embedding.
+
+```agda
   module Fulltext where
     record Candidate : Set where
       field hit : Source.Hit
@@ -87,6 +97,21 @@ module Family (family checkout pointer : ℕ) (world : O.World)
   queryDimension input = subst (λ key → V.Valid (W.EmbeddingKey.dimension key) (V.Value.values (QueryVector.value input)))
     (QueryVector.currentProfile input) (V.Value.valid (QueryVector.value input))
 
+```
+
+## Separate eligibility, coverage, and ranking
+
+The query vector must come from the original query and match the selected
+embedding profile. Coverage accounts for the selected inventory, including
+chunks that are pending. Only usable vectors contribute semantic candidates,
+and each evaluated candidate needs a valid positive cosine score.
+
+Approximate search may rank a smaller candidate pool. Exact search must
+compare every eligible semantic candidate and cannot omit a nearer match
+or leave a partly filled page when eligible matches remain. Both modes
+respect the page limit of 1,000 results.
+
+```agda
   module Semantic (input : QueryVector) (inventory : Source.Inventory) where
     queryValues = V.Value.values (QueryVector.value input)
     record Candidate : Set where

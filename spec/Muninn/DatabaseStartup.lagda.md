@@ -44,6 +44,16 @@ configuredMode (just Config.VerifyFull) = Connection.verifyFull
 
 -- Every connection path uses the configured TLS mode and credential sources.
 -- In particular, prefer retains its configured plaintext fallback behavior.
+```
+
+## Use the same connection rules during recovery
+
+Reconnecting uses the original configuration and the same credential order
+and TLS requirements as the initial connection. Recovery cannot switch to
+another database or weaken transport checks simply because one attempt failed.
+The proof takes actual credential and transport observations from the adapter.
+
+```agda
 record Connected (bootstrap : Config.BootstrapConfig) : Set where
   field transport : Connection.Transport
         trusted hostnameMatches : Bool
@@ -61,6 +71,17 @@ connectionPolicy : ∀ bootstrap (connected : Connected bootstrap) path →
 connectionPolicy bootstrap connected path = Connected.transportAllowed connected
 
 -- Readiness comes from the application migration ledger and AGE separately.
+```
+
+## Separate connection from readiness
+
+A database can accept a connection while its tables or graph are still being
+prepared. Readiness requires the application migrations recorded in the
+ledger and a ready AGE graph. The session either reconnects, prepares storage,
+or runs the original operation. A temporary outage changes access while
+preserving both the operation and the supplied connection settings.
+
+```agda
 record Ready (required : Schema.FamilyTemplate) (ledger : Schema.Ledger) (pair : Schema.SchemaPair) : Set where
   field application : Schema.AppliedTemplate (Schema.FamilyTemplate.applicationMigrations required) ledger (Schema.SchemaPair.application pair)
         graph : Schema.GraphReady pair
@@ -114,6 +135,16 @@ unavailableMessage = D.prompt
 needsHelp : D.Text → D.Text → D.Prompt
 needsHelp explanation nextStep = D.prompt explanation nextStep []
 
+```
+
+## Retry from a transaction boundary
+
+An aborted preparation leaves the original rows available for retry.
+Successful schema work and the corresponding migration ledger entry
+commit together. This prevents a reconnect from mistaking a partially
+executed block for completed preparation.
+
+```agda
 module Transactions (Key Value : Set) (equal : (a b : Key) → Dec (a ≡ b)) where
   module DB = Database.Store Key Value equal
 

@@ -98,7 +98,7 @@ of the entire sibling slot, independence of distinct commits, admission under
 unchanged checkout and storage generations and policy, use of a published snapshot
 while storage is online, current-policy filtering of a pinned snapshot, and
 preservation of compatible prepared inputs. It uses
-[`Storage`](Muninn/Storage.agda) and [`Worktree`](Muninn/Worktree.agda) for
+[`Storage`](Muninn/Storage.agda) and [`Worktree`](Muninn/Worktree.lagda.md) for
 immutable references and coherent graph membership. The existing
 [`FirstSearch`](Muninn/FirstSearch.lagda.md),
 [`IncrementalObservation`](Muninn/IncrementalObservation.agda),

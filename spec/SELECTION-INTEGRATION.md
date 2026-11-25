@@ -57,7 +57,7 @@ is introduced.
 ## Verification boundary
 
 Changed modules are checked locally in the committed dedicated worktree. CI owns
-the complete `spec/Muninn.agda` aggregate.
+the complete [Muninn aggregate](Muninn.lagda.md).
 This document specifies the intended Rust correspondence; it does not claim
 that the running implementation already uses these adapters or laws.
 

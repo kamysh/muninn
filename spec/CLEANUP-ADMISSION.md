@@ -51,7 +51,7 @@ operation-identity protocol.
 
 ## Boundary
 
-Both modules use `--safe` and are included in `Muninn.agda`. The guard reuses the
+Both modules use `--safe` and are included in [the aggregate](Muninn.lagda.md). The guard reuses the
 shared database semantics, keeper/dependency model and finite exact closure.
 No proof assumes that a blocked proposal has become safe.
 
